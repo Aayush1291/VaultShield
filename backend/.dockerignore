@@ -1,0 +1,26 @@
+# The backend Dockerfile copies the whole project before installing, so these
+# exclusions are what keep the build context small and reproducible.
+
+# A host virtualenv carries absolute paths and macOS/Linux-specific binaries;
+# copying it in would shadow nothing useful and break a lot.
+.venv/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+dist/
+build/
+
+# Runtime state, not source. `media/` is a compose named volume and a local
+# SQLite file is a test artifact.
+media/
+staticfiles/
+*.sqlite3
+
+# Never bake host secrets into an image layer.
+.env
+.env.*
+
+.DS_Store

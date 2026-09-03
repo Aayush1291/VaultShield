@@ -1,0 +1,36 @@
+{
+  "name": "vaultshield-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VaultShield_Dashboard: the React + Tailwind frontend a Reviewer uses to inspect runs and approve or reject them.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/preset-env": "7.29.7",
+    "@babel/preset-react": "7.29.7",
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@vitejs/plugin-react": "5.2.0",
+    "babel-jest": "30.5.1",
+    "fast-check": "4.9.0",
+    "identity-obj-proxy": "3.0.0",
+    "jest": "30.5.1",
+    "jest-environment-jsdom": "30.5.1",
+    "tailwindcss": "4.3.3",
+    "vite": "7.3.6"
+  }
+}

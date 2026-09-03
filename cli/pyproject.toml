@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vaultshield"
+version = "0.1.0"
+description = "Sandboxed, monitored execution and review pipeline for AI coding agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1",
+    "PyYAML>=6.0",
+    "docker>=7.0,<8.0",
+    "watchdog>=4.0,<5.0",
+    "httpx>=0.27,<1.0",
+    # Browser_Capture_Module's screenshot half (Requirement 9.3). Installing
+    # this package does NOT install a browser binary: `playwright install
+    # chromium` is a separate, one-off step per machine, and
+    # `browser_capture.py` reports its absence as a `ScreenshotError` naming
+    # that command rather than failing obscurely.
+    "playwright>=1.44,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+]
+
+[project.scripts]
+vaultshield = "vaultshield.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vaultshield"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,11 @@
+/* Tailwind CSS v4 entry point.
+ *
+ * v4 replaced the `@tailwind base/components/utilities` triple and the
+ * `tailwind.config.js` content globs with a single import: the
+ * `@tailwindcss/vite` plugin in `vite.config.js` scans the project for used
+ * class names itself. Custom theme values, when the dashboard needs them,
+ * go in an `@theme { ... }` block below this import rather than in a
+ * separate config file.
+ */
+
+@import 'tailwindcss';

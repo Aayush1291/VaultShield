@@ -1,0 +1,116 @@
+# VaultShield Dashboard
+
+The React + Tailwind frontend a Reviewer uses to inspect uploaded Runs and
+approve or reject them. It only ever reads fully-uploaded runs — there is no
+live-streaming path — and it talks to the Django backend over the REST API in
+`design.md`'s "REST API surface" table.
+
+## Layout
+
+```
+frontend/
+  index.html            # Vite entry document
+  vite.config.js        # React + Tailwind plugins, /api and /media dev proxy
+  babel.config.cjs      # Jest-only transform (browser build does not use it)
+  jest.config.cjs       # jsdom environment, co-located *.test.js(x)
+  src/
+    main.jsx            # browser entry; the only reader of import.meta.env
+    App.jsx             # dashboard shell; mounts the views, holds the selected Project
+    ProjectListView.jsx # GET /api/projects/, one card per Project
+    RunHistoryView.jsx  # GET /api/runs/?project=:id, one row per Run with its status
+    api.js              # backend API client (one function per REST endpoint)
+    config.js           # API base URL resolution
+    format.js           # display text shared by the views (dates, load failures)
+    index.css           # Tailwind v4 entry
+```
+
+## Views
+
+Each view splits fetching from rendering: the view component owns the request
+and the loading/failed/loaded decision, and a pure component underneath it
+(`ProjectList`/`ProjectCard`, `RunList`/`RunRow`) turns records into markup.
+The pure half takes records as a prop and holds no state, so it renders exactly
+what it was given and can be driven directly by a property test.
+
+Views take the API client as a prop defaulting to the shared singleton
+(`<ProjectListView client={...} />`), which is how tests point one at an
+injected transport instead of a live backend.
+
+Selecting a Project in the list opens its run history. That selection is one
+piece of state in `App.jsx`, not a route — nothing in the requirements calls
+for URL-addressable views yet, so no routing library is pulled in. Both views
+stay mounted, and `RunHistoryView` renders a "select a project" prompt until
+one is picked rather than requesting an unfiltered run list.
+
+## Development setup
+
+```bash
+npm install
+npm run dev        # http://localhost:5173
+```
+
+The backend is expected at `http://localhost:8000`. Start it from `backend/`
+(`python manage.py runserver`) before signing in.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VITE_API_PROXY_TARGET` | `http://localhost:8000` | where the dev/preview server forwards `/api` and `/media`; `http://web:8000` inside the compose network |
+| `VITE_API_BASE_URL` | unset (same-origin) | absolute API origin, bypassing the proxy; needs CORS on the backend |
+
+Copy `.env.example` to `.env.local` to change either.
+
+The dashboard requests relative paths and the dev server proxies them, so the
+browser only ever makes same-origin requests and the backend needs no CORS
+middleware. Set `VITE_API_BASE_URL` only when the API genuinely lives on
+another origin.
+
+## API client
+
+`src/api.js` exports a configured singleton (`api`) plus the
+`createApiClient` factory used by tests. Every method maps to one endpoint:
+
+```js
+import api, { unwrapResults } from './api.js';
+
+await api.login({ username, password });        // stores the Dashboard_Auth_Token
+const projects = unwrapResults(await api.listProjects());
+const runs = unwrapResults(await api.listRuns({ project: projects[0].id }));
+const run = await api.getRun(runs[0].run_id);
+```
+
+Two things it handles so no view has to:
+
+- **Authentication.** The backend requires `Authorization: Token <token>` on
+  every `/api/` path except `POST /api/auth/login/`, enforced before the view
+  body runs. The client attaches the stored token to every request and
+  deliberately omits it on login. The token is persisted in `localStorage`,
+  falling back to memory where storage writes throw.
+- **Pagination.** List endpoints answer `{count, next, previous, results}`, so
+  `unwrapResults` reads the records out and yields `[]` for anything
+  unusable — a list view renders its empty state rather than crashing.
+
+Failures throw `ApiError`, carrying `status` and the parsed `payload`. Status
+`0` means the request never reached the backend.
+
+## Running tests
+
+```bash
+npm test              # Jest + React Testing Library
+npm run test:watch
+```
+
+Tests sit next to the code they cover as `*.test.js` / `*.test.jsx`.
+Property-based tests use fast-check and run through the same command.
+
+The API client's tests inject the transport (`createApiClient({ fetchImpl })`)
+rather than patching a global, so they assert on the exact URL, method,
+headers, and body it produced without needing a backend.
+
+## Building
+
+```bash
+npm run build      # -> dist/
+npm run preview    # serves dist/ with the same API proxy
+```

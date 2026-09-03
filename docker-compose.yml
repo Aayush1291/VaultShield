@@ -1,0 +1,221 @@
+# VaultShield local stack — design.md "docker-compose topology", Requirement 24.
+#
+# Seven services and nothing else: `postgres`, `redis`, `web`, `channels`,
+# `celery-worker`, `celery-beat`, `frontend` (Requirement 24.1).
+#
+# The VaultShield_CLI is deliberately absent (Requirement 24.2). It runs on
+# the host so it can reach the host Docker socket to create Sandboxes and the
+# developer's own `gh`/`glab`/git credentials, and it talks to `web` over
+# `http://localhost:8000` through the port published below.
+#
+# ### Two audiences, one settings module
+#
+# `backend/vaultshield_backend/settings.py` reads every service address from
+# the environment and defaults each one to `localhost`, which is what a
+# host-run `manage.py` or `pytest --ds=...settings` needs. Inside this network
+# the addresses are service names instead, so `POSTGRES_HOST=postgres` and
+# `REDIS_HOST=redis` are set on all four backend services. Nothing here
+# duplicates a setting; it only supplies the compose-side value.
+#
+# Credentials and tunables are interpolated with defaults
+# (`${POSTGRES_PASSWORD:-vaultshield}`), so a developer overrides them from a
+# root `.env` file or the shell without editing this file.
+#
+# `VAULTSHIELD_SECRET_KEY` and `VAULTSHIELD_DEBUG` are intentionally not set:
+# settings.py's development defaults (an insecure key, `DEBUG=1`) apply, which
+# is correct for a local stack and wrong for anything else. Export a real
+# `VAULTSHIELD_SECRET_KEY` and `VAULTSHIELD_DEBUG=0` before pointing this at
+# anything shared.
+#
+# `VAULTSHIELD_ALLOWED_HOSTS` needs no override either: its default already
+# lists `web` alongside `localhost`/`127.0.0.1`, which covers both the
+# frontend proxying to `http://web:8000` and the host CLI on
+# `http://localhost:8000`.
+
+# --- shared backend configuration -------------------------------------------
+#
+# `web`, `channels`, `celery-worker`, and `celery-beat` are four processes over
+# one codebase, so they share one image and one environment block. The `image:`
+# tag is stated alongside `build:` on purpose: it makes the four services
+# resolve to the same tag, so `docker compose build` builds `backend/` once
+# instead of once per service.
+
+x-backend-env: &backend-env
+  POSTGRES_DB: ${POSTGRES_DB:-vaultshield}
+  POSTGRES_USER: ${POSTGRES_USER:-vaultshield}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaultshield}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
+x-backend-service: &backend-service
+  image: vaultshield-backend:local
+  build:
+    context: ./backend
+  environment: *backend-env
+  volumes:
+    # Uploaded Screenshots (Requirement 13.3) land in settings.py's
+    # `MEDIA_ROOT`, which defaults to `<project>/media` — `/app/media` in this
+    # image. A named volume keeps them across `docker compose down` and gives
+    # every backend process the same view of them.
+    - backend-media:/app/media
+
+services:
+  # --- datastores -----------------------------------------------------------
+  #
+  # Both publish to `127.0.0.1` only. settings.py documents the host-side
+  # workflow of a `manage.py` run against the port-forwarded compose services,
+  # which needs the ports; binding them to the loopback interface keeps the
+  # database and broker off the local network while allowing it.
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # The official image reads the same three variable names Django does,
+      # so one block provisions the database and configures the client.
+      POSTGRES_DB: ${POSTGRES_DB:-vaultshield}
+      POSTGRES_USER: ${POSTGRES_USER:-vaultshield}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaultshield}
+    ports:
+      - "127.0.0.1:${POSTGRES_PUBLISHED_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # What the dependents actually wait on. `depends_on` alone reports a
+      # container as up before PostgreSQL accepts connections, so gating on
+      # this is the difference between `web` starting and `web` starting able
+      # to migrate.
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaultshield} -d ${POSTGRES_DB:-vaultshield}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PUBLISHED_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # --- backend --------------------------------------------------------------
+
+  web:
+    <<: *backend-service
+    # Migrations run here and only here: four processes share this image and a
+    # single migrator avoids concurrent `migrate` runs against one database.
+    # gunicorn per design.md's topology ("web: Django + DRF, gunicorn").
+    #
+    # Continuation lines are folded to spaces by `>-`, which requires them all
+    # at one indentation level: a more-indented line keeps its newline, and a
+    # newline between `gunicorn` and `--bind` would make the flags a separate
+    # shell command and leave gunicorn on its default localhost-only bind.
+    command: >-
+      sh -c "python manage.py migrate --noinput &&
+      exec gunicorn vaultshield_backend.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-3}
+      --access-logfile -"
+    ports:
+      # Requirement 24.2: the host-side CLI reaches the backend over
+      # `http://localhost:8000`. The `frontend` service does not use this
+      # mapping — it resolves `web` on the compose network instead.
+      - "${WEB_PUBLISHED_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # A TCP connect rather than an HTTP request: every `/api/` path requires
+      # a Dashboard_Auth_Token (Requirement 27.3), so there is no unauthenticated
+      # URL whose status code means "healthy". Accepting a connection on 8000 is
+      # exactly the "reachable" that Requirement 24.3 asks for, and it needs no
+      # tooling beyond the stdlib already in the image.
+      test:
+        ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=5).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
+  channels:
+    <<: *backend-service
+    # design.md: "Django Channels ASGI worker (reserved for future live
+    # updates)", and Requirement 26.3 keeps live streaming out of the MVP.
+    # `channels` is therefore not in INSTALLED_APPS and
+    # `vaultshield_backend/asgi.py` is a plain Django ASGI application; daphne
+    # — the Channels project's ASGI server — serves it, so the process is in
+    # place for when routing/consumers arrive.
+    #
+    # No published port and nothing routes to it: the dashboard and the CLI
+    # both talk to `web`. `docker compose logs channels` is how you see it run.
+    command: daphne --bind 0.0.0.0 --port 8001 vaultshield_backend.asgi:application
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    <<: *backend-service
+    # Runs the security scan (Requirement 18.2) and the scheduled cleanup
+    # tasks. `-A vaultshield_backend` resolves to the `celery_app` re-exported
+    # from the project package's `__init__.py`.
+    command: celery -A vaultshield_backend worker --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  celery-beat:
+    <<: *backend-service
+    # The schedule itself is `CELERY_BEAT_SCHEDULE` in settings.py (Task 33.4):
+    # the sandbox reaper every 15 minutes and the stuck-approval flag hourly,
+    # both with env-overridable intervals and thresholds
+    # (`VAULTSHIELD_SANDBOX_CLEANUP_INTERVAL_MINUTES`,
+    # `VAULTSHIELD_SANDBOX_TTL_MINUTES`,
+    # `VAULTSHIELD_STUCK_APPROVAL_SCAN_INTERVAL_MINUTES`,
+    # `VAULTSHIELD_APPROVAL_MAX_AGE_HOURS`). This process only enqueues; the
+    # `celery-worker` above is what executes them.
+    # `--schedule` points the shelve file at the writable media volume rather
+    # than the image's working directory.
+    command: celery -A vaultshield_backend beat --loglevel=info --schedule /app/media/celerybeat-schedule
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # --- frontend -------------------------------------------------------------
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      # Requirement 24.3. `vite.config.js` proxies `/api` and `/media` to this
+      # target, so the dashboard reaches the API by service name over the
+      # compose network and every browser request stays same-origin — which is
+      # what lets the backend run without CORS middleware.
+      VITE_API_PROXY_TARGET: http://web:8000
+    ports:
+      - "${FRONTEND_PUBLISHED_PORT:-5173}:5173"
+    depends_on:
+      web:
+        # `service_healthy`, not the default `service_started`: Requirement
+        # 24.3 is that `web` *becomes reachable* by `frontend` when the stack
+        # starts, and web's healthcheck is the point at which that is true.
+        # Without it the dev server can come up while gunicorn is still
+        # waiting on migrations, and the first proxied request fails.
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  backend-media:

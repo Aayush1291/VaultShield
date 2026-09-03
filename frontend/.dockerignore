@@ -1,0 +1,18 @@
+# node_modules is the load-bearing exclusion here, not just an optimisation:
+# esbuild and rollup install platform-specific native binaries, so copying a
+# macOS host's tree over the image's `npm ci` result breaks the Vite dev
+# server outright.
+node_modules/
+
+dist/
+coverage/
+.vite/
+
+# Local env overrides stay on the host; the compose service supplies
+# `VITE_API_PROXY_TARGET` itself.
+.env
+.env.*
+!.env.example
+
+*.local
+.DS_Store

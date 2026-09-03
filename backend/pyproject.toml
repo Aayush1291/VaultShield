@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vaultshield-backend"
+version = "0.1.0"
+description = "VaultShield backend: Django + DRF API, Celery workers, and the run review data model"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    # design.md Technology Stack: "Django 5.x + Django REST Framework,
+    # Celery + Redis (broker and result backend), ... PostgreSQL".
+    "Django>=5.0,<6.0",
+    "djangorestframework>=3.15,<4.0",
+    # psycopg 3 with the prebuilt binary wheel: no local libpq/build
+    # toolchain needed to `pip install -e .` on a developer machine.
+    "psycopg[binary]>=3.2,<4.0",
+    # Required by `Screenshot.image` (an ImageField): Django refuses to
+    # validate ImageField without Pillow, so `manage.py check` fails
+    # outright when it is absent. Screenshots arrive over HTTP from the CLI
+    # (Requirement 13.3), and Pillow is what lets ingest reject a corrupt
+    # upload instead of storing an unrenderable file.
+    "Pillow>=10.0,<12.0",
+    # Celery drives the async security scan (Requirement 18.2); `redis` is
+    # the client library its broker and result backend URLs resolve to, and
+    # is a hard requirement rather than an extra — without it the app builds
+    # fine and the first connection fails. The app itself lives in
+    # `vaultshield_backend/celery.py`, and its periodic schedule in
+    # settings.py's `CELERY_BEAT_SCHEDULE` (Task 33.4) — Beat ships inside
+    # `celery`, so no separate package is needed for it.
+    "celery>=5.4,<6.0",
+    "redis>=5.0,<6.0",
+    # `channels` is deliberately absent: design.md keeps Django Channels
+    # "present in compose for future live-update support, not used for MVP
+    # streaming", so it arrives with Task 32's docker-compose topology
+    # rather than as an INSTALLED_APPS entry here.
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "hypothesis>=6.100",
+]
+# The two application servers design.md's compose topology runs, kept out of
+# `dependencies` because a developer venv needs neither — `manage.py
+# runserver` covers local work and `pytest` uses Django's test client.
+# `backend/Dockerfile` installs `.[server]`; Task 32's `docker-compose.yml`
+# points `web` at gunicorn and `channels` at daphne.
+server = [
+    # WSGI, for `web`: "web: Django + DRF, gunicorn".
+    "gunicorn>=22.0,<24.0",
+    # ASGI, for `channels`. Django Channels' own server, serving the plain
+    # Django ASGI application in `vaultshield_backend/asgi.py` — design.md
+    # keeps Channels "present in compose for future live-update support, not
+    # used for MVP streaming", so `channels` itself is still not an
+    # INSTALLED_APPS entry and there are no consumers to route to yet.
+    "daphne>=4.1,<5.0",
+]
+
+[tool.hatch.build.targets.wheel]
+# The Django project package plus every app package from design.md's
+# "Backend apps" layout. This project is normally installed editable
+# (`pip install -e ".[dev]"`) purely to pull dependencies in and keep the
+# import roots on `sys.path`; it is never published as a wheel.
+packages = [
+    "vaultshield_backend",
+    "accounts",
+    "projects",
+    "runs",
+    "security_scan",
+    "sandbox_tracking",
+    "tasks",
+]
+
+[tool.pytest.ini_options]
+# The real settings on a SQLite test database, so `pytest` needs no running
+# PostgreSQL — see `vaultshield_backend/settings_test.py` for why the
+# settings *module* is swapped rather than `DATABASES` patched in a fixture,
+# and for the one divergence that matters. Run against the configured
+# PostgreSQL with `pytest --ds=vaultshield_backend.settings`.
+DJANGO_SETTINGS_MODULE = "vaultshield_backend.settings_test"
+pythonpath = ["."]
+python_files = ["test_*.py", "tests.py"]
