@@ -28,6 +28,7 @@ each concrete adapter module:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Iterator, Literal, TypedDict
 
 
@@ -59,6 +60,45 @@ class AgentEvent(TypedDict):
     type: Literal["output", "final_message", "error"]
     timestamp: str  # ISO-8601
     payload: str
+
+
+@dataclass(frozen=True)
+class SandboxInvocation:
+    """Everything needed to start an agent as a real process INSIDE the Sandbox.
+
+    Returned by `Agent_Adapter.sandbox_invocation`. The Monitor hands this to
+    `Sandbox.exec_stream`, so `argv` is executed by the container's own kernel
+    with the cloned repository as its working directory.
+
+    ### Why the adapter returns a description instead of spawning
+
+    `launch()` yields events by spawning a process in *this* (host) process.
+    That is the wrong side of the boundary: a process started here runs on the
+    developer's machine with the developer's filesystem and credentials, which
+    is precisely the isolation failure this type exists to remove. An adapter
+    therefore describes its invocation and lets the Sandbox be the thing that
+    runs it.
+
+    ### `env` is a whitelist, never a copy of the host environment
+
+    `env` must contain ONLY what the agent genuinely needs — in practice its
+    API key and nothing else. It is injected into the container process's
+    environment, so anything put here crosses into the Sandbox. Copying
+    `os.environ` (which the host-side `launch()` path does, legitimately, to
+    preserve PATH/HOME for a local process) would export every secret in the
+    developer's shell into the container and defeat the credential
+    substitution that `.env.sandbox` performs. The container supplies its own
+    PATH/HOME from its image.
+
+    Attributes:
+        argv: the command to run, already fully constructed and validated.
+        env: extra environment variables for that process only. Merged over
+            the container's own environment by the Docker daemon; keys absent
+            here keep whatever the image defines.
+    """
+
+    argv: list[str]
+    env: dict[str, str] = field(default_factory=dict)
 
 
 class Agent_Adapter(ABC):
@@ -102,7 +142,52 @@ class Agent_Adapter(ABC):
         items as they occur. Must not raise for ordinary agent output;
         adapter-level construction errors (bad invocation, missing auth) are
         raised BEFORE any Sandbox process is started, as an AdapterError.
+
+        NOTE ON EXECUTION LOCUS: this method runs in the *calling* process. It
+        is retained as the adapter-level contract Requirement 5.1 names, and is
+        used directly by unit tests and by any tooling that deliberately wants
+        a local run. `vaultshield run` does NOT use it — it uses
+        `sandbox_invocation` below, so that the agent process runs inside the
+        Sandbox rather than on the developer's machine.
         """
+
+    def sandbox_invocation(self, prompt: str, workdir: str) -> SandboxInvocation:
+        """Describes how to start this agent as a process INSIDE the Sandbox.
+
+        This is the operation `vaultshield run` uses. Returning a description
+        rather than a running process is what lets the Sandbox — not the host —
+        be the thing that executes the agent.
+
+        Args:
+            prompt: the developer's prompt, validated the same way `launch`
+                validates it.
+            workdir: the agent's working directory *inside the container*
+                (`Sandbox.REPO_DIR`). Passed for adapters that need to name it
+                in their arguments; the Sandbox sets it as the process's
+                working directory regardless.
+
+        Returns:
+            A `SandboxInvocation` whose `argv` the container will execute and
+            whose `env` is a minimal whitelist — see that class on why it must
+            never be a copy of the host environment.
+
+        Raises:
+            AdapterError: for an invocation that cannot be constructed (empty
+                prompt, missing API key), exactly as `launch` does and for the
+                same reason — it happens before any process starts, so a Run
+                that could never begin never gets one.
+
+        The default implementation refuses rather than falling back to
+        `launch()`. A silent fallback would run the agent on the host, which is
+        the exact failure mode this method was introduced to eliminate, so an
+        adapter that has not been taught to run in a Sandbox must fail loudly.
+        """
+        raise AdapterError(
+            f"{type(self).__name__} does not support running inside a Sandbox: "
+            "it implements no sandbox_invocation(). `vaultshield run` executes "
+            "agents inside the container and will not fall back to running one "
+            "on the host."
+        )
 
 
 class AdapterError(Exception):

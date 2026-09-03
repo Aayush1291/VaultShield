@@ -57,8 +57,11 @@ every existing positional caller keeps working unchanged):
 
 from __future__ import annotations
 
+import io
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 import docker
 from docker import DockerClient
@@ -70,6 +73,13 @@ from docker.models.containers import Container
 # method that needs `_ENV_MOUNT_PATH`.
 _WORKDIR = "/workspace"
 _REPO_DIR = f"{_WORKDIR}/repo"
+# Public aliases. `sandbox_monitor` needs to name the agent's working directory
+# inside the container (it is what an adapter's `sandbox_invocation` is told, and
+# what the file-change watcher walks), and reaching for a private module
+# constant from another module would be worse than exporting the two names that
+# are genuinely part of the Sandbox's contract.
+WORKDIR = _WORKDIR
+REPO_DIR = _REPO_DIR
 _ENV_MOUNT_PATH = f"{_WORKDIR}/.env.sandbox"
 
 # Keeps the container alive between `create()` and `teardown()` so later
@@ -103,12 +113,49 @@ def container_name(run_id: str) -> str:
     them should own the spelling — a divergence would make teardown
     silently find nothing.
 
-    `run_id` is not validated here: `create()` accepts whatever id the
+    `run_id` is not validated here (see below): `create()` accepts whatever id the
     pipeline generated, and the callers that take an id from a command line
     validate it themselves (`run_directory.validate_run_id`) before they
     get this far.
     """
     return f"{CONTAINER_NAME_PREFIX}{run_id}"
+
+
+# Mutable, unlike the frozen `ExecResult` below: `exit_code` is filled in once
+# the output stream has been drained, because that is the first moment the
+# daemon can report it.
+@dataclass
+class ExecStream:
+    """A live exec inside the container: iterate for output, then read the code.
+
+    Returned by `Sandbox.exec_stream`. Deliberately not a bare generator: the
+    caller needs the process's exit code as well as its output, and a generator
+    has nowhere to put it. `exit_code` is `None` until the stream is exhausted,
+    because the daemon only reports it once the process has actually finished.
+    """
+
+    api: object
+    exec_id: str
+    chunks: object
+    exit_code: int | None = None
+
+    def __iter__(self) -> Iterator[bytes]:
+        """Yields raw output chunks, then records the exit code.
+
+        Chunks are bytes and are NOT line-aligned — the daemon splits on
+        whatever boundary the process happened to write, so a caller assembling
+        lines must buffer across chunks.
+        """
+        for chunk in self.chunks:  # type: ignore[attr-defined]
+            if chunk:
+                yield chunk
+        try:
+            self.exit_code = self.api.exec_inspect(self.exec_id).get("ExitCode")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            # The container can be gone by the time the stream drains (a
+            # teardown racing a finishing agent). An unknown exit code is
+            # reported as `None` rather than masking the output already read.
+            self.exit_code = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +198,13 @@ class Sandbox:
     attributes, but every method here needs the Docker client to do
     anything, so it has to live somewhere.
     """
+
+    # The container-side paths callers legitimately need to name. `REPO_DIR` in
+    # particular is the agent's working directory inside the Sandbox: it is what
+    # an adapter's `sandbox_invocation` is handed, what `exec`/`exec_stream`
+    # default to, and what the in-container file-change watcher walks.
+    WORKDIR = _WORKDIR
+    REPO_DIR = _REPO_DIR
 
     def __init__(self, run_id: str, client: DockerClient):
         self.run_id = run_id
@@ -339,6 +393,111 @@ class Sandbox:
         except Exception as exc:
             raise SandboxError(
                 f"Sandbox detached exec failed for run {self.run_id}: {exc}"
+            ) from exc
+
+    def exec_stream(
+        self,
+        cmd: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        workdir: str | None = None,
+        tty: bool = True,
+    ) -> "ExecStream":
+        """Starts `cmd` inside the container and streams its output live.
+
+        The execution primitive the Monitor uses to run an agent inside the
+        Sandbox. `exec` cannot serve that purpose because it blocks until the
+        command exits and only then returns the whole output, so nothing could
+        be captured or timestamped while the agent was working; `exec_detached`
+        cannot either, because it discards output entirely.
+
+        Args:
+            cmd: argv to execute. Not shell-interpreted.
+            env: extra environment variables for this process only, merged over
+                the container's own. Deliberately a caller-supplied whitelist —
+                see `adapters.base.SandboxInvocation` on why the host
+                environment must never be copied in here.
+            workdir: working directory inside the container; defaults to
+                `_REPO_DIR`, matching `exec`/`exec_detached`.
+            tty: allocate a pseudo-terminal for the process. Default `True`
+                because agent CLIs check `isatty()` and change or disable their
+                output when it is false — the Antigravity adapter's design note
+                calls this out explicitly. With a TTY the daemon returns one
+                interleaved stream rather than separate stdout/stderr, which is
+                the correct shape for a terminal transcript anyway.
+
+        Returns:
+            An `ExecStream`: iterate it for output chunks, then read
+            `.exit_code` once iteration has finished.
+
+        Raises:
+            SandboxError: if no container exists, or if the Docker API refuses
+                to create or start the exec.
+
+        Uses the low-level `api.exec_create`/`exec_start` pair rather than
+        `container.exec_run(stream=True)` because the high-level helper gives no
+        way to retrieve the exit code of a streamed exec, and "did the agent
+        exit non-zero" is information the Monitor has to have.
+        """
+        if self.container is None:
+            raise SandboxError(
+                f"Cannot exec in Sandbox for run {self.run_id}: "
+                "no container has been created (call create() first, or "
+                "it failed/was already torn down)"
+            )
+
+        try:
+            api = self._client.api
+            handle = api.exec_create(
+                self.container.id,
+                cmd,
+                workdir=workdir or _REPO_DIR,
+                environment=env or None,
+                tty=tty,
+                stdout=True,
+                stderr=True,
+            )
+            chunks = api.exec_start(handle["Id"], stream=True, tty=tty, demux=False)
+        except Exception as exc:
+            raise SandboxError(
+                f"Sandbox streaming exec failed for run {self.run_id}: {exc}"
+            ) from exc
+
+        return ExecStream(api=api, exec_id=handle["Id"], chunks=chunks)
+
+    def write_file(self, container_path: str, content: str) -> None:
+        """Writes `content` to `container_path` inside the container.
+
+        Used to place the Monitor's in-container file-change watcher. A tar
+        stream through `put_archive` is the only way to create a file in a
+        container without going through a shell, which matters because the
+        content is a Python program: passing it as a `sh -c` argument would
+        make its quoting and newlines the shell's problem.
+
+        Raises `SandboxError` if no container exists or the upload fails.
+        """
+        if self.container is None:
+            raise SandboxError(
+                f"Cannot write into Sandbox for run {self.run_id}: "
+                "no container has been created"
+            )
+
+        payload = content.encode("utf-8")
+        directory, _, name = container_path.rpartition("/")
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(payload))
+        archive.seek(0)
+
+        try:
+            self.container.put_archive(directory or "/", archive.getvalue())
+        except Exception as exc:
+            raise SandboxError(
+                f"Sandbox file write failed for run {self.run_id} "
+                f"({container_path}): {exc}"
             ) from exc
 
     def teardown(self) -> None:

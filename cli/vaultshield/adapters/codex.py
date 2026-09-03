@@ -138,7 +138,12 @@ import threading
 from datetime import datetime, timezone
 from typing import IO, Iterator
 
-from vaultshield.adapters.base import AdapterError, Agent_Adapter, AgentEvent
+from vaultshield.adapters.base import (
+    AdapterError,
+    Agent_Adapter,
+    AgentEvent,
+    SandboxInvocation,
+)
 
 # The Codex CLI executable, resolved on PATH inside the environment
 # `vaultshield run` runs in. Not configurable per Run: Requirement 8.1
@@ -262,6 +267,49 @@ class Codex_Adapter(Agent_Adapter):
         env = dict(os.environ)
         env[CODEX_API_KEY_ENV] = api_key
         return env
+
+    def _resolve_api_key(self) -> str:
+        """The API key for this Run, or `AdapterError` if there isn't one.
+
+        Split out of `_build_env` so `sandbox_invocation` can reuse the
+        resolution and its error message without also inheriting
+        `_build_env`'s copy of `os.environ`, which must not cross into the
+        container.
+        """
+        api_key = (
+            self._api_key
+            if self._api_key is not None
+            else os.environ.get(CODEX_API_KEY_ENV, "")
+        )
+        if not api_key.strip():
+            raise AdapterError(
+                "Codex_Adapter cannot construct a valid invocation: "
+                f"{CODEX_API_KEY_ENV} is not set. Export {CODEX_API_KEY_ENV} "
+                "before running --agent=codex."
+            )
+        return api_key
+
+    def sandbox_invocation(self, prompt: str, workdir: str) -> SandboxInvocation:
+        """Describes the Codex CLI invocation for in-Sandbox execution.
+
+        Same argv as the host path: `build_codex_argv` remains the single
+        definition of Requirement 8.1's invocation, so what runs in the
+        container is what the spec names.
+
+        Only `CODEX_API_KEY` is exported, unlike `_build_env`'s copy of
+        `os.environ`. That difference is the security point — a host subprocess
+        needs the developer's PATH/HOME to run at all, a container process gets
+        those from its image, and copying the developer's environment across the
+        boundary would hand the Sandbox every secret in their shell.
+
+        Requires the `codex` executable in the Sandbox image; the default
+        `python:3.11` base image does not have it, so `--agent=codex` needs
+        `--base-image` pointing at one that does.
+        """
+        return SandboxInvocation(
+            argv=build_codex_argv(prompt),
+            env={CODEX_API_KEY_ENV: self._resolve_api_key()},
+        )
 
 
 def _spawn(argv: list[str], env: dict[str, str], workdir: str) -> subprocess.Popen[str]:

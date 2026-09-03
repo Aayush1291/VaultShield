@@ -274,17 +274,23 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
         def teardown(self):
             calls.append("sandbox.teardown")
 
-    class _RecordingMonitor:
-        def __init__(self, repo_root, run_id, *, off_limits_paths=()):
-            self.run_id = run_id
-
-        def supervise(self, adapter, prompt, *, run_dir):
-            calls.append("monitor.supervise")
-            # The real Monitor writes the Event_Log before returning, and the
-            # failure messages under test name that path, so it has to exist.
-            log_path = event_log_path(run_dir)
-            log_path.write_text("")
-            return log_path
+    def _supervise_in_sandbox(
+        sandbox, adapter, prompt, run_dir, *, off_limits_paths=None, **kwargs
+    ):
+        # Stands in for the in-Sandbox execution stage. `run` used to call
+        # `Monitor(repo_root, ...).supervise(...)`, which ran the agent in the
+        # CLI's own process against the host checkout; it now calls
+        # `supervise_in_sandbox`, which runs it inside the container. This stub
+        # follows that seam. Every assertion about pipeline ordering and about
+        # the messages that name the Event_Log is unchanged — only the name of
+        # the stage being stubbed moved.
+        calls.append("monitor.supervise_in_sandbox")
+        seen["supervise_args"] = (sandbox, adapter, prompt, run_dir, off_limits_paths)
+        # The real implementation writes the Event_Log before returning, and the
+        # failure messages under test name that path, so it has to exist.
+        log_path = event_log_path(run_dir)
+        log_path.write_text("")
+        return log_path
 
     def _start_and_capture(sandbox, config, run_dir, ready_timeout_s=None):
         calls.append("browser_capture")
@@ -320,7 +326,7 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
             upload(run_id)
 
     monkeypatch.setattr(cli_module, "Sandbox", _RecordingSandbox)
-    monkeypatch.setattr(cli_module, "Monitor", _RecordingMonitor)
+    monkeypatch.setattr(cli_module, "supervise_in_sandbox", _supervise_in_sandbox)
     monkeypatch.setattr(cli_module, "start_and_capture", _start_and_capture)
     monkeypatch.setattr(cli_module, "commit_run_branch", _commit_run_branch)
     monkeypatch.setattr(cli_module, "build_structured_diff", _build_structured_diff)
@@ -349,7 +355,7 @@ def test_run_captures_screenshots_after_the_monitor_and_before_teardown(monkeypa
         # sits between the Monitor and git capture, in that order.
         assert calls == [
             "sandbox.create",
-            "monitor.supervise",
+            "monitor.supervise_in_sandbox",
             "browser_capture",
             "git.commit",
             "git.diff",
@@ -480,7 +486,7 @@ def test_run_captures_the_branch_and_diff_after_browser_capture(monkeypatch):
         # while the container is still up.
         assert calls == [
             "sandbox.create",
-            "monitor.supervise",
+            "monitor.supervise_in_sandbox",
             "browser_capture",
             "git.commit",
             "git.diff",
@@ -535,7 +541,7 @@ def test_run_reports_a_git_capture_failure_and_still_tears_the_sandbox_down(
         assert "events.jsonl" in result.output
         assert calls == [
             "sandbox.create",
-            "monitor.supervise",
+            "monitor.supervise_in_sandbox",
             "browser_capture",
             "git.commit",
             "sandbox.teardown",
@@ -1019,25 +1025,40 @@ def test_submit_reports_a_missing_dashboard_token_without_calling_submit(
 
 
 def _record_teardown(monkeypatch, raises=None):
-    """Records the arguments `teardown` forwards to `teardown.teardown`, or
-    makes that call raise `raises`, and stands in for the stored token lookup.
+    """Records what `teardown` forwards to each of its two stages, or makes the
+    remote stage raise `raises`, and stands in for the stored token lookup.
 
-    Returns the recording list; each entry also carries the keyword arguments
-    it was called with, which must stay empty — `teardown`'s keyword-only
-    parameters are testability seams that `cli.py` deliberately never passes.
+    `teardown` runs the LOCAL stage (`teardown_sandbox`) before the REMOTE one
+    (`sync_rejected_branch`), so reclaiming a stranded container never depends
+    on being logged in. It used to call one combined `teardown_run` behind a
+    token read; these two seams follow that split.
+
+    Returns the recording list. The remote entry also carries the keyword
+    arguments it was called with, which must stay empty — `sync_rejected_branch`
+    's keyword-only parameters are testability seams that `cli.py` deliberately
+    never passes.
     """
     calls = []
 
     def _load_token():
         return _TEST_TOKEN
 
-    def _teardown(run_id, backend_url, token, **kwargs):
+    def _teardown_sandbox(run_id, **kwargs):
+        # The LOCAL stage. Recorded separately because it must run before the
+        # token is even read.
+        calls.append({"stage": "sandbox", "run_id": run_id, "kwargs": kwargs})
+        return True
+
+    def _sync_rejected_branch(run_id, backend_url, token, **kwargs):
         calls.append(
             {
                 "run_id": run_id,
                 "backend_url": backend_url,
                 "token": token,
-                "kwargs": kwargs,
+                # `sandbox_removed` is real data flowing from the local stage,
+                # not a testability seam, so it is dropped from this assertion
+                # while every other keyword-only parameter must still be absent.
+                "kwargs": {k: v for k, v in kwargs.items() if k != "sandbox_removed"},
             }
         )
         if raises is not None:
@@ -1045,7 +1066,8 @@ def _record_teardown(monkeypatch, raises=None):
         return None
 
     monkeypatch.setattr(cli_module.uploader, "load_token", _load_token)
-    monkeypatch.setattr(cli_module, "teardown_run", _teardown)
+    monkeypatch.setattr(cli_module, "teardown_sandbox", _teardown_sandbox)
+    monkeypatch.setattr(cli_module, "sync_rejected_branch", _sync_rejected_branch)
     return calls
 
 
@@ -1093,6 +1115,10 @@ def test_teardown_forwards_the_run_id_and_reports_the_end_state(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == [
+        # LOCAL stage first, and it takes only the run id: no token, no backend
+        # URL, nothing that could make reclaiming a container fail for a reason
+        # unrelated to Docker.
+        {"stage": "sandbox", "run_id": "20240101120000-abcd1234", "kwargs": {}},
         {
             "run_id": "20240101120000-abcd1234",
             # Same default and same env var as `run`'s upload stage and
@@ -1104,7 +1130,7 @@ def test_teardown_forwards_the_run_id_and_reports_the_end_state(monkeypatch):
             "token": _TEST_TOKEN,
             # None of the keyword-only testability seams are passed.
             "kwargs": {},
-        }
+        },
     ]
     assert "20240101120000-abcd1234" in result.output
 
@@ -1123,7 +1149,10 @@ def test_teardown_uses_an_overridden_backend_url(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert calls[0]["backend_url"] == "https://vaultshield.example.com"
+    # `calls[0]` is now the local stage, which takes no backend URL by design;
+    # the override belongs to the remote stage.
+    remote = next(call for call in calls if call.get("stage") != "sandbox")
+    assert remote["backend_url"] == "https://vaultshield.example.com"
 
 
 def test_teardown_reports_a_teardown_failure_as_a_one_line_message(monkeypatch):
@@ -1171,9 +1200,20 @@ def test_teardown_reports_a_missing_credential_as_a_one_line_message(monkeypatch
     assert "Traceback" not in result.output
 
 
-def test_teardown_reports_a_missing_dashboard_token_without_tearing_anything_down(
-    monkeypatch,
-):
+def test_teardown_removes_the_sandbox_without_a_dashboard_token(monkeypatch):
+    """A missing token must not stop the LOCAL cleanup.
+
+    DELIBERATE BEHAVIOUR CHANGE. This test previously asserted the opposite —
+    that a missing token left everything untouched and failed the command — and
+    in doing so it encoded the defect it now guards against: the container
+    survived, so the command documented for reclaiming a stranded Sandbox could
+    not reclaim one whenever the developer was not logged in or the backend was
+    unreachable. That is precisely the situation it is most needed in.
+
+    What still holds, and is asserted below: the message names `vaultshield
+    login`, there is no traceback, and the branch step is skipped rather than
+    attempted without credentials.
+    """
     calls = _record_teardown(monkeypatch)
 
     def _no_token():
@@ -1187,12 +1227,13 @@ def test_teardown_reports_a_missing_dashboard_token_without_tearing_anything_dow
 
     result = runner.invoke(cli, ["teardown", "20240101120000-abcd1234"])
 
-    # Not logged in: reported in one line, and nothing is touched — no
-    # container removed, no backend call, no branch deleted. The message says
-    # so, since a developer running a cleanup command needs to know whether it
-    # ran.
-    assert result.exit_code != 0
+    # The local half ran and succeeded, so the command succeeds.
+    assert result.exit_code == 0, result.output
+    assert [call["stage"] for call in calls if "stage" in call] == ["sandbox"]
+    # The remote half was skipped, not attempted unauthenticated.
+    assert not [call for call in calls if call.get("stage") != "sandbox"]
+    # And the developer is told what was and was not done, and how to finish it.
     assert "vaultshield login" in result.output
-    assert "Nothing was torn down" in result.output
+    assert "Sandbox for run 20240101120000-abcd1234 removed" in result.output
+    assert "Skipped the branch check" in result.output
     assert "Traceback" not in result.output
-    assert calls == []

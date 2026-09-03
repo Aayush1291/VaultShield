@@ -734,7 +734,23 @@ class PtyOutputCapture(threading.Thread):
             try:
                 for event in self._adapter.launch(self._prompt, str(self._workdir)):
                     _write_all(1, (event["payload"] + "\n").encode("utf-8", errors="replace"))
-            except AdapterError as exc:
+            except Exception as exc:
+                # EVERY exception, not just `AdapterError`. This thread's
+                # `run()` is the top of its own stack, so anything that escapes
+                # here goes to `threading.excepthook` and is *lost*: the joining
+                # caller in `supervise` sees a clean join, writes the Event_Log,
+                # finds `self.error is None`, and reports a successful Run. An
+                # agent that crashed with, say, a `RuntimeError` would therefore
+                # be indistinguishable from one that finished — a false success
+                # carrying a truncated transcript.
+                #
+                # Capturing into `self.error` (rather than re-raising) is what
+                # lets `supervise` write the partial Event_Log *first* and only
+                # then fail, so the evidence of the crash outlives it.
+                #
+                # `Exception`, not `BaseException`: `KeyboardInterrupt` and
+                # `SystemExit` are delivered to the main thread, and swallowing
+                # them here would fight the interpreter's own shutdown.
                 self.error = exc
         finally:
             # Restore fd 0/1/2 to what they pointed at before this thread

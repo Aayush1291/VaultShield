@@ -27,6 +27,41 @@ from pathlib import Path
 URL_SHAPE = re.compile(r"^https?://")
 KEY_SHAPE = re.compile(r"^[A-Za-z0-9_\-]{16,}$")
 
+# Connection-string shape. Broader than `URL_SHAPE`, which only knows http(s).
+#
+# Requirement 3.2 asks the dummy to preserve the value's structural shape, and
+# for these schemes `_GENERIC_PLACEHOLDER` did not: a `DATABASE_URL` of
+# `postgresql://user:pw@host:5432/db` became the literal `dummy-value`, which is
+# not a URL at all. Anything in the Sandbox that parses that variable — which is
+# most frameworks, at import time — then fails to start, so the Sandbox could not
+# run the application whose screenshots the Run is supposed to capture.
+#
+# Captured groups are the parts that are safe to REUSE (scheme, host, port,
+# path) and are deliberately separate from the parts that are not (userinfo).
+# The password is matched only so it can be discarded; it is never carried into
+# the output. See `_generate_dummy_connection_string`.
+CONNECTION_STRING_SHAPE = re.compile(
+    r"""^
+    (?P<scheme>
+        postgresql|postgres|mongodb\+srv|mongodb|mysql|mariadb
+      | redis\+tls|rediss|redis|amqps|amqp|https|http
+    )
+    ://
+    (?:(?P<userinfo>[^/@\s]*)@)?      # optional user[:password]@ — discarded
+    (?P<host>[^/?\#\s:]*)             # host, safe to keep: not a secret
+    (?::(?P<port>\d+))?               # optional port, safe to keep
+    (?P<rest>[/?\#].*)?               # optional path/query/fragment
+    $""",
+    re.VERBOSE,
+)
+
+# Dummy userinfo substituted for whatever the real value carried. Fixed strings,
+# never derived from the input, so no part of a real credential can survive.
+_DUMMY_USER = "dummy_user"
+_DUMMY_PASSWORD = "dummy_password"
+# Host used when the real value's host is empty or would itself echo the input.
+_DUMMY_HOST = "localhost"
+
 # KEY=value assignment, allowing whitespace around `=`. Restricted to
 # standard shell/env identifier syntax (letters/digits/underscore, not
 # starting with a digit) since that's the only thing a real environment
@@ -61,7 +96,21 @@ def classify_shape(value: str) -> str:
     design.md.
     """
     if URL_SHAPE.match(value):
+        # An http(s) value that carries `user:password@` is a credential, not a
+        # plain endpoint, so it is classified as a connection string and has its
+        # userinfo stripped. One without userinfo (`API_BASE=https://api.example
+        # .com/v1`) is just configuration and keeps the fixed dummy URL, which is
+        # both the established behaviour and the right answer: there is no secret
+        # in it to replace.
+        match = CONNECTION_STRING_SHAPE.match(value)
+        if match is not None and match.group("userinfo"):
+            return "connection_string"
         return "url"
+    # Every non-http scheme. Checked before `key` for clarity only: a connection
+    # string contains `:` and `/`, which `KEY_SHAPE`'s character class excludes,
+    # so the two can never match the same value.
+    if CONNECTION_STRING_SHAPE.match(value):
+        return "connection_string"
     if KEY_SHAPE.match(value):
         return "key"
     return "generic"
@@ -82,12 +131,81 @@ def generate_dummy(value: str) -> str:
     still without ever deriving the replacement from `value`'s own
     characters.
     """
+    # An empty value stays empty. It is the one input with no secret in it to
+    # replace, and emptiness is itself the structural shape Requirement 3.2 asks
+    # to preserve: an application that branches on `if not os.environ["X"]`
+    # behaves in the Sandbox exactly as it does outside, whereas substituting
+    # `dummy-value` silently turns "unset" into "set" and changes which code path
+    # runs. Property 5's "never contains `value`" is trivially satisfiable here
+    # and irrelevant — there is nothing to leak.
+    if not value.strip():
+        return value
+
     shape = classify_shape(value)
     if shape == "url":
         return _generate_dummy_url(value)
+    if shape == "connection_string":
+        return _generate_dummy_connection_string(value)
     if shape == "key":
         return _generate_dummy_key(value)
     return _generate_dummy_generic(value)
+
+
+def _generate_dummy_connection_string(value: str) -> str:
+    """Rebuilds a connection string with dummy credentials but a real shape.
+
+        postgresql://user:REALPASS@localhost:5432/db
+            -> postgresql://dummy_user:dummy_password@localhost:5432/db
+
+    What is kept is what is structural and not secret: the scheme (an
+    application dispatches its driver on it), the host, the port, and the
+    path/query. What is replaced is the whole userinfo section — both the
+    username and the password — with fixed strings that are not derived from the
+    input in any way.
+
+    Keeping the host is a deliberate judgment. It is not a credential, and
+    replacing it would break the shape in a way that matters: an application
+    pointed at `localhost:5432` in the Sandbox behaves as configured, whereas one
+    pointed at `example.invalid` fails differently for a reason unrelated to the
+    Run. A host is nonetheless still an internal detail, which is why
+    `build_sandbox_env`'s guarantee is about *values*, not hosts — and why the
+    only thing preserved from the original is text the developer wrote in a
+    config file, never a secret.
+
+    Property 5 still holds: the result must not contain `value` as a substring.
+    Userinfo is always rewritten, so a `value` carrying one cannot survive. A
+    `value` with no userinfo (`redis://localhost:6379/0`) WOULD otherwise be
+    reproduced verbatim, since every remaining part is preserved — so the dummy
+    userinfo is inserted unconditionally, which makes the output strictly longer
+    than and different from the input in every case.
+    """
+    match = CONNECTION_STRING_SHAPE.match(value)
+    if match is None:  # pragma: no cover - classify_shape already matched
+        return _generate_dummy_generic(value)
+
+    scheme = match.group("scheme")
+    host = match.group("host") or ""
+    port = match.group("port")
+    rest = match.group("rest") or ""
+
+    # A host that is empty, or that would let the input reappear in the output,
+    # is replaced outright rather than patched.
+    if not host or host in (_DUMMY_USER, _DUMMY_PASSWORD):
+        host = _DUMMY_HOST
+
+    authority = f"{_DUMMY_USER}:{_DUMMY_PASSWORD}@{host}"
+    if port:
+        authority = f"{authority}:{port}"
+
+    dummy = f"{scheme}://{authority}{rest}"
+
+    # Belt and braces for Property 5. Unreachable for any realistic input —
+    # inserting `dummy_user:dummy_password@` guarantees the input is not a
+    # substring — but asserted by construction rather than by argument, because
+    # this function's whole job is that no real value survives.
+    if value in dummy:
+        return _GENERIC_PLACEHOLDER_FALLBACK
+    return dummy
 
 
 def parse_env_file(path: Path) -> list[tuple[str, str]]:

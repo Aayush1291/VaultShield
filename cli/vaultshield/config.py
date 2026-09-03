@@ -161,13 +161,133 @@ def load_config(repo_root: Path) -> ProjectConfig:
         raise ConfigError(f"Missing required field(s) in {path}: {', '.join(missing)}")
 
     return ProjectConfig(
-        start_command=raw["start_command"],
-        port=raw["port"],
-        ready_path=raw["ready_path"],
-        agent=raw.get("agent", ""),
-        routes=raw.get("routes", []),
-        off_limits_paths=raw.get("off_limits_paths", []),
+        start_command=_require_text(raw, "start_command", path),
+        port=_require_port(raw, "port", path),
+        ready_path=_require_text(raw, "ready_path", path),
+        agent=_optional_text(raw, "agent", path),
+        routes=_require_string_list(raw, "routes", path),
+        off_limits_paths=_require_string_list(raw, "off_limits_paths", path),
     )
+
+
+# --- typed field validation -------------------------------------------------
+#
+# The presence/non-empty check above is necessary but not sufficient: YAML types
+# a value for you, so a field can be present and non-empty and still be the
+# wrong type entirely. Without these checks a wrong type was accepted here and
+# only failed much later, or — worse — did not fail at all:
+#
+#   port: not-a-number        reached Docker and surfaced as an opaque
+#                             `400 Client Error` about a malformed port binding,
+#                             after a container had already been created.
+#   start_command: 12345      an int reached the Sandbox as a command.
+#   ready_path: [/health]     a list was used where a URL path was expected.
+#   routes: /home             a bare string is *iterable*, so this was silently
+#                             treated as the routes ['/','h','o','m','e'].
+#   off_limits_paths: p.txt   same character-by-character iteration, which meant
+#                             `p.txt` was NOT protected and thirteen
+#                             single-character paths were. A security control
+#                             that silently protects nothing is worse than one
+#                             that refuses to start.
+#
+# Every check therefore reports the field, what it got, and what was expected,
+# and every one runs inside `load_config` — which `run` calls as step 1, before
+# the Run_Directory exists, before credentials are generated, and before any
+# container is created.
+
+
+def _type_error(path: Path, field: str, value: object, expected: str) -> ConfigError:
+    """A uniform message: which field, what arrived, what was wanted."""
+    return ConfigError(
+        f"Invalid `{field}` in {path}: expected {expected}, got "
+        f"{type(value).__name__} ({value!r})"
+    )
+
+
+def _require_text(raw: dict, field: str, path: Path) -> str:
+    """A required non-empty string.
+
+    `bool` is rejected explicitly: YAML's `yes`/`no`/`true`/`false` parse to
+    Python bools, and a bool is not a string, but a bare `isinstance(value, str)`
+    check would already catch that — what needs saying is that the message names
+    the field rather than letting a bool reach a command line.
+    """
+    value = raw.get(field)
+    if not isinstance(value, str):
+        raise _type_error(path, field, value, "a string")
+    if not value.strip():
+        raise ConfigError(f"Invalid `{field}` in {path}: expected a non-empty string")
+    return value
+
+
+def _optional_text(raw: dict, field: str, path: Path) -> str:
+    """An optional string, defaulting to `""` when absent.
+
+    `agent` is written as an empty placeholder by `init`, so absent and empty
+    are both normal; a wrong *type* still is not.
+    """
+    if field not in raw or raw[field] is None:
+        return ""
+    value = raw[field]
+    if not isinstance(value, str):
+        raise _type_error(path, field, value, "a string")
+    return value
+
+
+def _require_port(raw: dict, field: str, path: Path) -> int:
+    """A required TCP port: an integer in 1-65535.
+
+    Accepts a string of digits (`port: "3000"`, which YAML keeps as a string
+    when quoted) because that is a reasonable thing to write and the intent is
+    unambiguous. It does not accept arbitrary strings, floats, or bools —
+    `port: not-a-number` used to pass this function's predecessor and fail
+    inside Docker, and `True` would otherwise sneak through as the int 1.
+    """
+    value = raw.get(field)
+    if isinstance(value, bool):
+        raise _type_error(path, field, value, "an integer TCP port")
+    if isinstance(value, int):
+        port = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        port = int(value.strip())
+    else:
+        raise _type_error(path, field, value, "an integer TCP port")
+    if not 1 <= port <= 65535:
+        raise ConfigError(
+            f"Invalid `{field}` in {path}: expected a TCP port in 1-65535, got {port}"
+        )
+    return port
+
+
+def _require_string_list(raw: dict, field: str, path: Path) -> list[str]:
+    """An optional list of non-empty strings, defaulting to `[]` when absent.
+
+    A bare string is rejected rather than wrapped in a single-element list. That
+    is the one case where being permissive would be actively dangerous: a string
+    is iterable, so `off_limits_paths: protected.txt` would otherwise be consumed
+    one character at a time and protect nothing while appearing to work. Refusing
+    it means the developer is told to write a list, and the security control
+    either does what it says or does not start.
+    """
+    if field not in raw or raw[field] is None:
+        return []
+    value = raw[field]
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise _type_error(
+            path, field, value, "a list of strings (a bare string is not accepted)"
+        )
+    entries: list[str] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str):
+            raise _type_error(
+                path, f"{field}[{index}]", entry, "a string"
+            )
+        if not entry.strip():
+            raise ConfigError(
+                f"Invalid `{field}[{index}]` in {path}: expected a non-empty string"
+            )
+        entries.append(entry)
+    return entries
 
 
 def _detect_django(repo_root: Path) -> dict | None:

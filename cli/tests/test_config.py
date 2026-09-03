@@ -328,3 +328,167 @@ def test_load_config_raises_config_error_when_document_root_is_not_a_mapping(tmp
 def test_load_config_raises_config_error_when_file_is_missing(tmp_path: Path):
     with pytest.raises(ConfigError):
         load_config(tmp_path)
+
+
+# --- F-4: strict typed validation -------------------------------------------
+#
+# The presence/non-empty check these tests already cover is necessary but not
+# sufficient: YAML assigns a type, so a field can be present and non-empty and
+# still be the wrong type. Before these checks, a wrong type either surfaced much
+# later as an opaque Docker error — after a container had already been created —
+# or did not surface at all.
+#
+# The `off_limits_paths` case is the one that mattered most: a bare string is
+# iterable, so `off_limits_paths: protected.txt` was consumed one character at a
+# time. The file was NOT protected and thirteen single-character paths were, and
+# the Run proceeded looking healthy. A security control that silently protects
+# nothing is worse than one that refuses to start.
+
+
+def _config_dir(tmp_path, body: str):
+    """Writes `body` as a `.vaultshield.yml` and returns its directory."""
+    (tmp_path / ".vaultshield.yml").write_text(body)
+    return tmp_path
+
+
+VALID_BODY = """\
+start_command: "npm start"
+port: 3000
+ready_path: "/health"
+routes:
+  - "/"
+  - "/login"
+off_limits_paths:
+  - "protected.txt"
+  - "secrets/"
+"""
+
+
+class TestStrictTypeValidation:
+    """Every invalid form must be rejected by `load_config` itself.
+
+    `load_config` is step 1 of `run` — before the Run_Directory exists, before
+    credentials are generated, and before any container is created — so a
+    `ConfigError` from here is by construction a failure that precedes every side
+    effect.
+    """
+
+    @pytest.mark.parametrize(
+        "field,body",
+        [
+            # port: not-a-number
+            ("port", VALID_BODY.replace("port: 3000", "port: not-a-number")),
+            ("port", VALID_BODY.replace("port: 3000", "port: 3.5")),
+            ("port", VALID_BODY.replace("port: 3000", "port: true")),
+            ("port", VALID_BODY.replace("port: 3000", "port: 0")),
+            ("port", VALID_BODY.replace("port: 3000", "port: 70000")),
+            # start_command: 12345
+            (
+                "start_command",
+                VALID_BODY.replace('start_command: "npm start"', "start_command: 12345"),
+            ),
+            (
+                "start_command",
+                VALID_BODY.replace(
+                    'start_command: "npm start"', "start_command:\n  - npm\n  - start"
+                ),
+            ),
+            # ready_path as a list
+            (
+                "ready_path",
+                VALID_BODY.replace(
+                    'ready_path: "/health"', "ready_path:\n  - /health"
+                ),
+            ),
+            # routes: /home  (a bare string)
+            ("routes", VALID_BODY.replace('routes:\n  - "/"\n  - "/login"', "routes: /home")),
+            ("routes", VALID_BODY.replace('routes:\n  - "/"\n  - "/login"', "routes: {}")),
+            (
+                "routes",
+                VALID_BODY.replace('routes:\n  - "/"\n  - "/login"', "routes:\n  - 42"),
+            ),
+            # off_limits_paths: protected.txt  (a bare string)
+            (
+                "off_limits_paths",
+                VALID_BODY.replace(
+                    'off_limits_paths:\n  - "protected.txt"\n  - "secrets/"',
+                    "off_limits_paths: protected.txt",
+                ),
+            ),
+            (
+                "off_limits_paths",
+                VALID_BODY.replace(
+                    'off_limits_paths:\n  - "protected.txt"\n  - "secrets/"',
+                    "off_limits_paths: {}",
+                ),
+            ),
+            (
+                "off_limits_paths",
+                VALID_BODY.replace(
+                    'off_limits_paths:\n  - "protected.txt"\n  - "secrets/"',
+                    "off_limits_paths:\n  - 7",
+                ),
+            ),
+        ],
+    )
+    def test_an_invalid_type_is_rejected_and_names_the_field(self, tmp_path, field, body):
+        with pytest.raises(ConfigError) as excinfo:
+            load_config(_config_dir(tmp_path, body))
+        assert field in str(excinfo.value), (
+            f"the error must name the offending field; got {excinfo.value}"
+        )
+
+    def test_a_bare_string_off_limits_entry_is_never_iterated_per_character(self, tmp_path):
+        """The specific silent failure F-4 removes.
+
+        Accepting the string would have produced thirteen one-character
+        "protected paths" and left `protected.txt` unprotected while the Run
+        reported success.
+        """
+        body = VALID_BODY.replace(
+            'off_limits_paths:\n  - "protected.txt"\n  - "secrets/"',
+            "off_limits_paths: protected.txt",
+        )
+        with pytest.raises(ConfigError) as excinfo:
+            load_config(_config_dir(tmp_path, body))
+        assert "list of strings" in str(excinfo.value)
+
+    def test_the_valid_form_is_accepted_with_the_right_types(self, tmp_path):
+        config = load_config(_config_dir(tmp_path, VALID_BODY))
+
+        assert config.start_command == "npm start"
+        assert config.port == 3000 and isinstance(config.port, int)
+        assert config.ready_path == "/health"
+        assert config.routes == ["/", "/login"]
+        assert config.off_limits_paths == ["protected.txt", "secrets/"]
+
+    def test_a_quoted_numeric_port_is_accepted_as_an_integer(self, tmp_path):
+        """`port: "3000"` is a reasonable thing to write and unambiguous; it is
+        coerced rather than rejected, unlike `port: not-a-number`."""
+        config = load_config(_config_dir(tmp_path, VALID_BODY.replace("port: 3000", 'port: "3000"')))
+
+        assert config.port == 3000 and isinstance(config.port, int)
+
+    def test_absent_optional_lists_default_to_empty(self, tmp_path):
+        """`init` writes `routes: []`/`off_limits_paths: []` as placeholders, and
+        omitting them entirely must behave the same rather than erroring."""
+        body = "start_command: npm start\nport: 3000\nready_path: /\n"
+        config = load_config(_config_dir(tmp_path, body))
+
+        assert config.routes == []
+        assert config.off_limits_paths == []
+        assert config.agent == ""
+
+    def test_a_wrong_typed_agent_is_rejected(self, tmp_path):
+        body = VALID_BODY + "agent: [mock]\n"
+        with pytest.raises(ConfigError) as excinfo:
+            load_config(_config_dir(tmp_path, body))
+        assert "agent" in str(excinfo.value)
+
+    def test_a_blank_list_entry_is_rejected(self, tmp_path):
+        """An empty route or off-limits entry would match everything or nothing
+        depending on the consumer; neither is a thing anyone meant to write."""
+        body = VALID_BODY.replace('routes:\n  - "/"\n  - "/login"', 'routes:\n  - ""')
+        with pytest.raises(ConfigError) as excinfo:
+            load_config(_config_dir(tmp_path, body))
+        assert "routes[0]" in str(excinfo.value)

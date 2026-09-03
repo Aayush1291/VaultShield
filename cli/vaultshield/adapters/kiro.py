@@ -184,7 +184,12 @@ import threading
 from datetime import datetime, timezone
 from typing import IO, Iterator
 
-from vaultshield.adapters.base import AdapterError, Agent_Adapter, AgentEvent
+from vaultshield.adapters.base import (
+    AdapterError,
+    Agent_Adapter,
+    AgentEvent,
+    SandboxInvocation,
+)
 
 # The Kiro CLI executable, resolved on PATH inside the environment
 # `vaultshield run` runs in. Not configurable per Run: Requirement 15.1
@@ -327,6 +332,52 @@ class Kiro_Adapter(Agent_Adapter):
         env = dict(os.environ)
         env[KIRO_API_KEY_ENV] = api_key
         return env
+
+    def _resolve_api_key(self) -> str:
+        """The API key for this Run, or `AdapterError` if there isn't one.
+
+        Split out of `_build_env` so `sandbox_invocation` can reuse the
+        resolution and the error message without also inheriting
+        `_build_env`'s copy of `os.environ`, which must not cross into the
+        container.
+        """
+        api_key = (
+            self._api_key
+            if self._api_key is not None
+            else os.environ.get(KIRO_API_KEY_ENV, "")
+        )
+        if not api_key.strip():
+            raise AdapterError(
+                "Kiro_Adapter cannot construct a valid invocation: "
+                f"{KIRO_API_KEY_ENV} is not set. Export {KIRO_API_KEY_ENV} "
+                "before running --agent=kiro."
+            )
+        return api_key
+
+    def sandbox_invocation(self, prompt: str, workdir: str) -> SandboxInvocation:
+        """Describes `kiro-cli chat --no-interactive <prompt>` for in-Sandbox
+        execution.
+
+        Same argv as the host path — `build_kiro_argv` is the single definition
+        of Requirement 15.1's invocation, and it still carries no session or
+        resume argument, so Requirement 15.2's fresh-session property holds
+        wherever the process runs.
+
+        The difference from `_build_env` is deliberate and is the security
+        point: only `KIRO_API_KEY` is exported. `_build_env` copies
+        `os.environ` because a host subprocess needs the developer's PATH and
+        HOME to run at all; a container process gets those from its image, and
+        copying the developer's environment across the boundary would hand the
+        Sandbox every secret in their shell.
+
+        Requires `kiro-cli` to be present in the Sandbox image. It is not in
+        the default `python:3.11` base image, so `--agent=kiro` needs
+        `--base-image` pointing at an image that has it.
+        """
+        return SandboxInvocation(
+            argv=build_kiro_argv(prompt),
+            env={KIRO_API_KEY_ENV: self._resolve_api_key()},
+        )
 
 
 def _spawn(argv: list[str], env: dict[str, str], workdir: str) -> subprocess.Popen[str]:

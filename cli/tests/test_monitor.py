@@ -533,3 +533,115 @@ def test_append_event_log_keeps_one_record_per_line_for_multiline_payloads(tmp_p
     lines = log_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["payload"] == payload
+
+
+# --- F-2: any agent exception must cross the thread boundary -----------------
+#
+# `PtyOutputCapture` drives `adapter.launch()` on its own thread. `run()` is the
+# top of that thread's stack, so anything escaping it goes to
+# `threading.excepthook` and is LOST: the joining caller in `supervise` sees a
+# clean join, writes the Event_Log, finds `capture.error is None`, and reports a
+# successful Run.
+#
+# Before the fix only `AdapterError` was captured, so an agent that died with any
+# other exception — a `RuntimeError` from its own code, a `KeyError` while parsing
+# a response — was indistinguishable from one that finished. The Run was reported
+# as successful with a truncated transcript and (in the pipeline) an empty diff,
+# which is the worst possible failure mode: a reviewer sees a green Run and
+# approves it.
+
+
+class _CrashingAdapter(Agent_Adapter):
+    """Emits one normal event, then dies with a non-AdapterError exception."""
+
+    def launch(self, prompt, workdir):
+        yield AgentEvent(
+            type="output",
+            timestamp="2026-01-01T00:00:00+00:00",
+            payload="one normal event before the crash",
+        )
+        raise RuntimeError("simulated agent crash")
+
+
+class _AdapterErroringAdapter(Agent_Adapter):
+    """Emits one normal event, then raises `AdapterError`."""
+
+    def launch(self, prompt, workdir):
+        yield AgentEvent(
+            type="output",
+            timestamp="2026-01-01T00:00:00+00:00",
+            payload="one normal event before the adapter error",
+        )
+        raise AdapterError("simulated adapter failure")
+
+
+class TestAgentExceptionsFailTheRun:
+    """Both exception families must fail the Run, and neither may be silent."""
+
+    def test_a_runtime_error_from_the_agent_fails_the_run(self, tmp_path):
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match="simulated agent crash"):
+            Monitor(tmp_path, "20260101-000000-aaaaaaaaaaaaaaaa").supervise(
+                _CrashingAdapter(), "prompt", run_dir=run_dir
+            )
+
+    def test_an_adapter_error_from_the_agent_fails_the_run(self, tmp_path):
+        """The case that already worked; asserted alongside so a future change
+        cannot fix one family by breaking the other."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        with pytest.raises(AdapterError, match="simulated adapter failure"):
+            Monitor(tmp_path, "20260101-000000-bbbbbbbbbbbbbbbb").supervise(
+                _AdapterErroringAdapter(), "prompt", run_dir=run_dir
+            )
+
+    @pytest.mark.parametrize(
+        "adapter_class,marker",
+        [
+            (_CrashingAdapter, "one normal event before the crash"),
+            (_AdapterErroringAdapter, "one normal event before the adapter error"),
+        ],
+    )
+    def test_the_partial_transcript_survives_the_failure(
+        self, tmp_path, adapter_class, marker
+    ):
+        """The Event_Log is written BEFORE the exception is re-raised, which is
+        what makes the crash diagnosable rather than merely reported."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        with pytest.raises((RuntimeError, AdapterError)):
+            Monitor(tmp_path, "20260101-000000-cccccccccccccccc").supervise(
+                adapter_class(), "prompt", run_dir=run_dir
+            )
+
+        log = run_dir / "events.jsonl"
+        assert log.is_file(), "no Event_Log was written for the failed Run"
+        assert marker in log.read_text(), (
+            "the event the agent emitted before failing is missing from the "
+            "Event_Log, so the transcript does not show how far it got"
+        )
+
+    def test_a_crash_is_never_reported_as_a_successful_run(self, tmp_path):
+        """The regression stated directly: `supervise` must not return.
+
+        Returning a log path here is exactly the false success F-2 describes.
+        """
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        returned = None
+        try:
+            returned = Monitor(
+                tmp_path, "20260101-000000-dddddddddddddddd"
+            ).supervise(_CrashingAdapter(), "prompt", run_dir=run_dir)
+        except RuntimeError:
+            pass
+
+        assert returned is None, (
+            "supervise() returned normally for a crashed agent: the Run would be "
+            "reported as successful"
+        )

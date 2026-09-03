@@ -87,6 +87,7 @@ from vaultshield.git_capture import (
     commit_run_branch,
 )
 from vaultshield.monitor import Monitor, OffLimitsViolation
+from vaultshield.sandbox_monitor import SandboxMonitorError, supervise_in_sandbox
 from vaultshield.run_directory import (
     create_run_dir,
     event_log_path,
@@ -107,7 +108,7 @@ from vaultshield.submit import submit as submit_run
 # branch deletion can raise is the same class already imported from `submit`
 # above, since `teardown.py` resolves its credential through
 # `submit.resolve_git_credential`.
-from vaultshield.teardown import TeardownError
+from vaultshield.teardown import TeardownError, sync_rejected_branch, teardown_sandbox
 from vaultshield.teardown import teardown as teardown_run
 
 # Adapter dispatch table for the `run` command (Task 6.4): maps an
@@ -657,15 +658,26 @@ def run(
         )
         click.echo(f"Sandbox created for run {run_id} (cloned {repo_url}).")
 
-        # 6. Monitor: PTY capture + file-change watching, merged into the
-        #    Event_Log inside the Run_Directory resolved in step 2. Passing
-        #    `run_dir` explicitly keeps this pipeline's canonical path (via
-        #    `run_directory.py`) the one that is used, rather than
-        #    `supervise`'s own fallback.
-        monitor = Monitor(
-            repo_root, run_id, off_limits_paths=config.off_limits_paths
+        # 6. Monitor, INSIDE the Sandbox. The agent runs as a real process in
+        #    the container, with the container's clone as its working
+        #    directory; both event producers observe that container (its pty
+        #    for terminal output, an in-container watcher for file changes)
+        #    and the merged Event_Log is written to the host Run_Directory.
+        #
+        #    Deliberately NOT `Monitor(repo_root, ...).supervise(...)`. That
+        #    ran the agent in this process against `repo_root` — the
+        #    developer's own checkout — which meant the agent could read the
+        #    real `.env` next to it, its writes landed on the host, and step 8
+        #    below diffed a container clone nothing had touched, producing an
+        #    empty `diff.json`. `repo_root` is now used only to locate the
+        #    config and the Run_Directory; it is never the agent's workdir.
+        log_path = supervise_in_sandbox(
+            sandbox,
+            adapter,
+            prompt,
+            run_dir,
+            off_limits_paths=config.off_limits_paths,
         )
-        log_path = monitor.supervise(adapter, prompt, run_dir=run_dir)
 
         # 7. Browser_Capture_Module (Requirement 9.1): agent execution has
         #    completed — `supervise` returned — so the application is
@@ -692,6 +704,14 @@ def run(
         )
     except SandboxError as exc:
         raise click.ClickException(str(exc)) from exc
+    except SandboxMonitorError as exc:
+        # The Sandbox and the agent were fine, but the Monitor could not
+        # establish or read its own in-container file-change watch. Reported
+        # separately from `SandboxError` because the fix is different: this
+        # usually means the Sandbox image has no `python` on PATH, so nothing
+        # could observe the agent's file changes. Failing is correct — an
+        # unobserved Run looks like a clean Run that changed nothing.
+        raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
     except (AdapterError, OffLimitsViolation) as exc:
         # `supervise` raises both of these only after the Event_Log has
         # been written, so the Run failed but its evidence survives.
@@ -1003,20 +1023,57 @@ def teardown(run_id: str, backend_url: str) -> None:
     Run's branch is a change you are about to merge. Safe to run more than
     once, and safe to run on a Run that has no container and no pushed branch:
     both steps do nothing when there is nothing left to do.
+
+    The local Sandbox removal needs no login and no reachable backend. If the
+    token is missing or the backend cannot be read, the container is still
+    removed and only the branch step is skipped — reclaiming a stranded
+    container is exactly what this command is for when the backend is down.
     """
+    # 1. LOCAL cleanup, first and unconditionally. No token, no network.
+    #
+    #    This used to sit behind `uploader.load_token()`, which meant a
+    #    developer with a stranded container and no login (or an unreachable
+    #    backend) could not remove it with the very command documented for that
+    #    purpose — the container survived and the command exited non-zero
+    #    having done nothing.
+    try:
+        sandbox_removed = teardown_sandbox(run_id)
+    except TeardownError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"Sandbox for run {run_id} removed."
+        if sandbox_removed
+        else f"No Sandbox container was left for run {run_id}."
+    )
+
+    # 2. REMOTE sync, best effort. A missing token or an unreachable backend
+    #    downgrades this to a warning rather than failing the command: the
+    #    local half already succeeded, and reporting failure would misdescribe
+    #    what happened. Exit status stays 0 so scripted cleanup loops work
+    #    offline.
     try:
         token = uploader.load_token()
     except uploader.UploadError as exc:
-        # Handled apart from the rest so the message can say that nothing
-        # happened: this is the one failure that is raised before either step
-        # runs. See the ordering note above for why the token is read first.
-        raise click.ClickException(
-            f"{exc} Nothing was torn down for run {run_id}."
-        ) from exc
+        click.echo(
+            f"Skipped the branch check for run {run_id}: {exc} "
+            "The Sandbox was still removed; re-run this command once logged in "
+            "if the Run was rejected and its pushed branch needs deleting."
+        )
+        return
 
     try:
-        teardown_run(run_id, backend_url, token)
+        sync_rejected_branch(
+            run_id, backend_url, token, sandbox_removed=sandbox_removed
+        )
     except (TeardownError, CredentialError) as exc:
+        # A genuine failure of the remote half — an unknown Run, an unreachable
+        # backend, an unresolvable credential — is still a command failure, and
+        # is reported exactly as before. Only the *not logged in* case above is
+        # downgraded, because that is a precondition the developer has not met
+        # rather than something that went wrong. Both messages already name what
+        # the local half did first, so it is never ambiguous whether the
+        # container was reclaimed.
         raise click.ClickException(str(exc)) from exc
 
     click.echo(

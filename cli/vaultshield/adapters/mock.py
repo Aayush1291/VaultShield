@@ -38,11 +38,43 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterator
 
-from vaultshield.adapters.base import Agent_Adapter, AgentEvent
+from vaultshield.adapters.base import (
+    Agent_Adapter,
+    AdapterError,
+    AgentEvent,
+    SandboxInvocation,
+)
 
 # Deterministic SHAPE: every `launch()` call yields exactly this many
 # "output" events, followed by exactly one "final_message" event.
 _OUTPUT_EVENT_COUNT = 3
+
+# The in-Sandbox body of `sandbox_invocation`. Runs as a REAL process inside the
+# container (see that method), which is what makes Mock_Adapter usable as an
+# end-to-end smoke test of the sandboxed execution path rather than only of the
+# adapter interface.
+#
+# Written against the standard library alone: the Sandbox's base image is a
+# plain `python:*` image with none of VaultShield installed, so this program
+# cannot import anything from `vaultshield`.
+#
+# It mirrors `launch()`'s shape (N output lines then one final message) and, so
+# that the file-change half of the Monitor has something real to observe, writes
+# one file into the repository it was given. `flush=True` on every print keeps
+# the transcript ordered with respect to the file write when stdout is a pipe.
+_SANDBOX_PROGRAM = '''
+import os, sys, time
+prompt, workdir, count = sys.argv[1], sys.argv[2], int(sys.argv[3])
+os.chdir(workdir)
+print("[mock-sandbox] cwd=%s" % os.getcwd(), flush=True)
+for step in range(count):
+    print("[mock-sandbox step=%d] simulated output for prompt=%r" % (step, prompt), flush=True)
+    time.sleep(0.05)
+with open("vaultshield_mock_agent.txt", "w") as fh:
+    fh.write("written by Mock_Adapter inside the Sandbox\\n")
+print("[mock-sandbox] wrote vaultshield_mock_agent.txt", flush=True)
+print("[mock-sandbox] simulated final message for prompt=%r" % prompt, flush=True)
+'''
 
 
 class Mock_Adapter(Agent_Adapter):
@@ -94,6 +126,43 @@ class Mock_Adapter(Agent_Adapter):
                 f"[mock call={call_index}] simulated final message for "
                 f"prompt={prompt!r}"
             ),
+        )
+
+    def sandbox_invocation(self, prompt: str, workdir: str) -> SandboxInvocation:
+        """Runs the simulation as a real `python` process inside the Sandbox.
+
+        `launch()` above is a generator in the calling process, which cannot
+        satisfy `vaultshield run`'s requirement that the agent execute inside
+        the container. This returns an actual command instead, so `--agent=mock`
+        exercises the same execution path a real agent takes: a container
+        process, its output streamed back through the Sandbox, and a file it
+        writes observed by the Monitor's in-container watcher.
+
+        `python` is guaranteed present — the Sandbox's default base image is
+        `python:3.11` and the program is passed with `-c` so nothing has to be
+        installed or written to disk first. `env` is empty: the simulation needs
+        no credential, and `SandboxInvocation` forbids copying the host
+        environment in.
+
+        Raises `AdapterError` for an empty prompt, matching every other
+        adapter's invocation-construction contract, so the failure happens
+        before a Sandbox process starts.
+        """
+        if not prompt.strip():
+            raise AdapterError(
+                "Mock_Adapter cannot construct a valid invocation: prompt is "
+                "empty. Pass a non-empty --prompt."
+            )
+        return SandboxInvocation(
+            argv=[
+                "python",
+                "-c",
+                _SANDBOX_PROGRAM,
+                prompt,
+                workdir,
+                str(_OUTPUT_EVENT_COUNT),
+            ],
+            env={},
         )
 
 

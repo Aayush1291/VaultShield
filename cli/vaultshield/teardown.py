@@ -281,6 +281,56 @@ def teardown(
     """
     sandbox_removed = teardown_sandbox(run_id, client=client)
 
+    sync_rejected_branch(
+        run_id,
+        backend_url,
+        token,
+        sandbox_removed=sandbox_removed,
+        repo_root=repo_root,
+        remote=remote,
+        provider=provider,
+        credential=credential,
+    )
+
+
+def sync_rejected_branch(
+    run_id: str,
+    backend_url: str,
+    token: str,
+    *,
+    sandbox_removed: bool = False,
+    repo_root: Path | None = None,
+    remote: str = DEFAULT_REMOTE,
+    provider: Literal["github", "gitlab"] | None = None,
+    credential: Credential | None = None,
+) -> None:
+    """The remote half of teardown: delete the branch if the Run was rejected.
+
+    Reads the Run's status from `<backend_url>/api/runs/<run_id>/` and, when it
+    is `rejected` and the branch is on the remote, deletes it. Any other status
+    leaves the remote untouched — an approved or submitted Run's branch is a
+    change that is about to be merged.
+
+    Split out of `teardown_run` so the two halves can be driven independently.
+    `teardown_run` still composes them in the same order with the same
+    behaviour; the CLI calls them separately because the LOCAL half must not
+    depend on this one. Removing a stranded container is exactly what a
+    developer needs when there is no token or the backend is down, and gating it
+    behind an authenticated read made the documented recovery path unusable in
+    precisely that situation.
+
+    Args:
+        sandbox_removed: whether the local half already removed a container.
+            Passed through so a backend failure's message can say what did
+            happen before it, which is what tells a developer whether
+            re-running is safe (it is).
+
+    Raises:
+        TeardownError: backend unreachable or no such Run, a remote whose
+            provider could not be determined, or a failed branch deletion.
+        CredentialError: no usable git/host credential — raised before the
+            remote is touched.
+    """
     status = _fetch_run_status(
         run_id, backend_url, token, sandbox_removed=sandbox_removed
     )

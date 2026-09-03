@@ -195,7 +195,12 @@ import threading
 from datetime import datetime, timezone
 from typing import Iterator, Sequence
 
-from vaultshield.adapters.base import AdapterError, Agent_Adapter, AgentEvent
+from vaultshield.adapters.base import (
+    AdapterError,
+    Agent_Adapter,
+    AgentEvent,
+    SandboxInvocation,
+)
 
 # The Antigravity CLI executable, resolved on PATH inside the environment
 # `vaultshield run` runs in. Not configurable per Run: Requirement 16.1
@@ -328,6 +333,31 @@ class Antigravity_Adapter(Agent_Adapter):
         # reader below would keep waiting long after the agent exited.
         tap.close_slave()
         return _stream_events(process, tap)
+
+    def sandbox_invocation(self, prompt: str, workdir: str) -> SandboxInvocation:
+        """Describes `agy -p "<prompt>" --non-interactive` for in-Sandbox
+        execution.
+
+        Same argv as the host path: `build_antigravity_argv` remains the single
+        definition of Requirement 16.1's invocation, and it raises
+        `AdapterError` for an empty prompt before anything starts.
+
+        `env` is empty. Requirement 16.1 names no credential for `agy` (this
+        adapter deliberately invents none — see judgment call 2 in the module
+        docstring), so there is nothing to export, and `SandboxInvocation`
+        forbids copying the host environment in.
+
+        Requirement 16.2's `isatty()` check is satisfied by the Sandbox rather
+        than by this adapter: `Sandbox.exec_stream` allocates a pseudo-terminal
+        for the process by default, so `agy` sees a TTY on its stdio without
+        this adapter opening a tap of its own. That is why no `_OutputTap` is
+        involved here — the pty now lives on the container side of the boundary.
+
+        Requires the `agy` executable in the Sandbox image; the default
+        `python:3.11` base image does not have it, so `--agent=antigravity`
+        needs `--base-image` pointing at one that does.
+        """
+        return SandboxInvocation(argv=build_antigravity_argv(prompt), env={})
 
 
 class _OutputTap:
