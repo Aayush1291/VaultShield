@@ -15,7 +15,19 @@ Serializers live alongside in `runs/serializers.py` (Tasks 16.2, 16.7).
 from functools import partial
 from typing import Literal
 
-from django.db import transaction
+# NOT `django.db.transaction`. `django-mongodb-backend` reports
+# `supports_transactions = False` for Django's native API, which means Django
+# quietly turns every `django.db.transaction.atomic()` block into a no-op and
+# fires every `on_commit` callback immediately. Nothing raises; the atomicity
+# simply disappears. This module's transactions are load-bearing (the
+# approve/reject state machine, the all-or-nothing event batch, and the
+# scan-after-diff ordering), so they use the backend's own API, which drives
+# real MongoDB multi-document transactions over a session.
+#
+# Requires the deployment to be a replica set or a sharded cluster, which
+# MongoDB Atlas and the compose `mongo` service both are. A standalone `mongod`
+# cannot run transactions at all.
+from django_mongodb_backend import transaction
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -24,6 +36,10 @@ from rest_framework.fields import BooleanField
 from rest_framework.response import Response
 
 from runs.models import Approval, Run, RunDiff
+from vaultshield_backend.mongodb import (
+    retry_on_transient_transaction_error,
+    to_mongo_precision,
+)
 from runs.serializers import (
     RunDetailSerializer,
     RunDiffIngestSerializer,
@@ -167,31 +183,69 @@ def apply_decision(run: Run, decision: Decision) -> Run:
     leaves the Run exactly as it was, and a Run never ends up carrying a
     decided status with no `Approval` behind it.
 
-    No `select_for_update()`, unlike the event-ingest view: the conditional
-    `UPDATE` already serialises the only race there is here, and the row
-    lock it takes is the database's own. That also keeps these two
-    endpoints working on SQLite, which is what the test suite runs on
-    (`vaultshield_backend/settings_test.py`).
+    No lock is taken, and none is needed. The conditional `UPDATE` already
+    serialises the only race there is here: MongoDB applies an update to a
+    single document atomically, so of two concurrent decisions exactly one
+    matches `status__in=ALLOWED_DECISIONS_FROM` and the other sees zero rows
+    modified. This is the one PostgreSQL correctness mechanism in the
+    codebase that carried over to MongoDB unchanged — verified in
+    `vaultshield_backend/test_mongodb.py::TestApprovalAtomicity`.
+
+    The `atomic()` here is `django_mongodb_backend`'s, not Django's; see the
+    import comment at the top of this module for why that distinction is
+    load-bearing rather than cosmetic.
     """
-    decided_at = timezone.now()
+    # Truncated to MongoDB's millisecond storage precision before it is written
+    # anywhere. This function stores `decided_at` and then assigns the same
+    # value to `run.updated_at` in memory so the caller can serialise without a
+    # re-read; if the two differed by the microseconds MongoDB drops, the
+    # approve/reject response would report a different `updated_at` than every
+    # later `GET /api/runs/:id/` for the same unchanged row. See
+    # `vaultshield_backend/mongodb.py`.
+    decided_at = to_mongo_precision(timezone.now())
 
-    with transaction.atomic():
-        recorded_decision = (
-            Approval.objects.filter(run=run).values_list("decision", flat=True).first()
-        )
-        if recorded_decision is not None:
-            raise StateTransitionError(
-                _stored_status_of(run), recorded_decision=recorded_decision
+    def record_decision() -> None:
+        """One attempt at the transition. Re-read on every retry.
+
+        Everything it decides on is read inside the block, which is what makes
+        a retry converge instead of repeating a stale answer: a caller that
+        lost the write race and comes back round finds the winner's `Approval`
+        already committed and takes the refusal path.
+        """
+        with transaction.atomic():
+            recorded_decision = (
+                Approval.objects.filter(run=run).values_list("decision", flat=True).first()
             )
+            if recorded_decision is not None:
+                raise StateTransitionError(
+                    _stored_status_of(run), recorded_decision=recorded_decision
+                )
 
-        transitioned = Run.objects.filter(
-            pk=run.pk, status__in=ALLOWED_DECISIONS_FROM
-        ).update(status=decision, updated_at=decided_at)
+            transitioned = Run.objects.filter(
+                pk=run.pk, status__in=ALLOWED_DECISIONS_FROM
+            ).update(status=decision, updated_at=decided_at)
 
-        if not transitioned:
-            raise StateTransitionError(_stored_status_of(run))
+            if not transitioned:
+                raise StateTransitionError(_stored_status_of(run))
 
-        Approval.objects.create(run=run, decision=decision)
+            Approval.objects.create(run=run, decision=decision)
+
+    # Retried on MongoDB's `TransientTransactionError` only, and this is the one
+    # place in the codebase that needs it. Concurrent decisions all write the
+    # *same* Run document inside a transaction, so MongoDB aborts the losers
+    # with a write conflict and expects the client to retry — unlike
+    # PostgreSQL, where the conditional `UPDATE` blocked briefly and then
+    # reported zero rows matched.
+    #
+    # Without the retry the guard still held (exactly one caller ever won), but
+    # a losing reviewer got a 500 instead of Requirement 21.3's 409 naming the
+    # status the Run is actually in. Measured at 54 spurious errors out of 72
+    # losing calls before this was added.
+    #
+    # `StateTransitionError` is not retried: it is a real answer about the
+    # Run's state, not a race. See
+    # `vaultshield_backend/mongodb.retry_on_transient_transaction_error`.
+    retry_on_transient_transaction_error(record_decision)
 
     run.status = decision
     run.updated_at = decided_at
@@ -493,20 +547,32 @@ class RunViewSet(
         from its position in that array — see it for why order is carried by
         a server-assigned field rather than a submitted one.
 
-        ### Why the write is wrapped in a locked transaction
+        ### How concurrent batches are serialised without a row lock
 
-        `sequence` numbering continues from the highest value already stored
-        for the Run, so ingest is a read-modify-write: read the maximum,
-        insert past it. Two batches for the same Run arriving concurrently
-        would both read the same maximum and assign overlapping numbers,
-        and because retrieval orders by `sequence` alone, the two batches
-        would come back interleaved — precisely the outcome Requirement
-        13.1 rules out. Locking the Run row serialises them instead.
+        `sequence` numbering continues past whatever this Run has already
+        been allocated, so ingest used to be a read-modify-write: read
+        `MAX(sequence)`, insert past it. Two concurrent batches would both
+        read the same maximum and assign overlapping numbers, and because
+        retrieval orders by `sequence` alone the two batches would come
+        back interleaved — precisely what Requirement 13.1 rules out.
+        PostgreSQL solved that with `SELECT ... FOR UPDATE` on the Run row.
 
-        The transaction is also what makes a batch all-or-nothing. A failed
+        MongoDB has no row lock, and `select_for_update()` is *silently
+        ignored* by `django-mongodb-backend` rather than raising, so keeping
+        that code would have left the race wide open with nothing to
+        indicate it. The read-modify-write is gone instead: the batch's
+        numbers come from one atomic `$inc` on the Run document
+        (`runs/sequences.allocate_event_sequences`), which MongoDB
+        serialises per document. A `UniqueConstraint(run, sequence)` on
+        `RunEvent` backs it up, so a duplicate would be a loud
+        `IntegrityError` rather than a quietly reordered log.
+
+        The transaction is still what makes a batch all-or-nothing. A failed
         ingest stores none of its events, so the Uploader's retry from the
         same local artifacts (Requirement 14.4) starts from a clean slate
-        rather than duplicating a half-written batch.
+        rather than duplicating a half-written batch. Note that a retry gets
+        a *new* block of sequence numbers, leaving a gap where the abandoned
+        block was — harmless, since ordering is relative.
 
         Note what this does not claim: a batch whose response was lost
         *after* it committed will duplicate its events if re-posted. Events
@@ -520,12 +586,11 @@ class RunViewSet(
         serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
-            # Re-fetched under `SELECT ... FOR UPDATE` purely for the lock;
-            # `get_object()` above has already resolved and authorised this
-            # Run. `pk` rather than `run_id` because the lock only needs to
-            # name the row.
-            locked_run = Run.objects.select_for_update().get(pk=run.pk)
-            serializer.save(run=locked_run)
+            # No re-fetch under a lock: `get_object()` above has already
+            # resolved and authorised this Run, and the ordering guarantee no
+            # longer comes from holding it still. The allocator inside
+            # `serializer.save` is what serialises concurrent batches.
+            serializer.save(run=run)
 
         # The stored events, in stored order, each carrying the `sequence`
         # the server assigned — so a client can see the order it was
@@ -561,8 +626,8 @@ class RunViewSet(
 
         `transaction.on_commit` rather than a bare `.delay()` inside the
         block. A worker can begin the task the instant it is published, and
-        until this transaction commits the `RunDiff` is not visible on any
-        other connection — so an early task finds no diff, takes
+        until this transaction commits the `RunDiff` is not visible to any
+        other session — so an early task finds no diff, takes
         `run_security_scan`'s `DoesNotExist` no-op branch, and returns,
         leaving the Run with an empty Security tab and nothing logged as
         having failed. Registering on commit is what makes that branch mean
@@ -572,9 +637,17 @@ class RunViewSet(
         back, the callback is discarded with it, so no scan is ever queued
         for a diff that was not stored.
 
-        Celery's `delay_on_commit` is this same pair of calls, but it exists
-        only when Celery's Django fixup has installed its task base;
-        spelling the two out keeps the enqueue independent of that.
+        This is `django_mongodb_backend.transaction.on_commit`, and the
+        distinction matters here more than anywhere else in the codebase.
+        Django's own `on_commit` fires the callback *immediately* on a
+        backend that reports no transaction support, which is exactly the
+        early-task race described above — the scan would be enqueued before
+        the diff document was committed, and the Security tab would come up
+        silently empty. Requirement 18.1 depends on this import being the
+        right one; `vaultshield_backend/test_mongodb.py::TestSecurityScanOrdering` pins it.
+
+        Celery's `delay_on_commit` is not used: it routes through Django's
+        native `on_commit`, so it would reintroduce the same problem.
 
         A replaced diff enqueues a second scan, which is what should
         happen: `run_security_scan` replaces that Run's findings rather

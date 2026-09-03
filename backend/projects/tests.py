@@ -9,14 +9,18 @@ These are deliberately database-free — they exercise the serializer
 directly and inspect the resolved URL conf, neither of which opens a
 connection. The endpoint-level assertions (a `Project` row persisted and
 echoed, a rejected payload leaving the table untouched) are Properties 18
-and 21, which are Tasks 16.3 and 16.6 and need a live PostgreSQL. Admin
+and 21, which are Tasks 16.3 and 16.6 and need a reachable MongoDB. Admin
 registration for `Project` is Task 14.5.
+
+Endpoint-level coverage against a real database now lives in
+`vaultshield_backend/test_mongodb.py::TestRestApiAgainstMongoDB`.
 """
 
 from django.urls import resolve, reverse
 
 from projects.serializers import ProjectSerializer
 from projects.views import ProjectViewSet
+from vaultshield_backend.testing import routed_methods
 
 VALID_PAYLOAD = {"name": "vaultshield", "repo_url": "git@github.com:acme/vaultshield.git"}
 
@@ -127,7 +131,7 @@ class TestProjectRouteRegistration:
         match = resolve("/api/projects/")
 
         assert match.func.cls is ProjectViewSet
-        assert match.func.actions == {"get": "list", "post": "create"}
+        assert routed_methods(match) == {"get": "list", "post": "create"}
 
     def test_no_update_or_destroy_operations_are_routed(self):
         """design.md gives `Project` create and list, nothing else.
@@ -135,7 +139,7 @@ class TestProjectRouteRegistration:
         In particular no `DELETE`, which would cascade every Run and
         artifact belonging to the Project.
         """
-        routed_actions = set(resolve("/api/projects/").func.actions)
+        routed_actions = set(routed_methods(resolve("/api/projects/")))
 
         assert routed_actions == {"get", "post"}
         assert ProjectViewSet.get_extra_actions() == []

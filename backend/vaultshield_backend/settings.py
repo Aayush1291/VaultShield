@@ -9,16 +9,39 @@ and Task 14.6 (`SandboxRecord`).
 
 ### Everything configurable reads from the environment
 
-design.md's docker-compose topology puts `postgres` and `redis` on the
-compose network while the CLI stays on the host talking to `web` over
-`localhost` (Requirement 24.2). That means the same settings module is
-imported in two places with different service addresses, so every
-environment-specific value below is an `os.environ` lookup with a
-development default rather than a literal. The defaults are chosen so a
-fresh clone with nothing running can still execute
+design.md's docker-compose topology puts `redis` on the compose network while
+the CLI stays on the host talking to `web` over `localhost` (Requirement
+24.2). That means the same settings module is imported in two places with
+different service addresses, so every environment-specific value below is an
+`os.environ` lookup with a development default rather than a literal. The
+defaults are chosen so a fresh clone with nothing running can still execute
 `python manage.py check` — no database connection is opened by the system
-checks, so an unreachable PostgreSQL is not an error until `migrate`,
+checks, so an unreachable database is not an error until `migrate`,
 `runserver`, or a test run actually needs it.
+
+The database is the one exception to "has a development default". MongoDB is
+the only system of record, so `VAULTSHIELD_MONGODB_URL` is required and
+`_mongodb_settings()` raises at import when it is missing. There is nothing
+sensible to fall back to, and a placeholder would only defer the failure to
+the first query.
+
+### MongoDB is the datastore, and the only one
+
+The `postgres` service, the five `POSTGRES_*` variables, and the psycopg
+dependency were all removed. One alias, whose `ENGINE` is
+`django_mongodb_backend`. Redis stays, but as Celery's broker and result
+backend rather than as anything to do with storage.
+
+Two consequences that shape code elsewhere and are recorded here because this
+is the module that configures them:
+
+- Django's native transaction API is a no-op on this backend
+  (`supports_transactions = False`), so `runs/views.py` and
+  `security_scan/tasks.py` import `django_mongodb_backend.transaction`
+  instead. Using `django.db.transaction` loses atomicity silently.
+- `select_for_update()` is ignored rather than rejected, which is why event
+  sequence numbering is an atomic `$inc` (`runs/sequences.py`) instead of a
+  locked read-modify-write.
 
 ### Access control is a default, not a per-view opt-in
 
@@ -93,14 +116,76 @@ def _env_int(name: str, default: int) -> int:
     return value
 
 
+def _mongodb_settings() -> dict:
+    """Build the `DATABASES["default"]` entry from `VAULTSHIELD_MONGODB_URL`.
+
+    MongoDB is VaultShield's only datastore (there is no PostgreSQL fallback
+    and no second alias), so an unusable URL is a hard error rather than a
+    value with a development default: every other setting in this module can
+    fall back to something a fresh clone can run with, but a database cannot.
+
+    ### The database name
+
+    `parse_uri` needs a database name and a connection string does not have to
+    carry one — `mongodb+srv://host/?retryWrites=true` is a perfectly ordinary
+    Atlas URL whose path is empty. Rather than requiring the operator to edit a
+    credential, the name is taken from `VAULTSHIELD_MONGODB_NAME` (default
+    `vaultshield`) and passed to `parse_uri` as `db_name`, which uses it only
+    when the URI itself does not name one. A name inside the URI therefore
+    still wins, so both shapes work and the credential is never rewritten.
+
+    ### `conn_max_age` is left at its default
+
+    PyMongo maintains its own connection pool per `MongoClient`, so Django's
+    persistent-connection setting would be pooling on top of a pool.
+    """
+    raw_url = os.environ.get("VAULTSHIELD_MONGODB_URL", "").strip()
+
+    if not raw_url:
+        raise ImproperlyConfigured(
+            "VAULTSHIELD_MONGODB_URL is not set. MongoDB is VaultShield's only "
+            "datastore, so there is no default to fall back to. Export a "
+            "connection string, e.g. "
+            "VAULTSHIELD_MONGODB_URL=mongodb://localhost:27017/vaultshield"
+        )
+
+    if not raw_url.startswith(("mongodb://", "mongodb+srv://")):
+        # Checked here so a malformed value is named at import by the variable
+        # it came from, rather than surfacing later as a PyMongo parse error
+        # from inside the driver. The value itself is never echoed: it carries
+        # the password, and settings errors reach logs and consoles.
+        raise ImproperlyConfigured(
+            "VAULTSHIELD_MONGODB_URL must be a MongoDB connection string "
+            "beginning `mongodb://` or `mongodb+srv://`."
+        )
+
+    return {
+        "ENGINE": "django_mongodb_backend",
+        # The whole connection string goes in HOST. This is the supported shape
+        # as of django-mongodb-backend 5.2; the older
+        # `parse_uri(url, db_name=...)` helper does the same thing but is
+        # deprecated and warns under `RemovedInDjango60Warning`.
+        "HOST": raw_url,
+        # Used only when the URI's own path does not name a database, which is
+        # the common Atlas shape (`mongodb+srv://host/?retryWrites=true`).
+        # A name inside the URI still wins, so both forms work and the
+        # credential never has to be rewritten to add one.
+        "NAME": os.environ.get("VAULTSHIELD_MONGODB_NAME", "").strip() or "vaultshield",
+    }
+
+
 def _redis_url(db: int) -> str:
     """Build a Redis URL for logical database `db` from the environment.
 
-    Host and port are read the same way PostgreSQL's are — `localhost` for a
-    host-run process talking to a port-forwarded compose service,
-    `REDIS_HOST=redis` inside the compose network (design.md's topology names
-    the service `redis`). Only the database number varies per caller, so it
-    is the argument.
+    Host and port default to `localhost` for a host-run process talking to a
+    port-forwarded compose service; `REDIS_HOST=redis` inside the compose
+    network (design.md's topology names the service `redis`). Only the database
+    number varies per caller, so it is the argument.
+
+    Split into host and port, unlike the datastore's single connection string,
+    because that is the shape a Redis address arrives in and because
+    `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` already exist for the cases
+    that need a whole URL.
     """
     host = os.environ.get("REDIS_HOST", "localhost")
     port = os.environ.get("REDIS_PORT", "6379")
@@ -127,10 +212,16 @@ ALLOWED_HOSTS = _env_list("VAULTSHIELD_ALLOWED_HOSTS", "localhost,127.0.0.1,web"
 
 # Applications --------------------------------------------------------------
 
+# `admin`, `auth`, and `contenttypes` are registered through the AppConfig
+# subclasses in `vaultshield_backend/apps.py` rather than by module path,
+# because each pins `default_auto_field = AutoField` in its own AppConfig and
+# MongoDB cannot use an integer auto field. That module documents why the other
+# three are listed plainly and why `rest_framework.authtoken` must not get the
+# same treatment.
 DJANGO_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
+    "vaultshield_backend.apps.MongoAdminConfig",
+    "vaultshield_backend.apps.MongoAuthConfig",
+    "vaultshield_backend.apps.MongoContentTypesConfig",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
@@ -143,8 +234,13 @@ THIRD_PARTY_APPS = [
     "rest_framework.authtoken",
 ]
 
-# design.md "Backend apps": one app per bounded piece of the data model.
+# design.md "Backend apps": one app per bounded piece of the data model, plus
+# the project package itself — it holds no models, but its `ready()` is where
+# DRF is taught about MongoDB's ObjectId primary keys
+# (`vaultshield_backend/drf_mongodb.py`). Without that registration DRF maps
+# `ObjectIdAutoField` to `IntegerField` and every `/api/` response 500s.
 LOCAL_APPS = [
+    "vaultshield_backend.apps.VaultShieldBackendConfig",
     "accounts",
     "projects",
     "runs",
@@ -154,6 +250,24 @@ LOCAL_APPS = [
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+
+# The contrib apps' shipped migrations declare `id` as `AutoField`, which
+# MongoDB cannot use as a primary key. `vaultshield_backend/apps.py` fixes the
+# *models*; this fixes their *migration histories*, by redirecting all three to
+# project-local packages holding fresh `ObjectIdAutoField` initial migrations.
+#
+# Without this redirect `makemigrations` writes the corrective operations into
+# `.venv/lib/python3.11/site-packages/django/contrib/*/migrations/`, i.e. into
+# the installed Django package — untracked by git and destroyed by the next
+# `pip install`. See `vaultshield_backend/contrib_migrations/__init__.py`.
+#
+# `sessions` and `rest_framework.authtoken` are absent on purpose: both already
+# use an explicit non-auto primary key, so their shipped migrations are fine.
+MIGRATION_MODULES = {
+    "admin": "vaultshield_backend.contrib_migrations.admin",
+    "auth": "vaultshield_backend.contrib_migrations.auth",
+    "contenttypes": "vaultshield_backend.contrib_migrations.contenttypes",
+}
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -188,23 +302,27 @@ ASGI_APPLICATION = "vaultshield_backend.asgi.application"
 
 # Database ------------------------------------------------------------------
 
-# PostgreSQL per design.md's technology stack. Host defaults to
-# `localhost` so a host-run `manage.py` reaches a port-forwarded compose
-# database; inside the compose network `POSTGRES_HOST=postgres` overrides
-# it. `manage.py check` opens no connection, so these values do not have
-# to resolve for the scaffold to validate.
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB", "vaultshield"),
-        "USER": os.environ.get("POSTGRES_USER", "vaultshield"),
-        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "vaultshield"),
-        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
-        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
-    }
-}
+# MongoDB, via the official `django-mongodb-backend`. The single alias is the
+# whole datastore: there is no PostgreSQL alias, no read replica, and no
+# fallback, so a broken `VAULTSHIELD_MONGODB_URL` fails at import (see
+# `_mongodb_settings`) rather than at the first query.
+#
+# Unlike the PostgreSQL configuration this replaced, the connection is one
+# opaque URL rather than five host/credential parts. That is what lets the
+# same value work unchanged from a host-run `manage.py`, from inside the
+# compose network, and against Atlas — the address is in the URL, not
+# assembled from the environment per deployment.
+DATABASES = {"default": _mongodb_settings()}
 
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+# MongoDB's primary key is the BSON ObjectId in every document's `_id`, so
+# `AutoField`/`BigAutoField` (a sequential integer) has no equivalent and
+# `django-mongodb-backend` rejects it with `mongodb.E001`.
+#
+# This covers VaultShield's own six apps. It does NOT cover the `contrib` apps,
+# which pin `default_auto_field` in their own `AppConfig` — see
+# `vaultshield_backend/apps.py` and the `INSTALLED_APPS` entries above for how
+# those are overridden.
+DEFAULT_AUTO_FIELD = "django_mongodb_backend.fields.ObjectIdAutoField"
 
 
 # Authentication ------------------------------------------------------------

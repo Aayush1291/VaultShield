@@ -22,8 +22,13 @@ scan path and keeps them as fast as the regexes they exercise.
 
 The `run_security_scan` classes are `pytest.mark.django_db`, because the
 task's entire job is a read and a write: a test that does not read the rows
-back is not testing it. `vaultshield_backend/settings_test.py` is what makes
-those runnable without a running PostgreSQL.
+back is not testing it. `vaultshield_backend/settings_test.py` is what points
+those at a `test_`-prefixed MongoDB database rather than the development one.
+
+The scan's *atomicity* — that a failure between the delete and the insert
+cannot leave a Run with no findings — is covered separately in
+`vaultshield_backend/test_mongodb.py::TestSecurityScanAtomicity`, because
+proving it requires injecting a failure mid-task.
 
 Property 26 (Task 22.2) is the generative version of the precision cases in
 `TestRuleMatching`, which are fixed samples chosen to pin each rule's

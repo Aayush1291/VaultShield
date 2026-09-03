@@ -10,9 +10,15 @@ qualifying `SandboxRecord` and `Run` rows and nothing else.
 Each task is a single conditional `UPDATE` whose whole behaviour is *which
 rows it matched*. Substituting the queryset would leave nothing under test,
 so every database-touching class here is `pytest.mark.django_db` and reads
-the rows back. `vaultshield_backend/settings_test.py` runs them on in-memory
-SQLite, so no PostgreSQL and no Redis are needed — and no Celery app either,
-since a `shared_task` is called directly here rather than enqueued.
+the rows back. `vaultshield_backend/settings_test.py` points them at a
+`test_`-prefixed MongoDB database, so a reachable MongoDB is needed but no
+Redis is — and no Celery app either, since a `shared_task` is called directly
+here rather than enqueued.
+
+MongoDB-specific coverage of the same two tasks — the rewritten
+single-collection reaper, its idempotency under overlapping passes, and the
+race window the rewrite introduced — is in
+`vaultshield_backend/test_mongodb.py::TestSandboxCleanup`.
 
 Row ages are set with a queryset `.update()` rather than by assigning to the
 instance: `SandboxRecord.last_heartbeat_at` is `auto_now_add` and
@@ -32,6 +38,7 @@ from django.utils import timezone
 from projects.models import Project
 from runs.models import Run
 from sandbox_tracking.models import SandboxRecord
+from vaultshield_backend.mongodb import to_mongo_precision
 from tasks.scheduled import (
     ACTIVE_RUN_STATUSES,
     DEFAULT_APPROVAL_MAX_AGE_HOURS,
@@ -122,9 +129,15 @@ class TestCleanupOrphanedSandboxesReapsQualifyingRecords:
         run = _saved_run("rejected")
         record = _sandbox_record(run, heartbeat_age_minutes=TTL_MINUTES + 1)
 
-        before = timezone.now()
+        # Both bounds are truncated to MongoDB's millisecond storage precision.
+        # The task's own `now` is truncated the same way before it is written
+        # (`tasks/scheduled.py`), so comparing an untruncated `timezone.now()`
+        # against the stored stamp would fail by up to 999µs on the lower bound
+        # — an artefact of BSON's date resolution, not of the task recording
+        # the wrong instant. See `vaultshield_backend/mongodb.py`.
+        before = to_mongo_precision(timezone.now())
         cleanup_orphaned_sandboxes(ttl_minutes=TTL_MINUTES)
-        after = timezone.now()
+        after = to_mongo_precision(timezone.now())
 
         assert before <= _reloaded(record).torn_down_at <= after
 
@@ -350,13 +363,21 @@ class TestFlagStuckApprovalsLeavesEverythingElseAlone:
         """This task raises a flag; it does not advance the lifecycle. Status
         and `pr_url` belong to review and to `vaultshield submit`."""
         run = _aged_run(age_hours=MAX_AGE_HOURS + 1)
+        # Read back rather than reusing the in-memory instance: `created_at` was
+        # generated in Python with microsecond precision, and MongoDB stores
+        # milliseconds, so the freshly-created object and the stored document
+        # differ by sub-millisecond noise that has nothing to do with this task.
+        # The claim under test is that `flag_stuck_approvals` does not *modify*
+        # `created_at`, so the baseline has to be what was stored before the
+        # task ran. See `vaultshield_backend/mongodb.py`.
+        created_at_before = Run.objects.get(pk=run.pk).created_at
 
         flag_stuck_approvals(max_age_hours=MAX_AGE_HOURS)
 
         flagged = Run.objects.get(pk=run.pk)
         assert flagged.status == "approved"
         assert flagged.pr_url == ""
-        assert flagged.created_at == run.created_at
+        assert flagged.created_at == created_at_before
 
     def test_no_run_is_deleted(self):
         flaggable = _aged_run(age_hours=MAX_AGE_HOURS + 1)

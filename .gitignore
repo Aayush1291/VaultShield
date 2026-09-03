@@ -2,3 +2,17 @@
 /.vscode
 /VaultShield_Requirement_Document.pdf
 /plan.md
+
+# Environment files, at any depth: the repo-root compose file, `backend/.env`,
+# and the frontend's `.env.local` all hold local credentials. Templates are
+# re-included below so `.env.example` stays tracked and reviewable.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Generated Sandbox_Credential_File. Holds only dummy values by construction
+# (`build_sandbox_env` mirrors key names and shapes, never real values), but it
+# is a build artifact either way.
+.env.sandbox

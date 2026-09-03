@@ -99,7 +99,10 @@ only re-POSTs a diff after the previous response.
 from __future__ import annotations
 
 from celery import shared_task
-from django.db import transaction
+
+# Not `django.db.transaction` — see the comment on the `atomic()` block below,
+# and the import comment in `runs/views.py`.
+from django_mongodb_backend import transaction
 
 from runs.models import RunDiff
 from security_scan.models import SecurityFinding
@@ -140,6 +143,17 @@ def run_security_scan(run_id: str) -> None:
     # transaction open for.
     findings = scan_diff(run_diff)
 
+    # One MongoDB transaction over the delete and the insert, so a Run is
+    # never left with *no* findings. Without it, a failure between the two
+    # statements would wipe the previous scan's results and store nothing in
+    # their place — the Security tab would show "no findings", which reads as
+    # "this diff is clean" rather than "the scan did not finish".
+    #
+    # `django_mongodb_backend.transaction`, not `django.db.transaction`: the
+    # latter is a silent no-op on this backend (it reports
+    # `supports_transactions = False`), which would leave exactly that gap.
+    # `vaultshield_backend/test_mongodb.py::TestSecurityScanAtomicity` injects a failure between
+    # the two calls and asserts the previous findings survive.
     with transaction.atomic():
         SecurityFinding.objects.filter(run=run_diff.run).delete()
         # Preserves the order `scan_diff` returned — file, then line, then

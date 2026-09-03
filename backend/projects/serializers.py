@@ -22,8 +22,12 @@ For the two writable fields (`name`, `repo_url`, both
   defaults to `True`), so `"   "` is treated as blank rather than stored
   as a `Project` with an invisible name.
 - **too long** — over `max_length` (255 / 500) is rejected up front
-  rather than at `INSERT`, where PostgreSQL would raise a
-  `DataError` and surface as a 500 instead of a validation error.
+  rather than at write time. This matters more on MongoDB than it did on
+  PostgreSQL, not less: PostgreSQL enforced the column width itself and
+  would have raised a `DataError` (a 500, but still a refusal), whereas
+  MongoDB has no column widths at all and would simply store the
+  oversized value. The serializer is now the only thing enforcing
+  `max_length`.
 - **wrong type** — a dict, list, or bool is rejected; `CharField` only
   coerces genuine scalars.
 

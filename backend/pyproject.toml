@@ -11,12 +11,25 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     # design.md Technology Stack: "Django 5.x + Django REST Framework,
-    # Celery + Redis (broker and result backend), ... PostgreSQL".
-    "Django>=5.0,<6.0",
+    # Celery + Redis (broker and result backend)". The datastore is MongoDB;
+    # PostgreSQL and psycopg were removed by the MongoDB migration.
+    #
+    # Django is pinned to 5.2.x rather than <6.0 because the MongoDB backend
+    # below is versioned to track a specific Django feature release: its 5.2.x
+    # series supports Django 5.2 only, and Django 6.0 needs
+    # django-mongodb-backend 6.0.x. Widening one without the other silently
+    # pairs mismatched database internals, so the two move together.
+    "Django>=5.2,<5.3",
     "djangorestframework>=3.15,<4.0",
-    # psycopg 3 with the prebuilt binary wheel: no local libpq/build
-    # toolchain needed to `pip install -e .` on a developer machine.
-    "psycopg[binary]>=3.2,<4.0",
+    # MongoDB's official Django database backend. Supplies the `ENGINE` in
+    # settings.py's `DATABASES`, `ObjectIdAutoField` (MongoDB has no integer
+    # auto key), `parse_uri` for `VAULTSHIELD_MONGODB_URL`, and the
+    # `django_mongodb_backend.transaction` API that `runs/views.py` and
+    # `security_scan/tasks.py` use in place of Django's own — Django's native
+    # transaction API is a silent no-op on this backend.
+    #
+    # Pulls in `pymongo`, which is therefore not listed separately.
+    "django-mongodb-backend>=5.2.4,<5.3",
     # Required by `Screenshot.image` (an ImageField): Django refuses to
     # validate ImageField without Pillow, so `manage.py check` fails
     # outright when it is absent. Screenshots arrive over HTTP from the CLI
@@ -76,11 +89,12 @@ packages = [
 ]
 
 [tool.pytest.ini_options]
-# The real settings on a SQLite test database, so `pytest` needs no running
-# PostgreSQL — see `vaultshield_backend/settings_test.py` for why the
-# settings *module* is swapped rather than `DATABASES` patched in a fixture,
-# and for the one divergence that matters. Run against the configured
-# PostgreSQL with `pytest --ds=vaultshield_backend.settings`.
+# The real settings against a scratch MongoDB database. Unlike the PostgreSQL
+# era there is no in-memory substitute — MongoDB has no `sqlite3 :memory:`
+# equivalent — so the suite needs a reachable deployment, and it must be a
+# replica set because the transaction tests exercise real MongoDB transactions.
+# `VAULTSHIELD_TEST_MONGODB_URL` redirects the suite at a throwaway local
+# cluster; see `vaultshield_backend/settings_test.py`.
 DJANGO_SETTINGS_MODULE = "vaultshield_backend.settings_test"
 pythonpath = ["."]
 python_files = ["test_*.py", "tests.py"]

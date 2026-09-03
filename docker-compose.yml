@@ -1,7 +1,25 @@
 # VaultShield local stack — design.md "docker-compose topology", Requirement 24.
 #
-# Seven services and nothing else: `postgres`, `redis`, `web`, `channels`,
-# `celery-worker`, `celery-beat`, `frontend` (Requirement 24.1).
+# Six services and nothing else: `redis`, `web`, `channels`, `celery-worker`,
+# `celery-beat`, `frontend` (Requirement 24.1).
+#
+# ### There is no database service
+#
+# VaultShield's datastore is MongoDB and it is *external* to this stack: the
+# backend connects to whatever `VAULTSHIELD_MONGODB_URL` names, which is an
+# Atlas cluster in normal use. The `postgres` service this file used to run was
+# removed with the MongoDB migration, along with its named volume, its
+# healthcheck, and the `depends_on` gates the three backend services had on it.
+#
+# `redis` stays. It is Celery's broker and result backend (design.md's
+# technology stack), which is a separate concern from the datastore and is
+# unaffected by the migration.
+#
+# One consequence worth knowing: MongoDB permits multi-document transactions
+# only on a replica set or a sharded cluster, and `runs/views.py` /
+# `security_scan/tasks.py` depend on real transactions. Atlas is always a
+# replica set. Pointing `VAULTSHIELD_MONGODB_URL` at a standalone `mongod`
+# starts the stack fine and then fails those writes.
 #
 # The VaultShield_CLI is deliberately absent (Requirement 24.2). It runs on
 # the host so it can reach the host Docker socket to create Sandboxes and the
@@ -10,16 +28,23 @@
 #
 # ### Two audiences, one settings module
 #
-# `backend/vaultshield_backend/settings.py` reads every service address from
-# the environment and defaults each one to `localhost`, which is what a
-# host-run `manage.py` or `pytest --ds=...settings` needs. Inside this network
-# the addresses are service names instead, so `POSTGRES_HOST=postgres` and
-# `REDIS_HOST=redis` are set on all four backend services. Nothing here
-# duplicates a setting; it only supplies the compose-side value.
+# `backend/vaultshield_backend/settings.py` reads Redis's address from the
+# environment and defaults it to `localhost`, which is what a host-run
+# `manage.py` or `pytest` needs. Inside this network the address is a service
+# name instead, so `REDIS_HOST=redis` is set on all four backend services.
+# Nothing here duplicates a setting; it only supplies the compose-side value.
 #
-# Credentials and tunables are interpolated with defaults
-# (`${POSTGRES_PASSWORD:-vaultshield}`), so a developer overrides them from a
-# root `.env` file or the shell without editing this file.
+# The database needs no such split: a MongoDB connection string carries its own
+# host, so the same `VAULTSHIELD_MONGODB_URL` works unchanged from the host,
+# from inside this network, and from CI. That is a simplification the migration
+# brought — the five `POSTGRES_*` variables it replaced had to be assembled
+# differently per audience.
+#
+# Tunables are interpolated with defaults (`${GUNICORN_WORKERS:-3}`), so a
+# developer overrides them from a root `.env` file or the shell without editing
+# this file. `VAULTSHIELD_MONGODB_URL` deliberately has *no* default: it is a
+# credential, there is no sensible fallback for it, and compose warns loudly
+# when it is unset rather than starting a stack that cannot reach a database.
 #
 # `VAULTSHIELD_SECRET_KEY` and `VAULTSHIELD_DEBUG` are intentionally not set:
 # settings.py's development defaults (an insecure key, `DEBUG=1`) apply, which
@@ -41,11 +66,16 @@
 # instead of once per service.
 
 x-backend-env: &backend-env
-  POSTGRES_DB: ${POSTGRES_DB:-vaultshield}
-  POSTGRES_USER: ${POSTGRES_USER:-vaultshield}
-  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaultshield}
-  POSTGRES_HOST: postgres
-  POSTGRES_PORT: "5432"
+  # The datastore, as one opaque connection string. No default: it carries a
+  # credential, and a stack that cannot reach MongoDB should fail visibly rather
+  # than fall back to something. settings.py raises `ImproperlyConfigured` at
+  # import when it is empty, so `web` exits immediately with the reason.
+  VAULTSHIELD_MONGODB_URL: ${VAULTSHIELD_MONGODB_URL:?VAULTSHIELD_MONGODB_URL is required - set it in the repo-root .env}
+  # Which database inside that cluster. Separate from the URL because an Atlas
+  # connection string's path is usually empty, and editing a credential just to
+  # append a database name is a good way to corrupt it.
+  VAULTSHIELD_MONGODB_NAME: ${VAULTSHIELD_MONGODB_NAME:-vaultshield}
+  # Celery's broker and result backend, still on the compose network.
   REDIS_HOST: redis
   REDIS_PORT: "6379"
 
@@ -62,36 +92,15 @@ x-backend-service: &backend-service
     - backend-media:/app/media
 
 services:
-  # --- datastores -----------------------------------------------------------
+  # --- broker ---------------------------------------------------------------
   #
-  # Both publish to `127.0.0.1` only. settings.py documents the host-side
-  # workflow of a `manage.py` run against the port-forwarded compose services,
-  # which needs the ports; binding them to the loopback interface keeps the
-  # database and broker off the local network while allowing it.
-
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      # The official image reads the same three variable names Django does,
-      # so one block provisions the database and configures the client.
-      POSTGRES_DB: ${POSTGRES_DB:-vaultshield}
-      POSTGRES_USER: ${POSTGRES_USER:-vaultshield}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaultshield}
-    ports:
-      - "127.0.0.1:${POSTGRES_PUBLISHED_PORT:-5432}:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      # What the dependents actually wait on. `depends_on` alone reports a
-      # container as up before PostgreSQL accepts connections, so gating on
-      # this is the difference between `web` starting and `web` starting able
-      # to migrate.
-      test:
-        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaultshield} -d ${POSTGRES_DB:-vaultshield}"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
+  # Publishes to `127.0.0.1` only. settings.py documents the host-side workflow
+  # of a `manage.py` run against the port-forwarded compose service, which needs
+  # the port; binding it to the loopback interface keeps the broker off the
+  # local network while allowing it.
+  #
+  # This is the only stateful service left in the stack. MongoDB is external
+  # (see the header), so there is no database container and no database volume.
 
   redis:
     image: redis:7-alpine
@@ -129,8 +138,11 @@ services:
       # mapping — it resolves `web` on the compose network instead.
       - "${WEB_PUBLISHED_PORT:-8000}:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      # Redis only. There is no database container to wait on — MongoDB is
+      # external, and `manage.py migrate` in the command below is what
+      # establishes that it is reachable. An unreachable cluster fails the
+      # migrate and the container exits with PyMongo's own timeout message,
+      # which names the host.
       redis:
         condition: service_healthy
     healthcheck:
@@ -169,9 +181,8 @@ services:
     # from the project package's `__init__.py`.
     command: celery -A vaultshield_backend worker --loglevel=info
     depends_on:
+      # Redis only; MongoDB is external and has no container to gate on.
       redis:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
 
   celery-beat:
@@ -188,9 +199,8 @@ services:
     # than the image's working directory.
     command: celery -A vaultshield_backend beat --loglevel=info --schedule /app/media/celerybeat-schedule
     depends_on:
+      # Redis only; MongoDB is external and has no container to gate on.
       redis:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
 
   # --- frontend -------------------------------------------------------------
@@ -216,6 +226,7 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres-data:
+  # `postgres-data` was removed with the `postgres` service. MongoDB's storage
+  # lives in the external cluster, so the stack keeps no database volume.
   redis-data:
   backend-media:

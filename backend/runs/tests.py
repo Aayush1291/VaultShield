@@ -15,12 +15,14 @@ malformed diff payload is rejected before it can reach the scanner
 
 ### Why these are database-free, and what that shapes
 
-There is no `pytest.mark.django_db` below and no live PostgreSQL involved:
-these exercise serializer declarations and the resolved URL conf, neither
-of which opens a connection. The endpoint-level assertions — a `Run` row
-persisted and echoed, a detail response carrying every associated record, a
-PATCH touching exactly the payload's fields, a rejected payload leaving the
-table untouched — are Properties 18-21, which are Tasks 16.3-16.6.
+There is no `pytest.mark.django_db` below and no database involved: these
+exercise serializer declarations and the resolved URL conf, neither of which
+opens a connection. The endpoint-level assertions — a `Run` row persisted and
+echoed, a detail response carrying every associated record, a PATCH touching
+exactly the payload's fields, a rejected payload leaving the collection
+untouched — are Properties 18-21, which are Tasks 16.3-16.6, and they run
+against a real MongoDB in
+`vaultshield_backend/test_mongodb.py::TestRestApiAgainstMongoDB`.
 
 That constraint shows up in the payload shapes used for the rejection
 cases: each one names only the field under test and omits the rest. Two of
@@ -61,6 +63,7 @@ from runs.serializers import (
     ScreenshotIngestSerializer,
 )
 from runs.views import RunViewSet
+from vaultshield_backend.testing import routed_methods
 
 # One well-formed Event_Log batch as `cli/vaultshield/monitor.py` writes its
 # JSONL records: `event_type`/`timestamp`/`payload` and nothing else, already
@@ -92,11 +95,45 @@ def _read_only_fields(serializer) -> set[str]:
 class TestRunSerializerFieldSurface:
     """Requirement 12.2: what `POST /api/runs/` accepts and returns."""
 
+    # The only `Run` column deliberately absent from the API surface.
+    #
+    # `next_event_sequence` is the MongoDB event-sequence allocation cursor
+    # (`runs/sequences.py`), advanced by a raw atomic `$inc` and meaningless to
+    # a client. It arrived with the MongoDB migration as the replacement for
+    # `SELECT ... FOR UPDATE` + `MAX(sequence)`, which needed no column because
+    # PostgreSQL could hold a row lock instead.
+    INTERNAL_RUN_COLUMNS = {"next_event_sequence"}
+
     def test_rendered_fields_are_every_run_column(self):
-        """The response echoes the whole model, and nothing invented."""
+        """The response echoes the whole model bar the documented internals,
+        and nothing invented.
+
+        Still the guard it was before the MongoDB migration: `RunSerializer`
+        lists `fields` explicitly rather than using `__all__` so that a column
+        added by a later migration has to be opted in deliberately
+        (Requirement 22.5 — the API must never publish a repository-hosting
+        access token). Subtracting a named set keeps that guard intact, because
+        a *new* unlisted column still fails this test; only the one internal
+        column enumerated above is permitted to be missing.
+        """
         model_fields = {field.name for field in Run._meta.concrete_fields}
 
-        assert set(RunSerializer().fields) == model_fields
+        assert set(RunSerializer().fields) == model_fields - self.INTERNAL_RUN_COLUMNS
+
+    def test_internal_columns_are_absent_from_every_run_serializer(self):
+        """The allocation cursor is not exposed by any Run representation.
+
+        `RunSerializer` is checked above; this covers the two subclasses,
+        because inheriting `Meta.fields` is what keeps them in step and a
+        subclass that re-listed fields could reintroduce the column.
+        """
+        for serializer_class in (RunSerializer, RunUpdateSerializer, RunDetailSerializer):
+            exposed = set(serializer_class().fields)
+
+            assert not (exposed & self.INTERNAL_RUN_COLUMNS), (
+                f"{serializer_class.__name__} exposes internal column(s) "
+                f"{exposed & self.INTERNAL_RUN_COLUMNS}"
+            )
 
     def test_identity_fields_are_writable_on_create(self):
         """A Run is created with its Project, `run_id`, and agent.
@@ -314,7 +351,7 @@ class TestRunRouteRegistration:
         match = resolve("/api/runs/")
 
         assert match.func.cls is RunViewSet
-        assert match.func.actions == {"post": "create", "get": "list"}
+        assert routed_methods(match) == {"post": "create", "get": "list"}
 
     def test_detail_path_routes_retrieve_and_patch(self):
         match = resolve(f"/api/runs/{SAMPLE_RUN_ID}/")

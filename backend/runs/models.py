@@ -85,6 +85,24 @@ class Run(models.Model):
     # `auto_now` matters beyond bookkeeping: `flag_stuck_approvals` selects
     # on `updated_at` age, so this field is the input to that query.
     updated_at = models.DateTimeField(auto_now=True)
+    # The high-water mark for `RunEvent.sequence` on this Run, and the whole
+    # of the MongoDB-native replacement for the `SELECT ... FOR UPDATE` +
+    # `MAX(sequence)` read-modify-write that assigned sequences under
+    # PostgreSQL (MongoDB has no row lock; see
+    # `runs/sequences.allocate_event_sequences`).
+    #
+    # Never read or written through the ORM in the ingest path. It is advanced
+    # by a single `find_one_and_update` with `$inc`, which MongoDB guarantees
+    # is atomic on one document — so two concurrent batches for this Run get
+    # disjoint blocks of numbers without either one locking anything.
+    #
+    # Deliberately absent from every serializer's `fields`: it is an internal
+    # allocation cursor, not part of the API surface, and the value is
+    # meaningless to a client. Bypassing the ORM also means advancing it does
+    # not touch `updated_at`, which matches the PostgreSQL behaviour it
+    # replaces — event ingest never bumped a Run's `updated_at`, and
+    # `flag_stuck_approvals` selects on that column.
+    next_event_sequence = models.PositiveIntegerField(default=0)
     # NOTE: intentionally no field of any kind stores a repo-hosting access
     # token. Only pr_url (a public URL) is ever written back by `submit`.
 
@@ -120,6 +138,27 @@ class RunEvent(models.Model):
         # also what reads must come back in — two events sharing a
         # timestamp would otherwise come back in arbitrary order.
         ordering = ["sequence"]
+        constraints = [
+            # The database-level half of Requirement 13.1's ordering
+            # guarantee, and new with the MongoDB migration.
+            #
+            # Under PostgreSQL, `sequence` uniqueness per Run was a
+            # *consequence* of how it was assigned: `SELECT ... FOR UPDATE`
+            # held a row lock across the read-modify-write, so no two batches
+            # could compute the same starting point. MongoDB has no row lock,
+            # so the allocator is an atomic `$inc` instead
+            # (`runs/sequences.py`) — and this constraint is what makes the
+            # guarantee independent of it.
+            #
+            # Stated as a real unique compound index rather than trusted to
+            # the allocator, because "no duplicate sequence numbers for a
+            # Run" is the property the API contract rests on: if the
+            # allocator ever regressed, this turns a silently interleaved
+            # Event_Log into a loud `IntegrityError` at ingest.
+            models.UniqueConstraint(
+                fields=["run", "sequence"], name="unique_run_event_sequence"
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.run.run_id} #{self.sequence} {self.event_type}"

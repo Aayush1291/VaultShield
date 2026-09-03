@@ -104,10 +104,10 @@ one-to-one row, and a screenshot is an ordinary create. Those are spelled
 out on each class.
 """
 
-from django.db.models import Max
 from rest_framework import serializers
 
 from runs.models import Run, RunDiff, RunEvent, Screenshot
+from runs.sequences import allocate_event_sequences
 from security_scan.models import SecurityFinding
 
 
@@ -362,6 +362,14 @@ class RunEventBatchSerializer(serializers.ListSerializer):
         `save(run=...)`. `bulk_create` preserves the order of the list it
         is given, so the returned instances — and therefore the response
         body — read in the same order the client sent.
+
+        The block of `sequence` values comes from
+        `allocate_event_sequences`, a single atomic `$inc` on the Run's own
+        document. That replaced the PostgreSQL pairing of
+        `SELECT ... FOR UPDATE` with `MAX(sequence)`: MongoDB has no row
+        lock, and `select_for_update()` is silently ignored on it, so the
+        old read-modify-write would have been left unguarded. See
+        `runs/sequences.py` for the mechanism and the guarantees.
         """
         if not validated_data:
             return []
@@ -370,24 +378,14 @@ class RunEventBatchSerializer(serializers.ListSerializer):
         # merges the view's `run=` into each item, so the first is
         # representative.
         run = validated_data[0]["run"]
-        first_sequence = _next_sequence_for(run)
+        # Reserved before any insert, and reserved as one contiguous block, so
+        # the numbers this batch uses cannot overlap a concurrent batch's.
+        sequences = allocate_event_sequences(run, len(validated_data))
 
         return RunEvent.objects.bulk_create(
-            RunEvent(sequence=first_sequence + offset, **attributes)
-            for offset, attributes in enumerate(validated_data)
+            RunEvent(sequence=sequence, **attributes)
+            for sequence, attributes in zip(sequences, validated_data)
         )
-
-
-def _next_sequence_for(run: Run) -> int:
-    """The `sequence` the next ingested event for `run` should take.
-
-    Zero for a Run with no events yet, otherwise one past the highest
-    already stored. Zero-based so a single-batch Run's sequences line up
-    with the line indices of the `events.jsonl` they came from.
-    """
-    highest = run.events.aggregate(highest=Max("sequence"))["highest"]
-
-    return 0 if highest is None else highest + 1
 
 
 class RunEventIngestSerializer(serializers.ModelSerializer):

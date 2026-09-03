@@ -106,6 +106,7 @@ from django.utils import timezone
 
 from runs.models import Run
 from sandbox_tracking.models import SandboxRecord
+from vaultshield_backend.mongodb import to_mongo_precision
 
 # The Run_Status values during which a Sandbox is *supposed* to be alive, and
 # therefore the ones whose `SandboxRecord` rows the reaper leaves alone. A
@@ -156,30 +157,77 @@ def cleanup_orphaned_sandboxes(ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES) -
     `torn_down_at` is "the moment this pass ran" — and a single value keeps
     `torn_down_at` from drifting past the cutoff it was selected against.
 
-    ### The `status="active"` filter is also the concurrency guard
+    ### Two queries on MongoDB, and the guard is still in the write
 
-    Selection and write are one conditional `UPDATE`, so only rows still
-    `active` when the statement executes are changed. Two overlapping passes
-    (Beat's interval overtaken by a slow pass, or a manual call alongside a
-    scheduled one) cannot both count the same row, and neither can overwrite
-    a `torn_down_at` an earlier pass already wrote. That is also what makes
-    the task idempotent: run twice with nothing new to reap and the second
-    call returns 0 rather than restamping yesterday's records.
+    Under PostgreSQL this was one statement: `.exclude(run__status__in=...)`
+    joined to the runs table and Django resolved the join into a pk subquery
+    inside the `UPDATE`. MongoDB cannot join inside an update at all, and
+    `django-mongodb-backend` refuses it outright rather than silently doing
+    something else:
+
+        NotSupportedError: Cannot use QuerySet.update() when querying across
+        multiple collections on MongoDB.
+
+    So the join is lifted out. The active Runs' primary keys are read first,
+    then the update filters on `run_id` — the foreign-key *column on
+    SandboxRecord itself*, so the second query touches one collection and is a
+    legal MongoDB update. `exclude(run_id__in=...)` is not a join; `run_id` is
+    a local field.
+
+    What that preserves: `status="active"` is still evaluated *by the write*,
+    and MongoDB applies a multi-document update atomically per document. Two
+    overlapping passes therefore still cannot both count the same record, and
+    neither can overwrite a `torn_down_at` an earlier pass already wrote. Run
+    twice with nothing new to reap and the second call still returns 0 rather
+    than restamping yesterday's records. Idempotency is intact, and it is
+    intact for the same reason as before — the guard is in the `UPDATE`, not
+    in a preceding read.
+
+    What it does not preserve: the *set of excluded Runs* is now a snapshot
+    taken microseconds before the write instead of being evaluated inside it.
+    A Run that moved into `running` in that window would have its record
+    reaped anyway. This is the one guarantee the migration genuinely narrows,
+    so it is stated plainly rather than glossed:
+
+    - It is not reachable through VaultShield's own lifecycle. `Run.status`
+      advances `running -> awaiting_review -> approved/rejected -> submitted`;
+      nothing moves a Run *back* to `running`, and only a hand-edit or a
+      `PATCH /api/runs/:id/` could. A record also has to be `ttl_minutes`
+      stale to be a candidate at all, so a Run actively heartbeating is not
+      in the candidate set regardless.
+    - The consequence is bounded: a `SandboxRecord` is marked `torn_down`
+      early. No Run is modified and no data is deleted, so the damage is one
+      row's bookkeeping, recoverable by the CLI re-registering the sandbox.
+    - `vaultshield_backend/test_mongodb.py::TestSandboxCleanup` covers the behaviour that is
+      preserved (idempotency, no collateral writes, the exclusion itself) and
+      documents this window explicitly.
 
     Nothing outside the matched rows is touched — no Run is modified, and no
     record is deleted — which is the half of Property 34 (Task 33.3) that
     this task is responsible for.
     """
-    now = timezone.now()
+    # Truncated to MongoDB's millisecond storage precision so `torn_down_at`
+    # reads back exactly as written. Without it, a caller comparing this pass's
+    # wall clock against the stored stamp sees the stamp as up to 999µs
+    # *earlier* than the instant the pass began. See
+    # `vaultshield_backend/mongodb.py`.
+    now = to_mongo_precision(timezone.now())
     cutoff = now - timedelta(minutes=ttl_minutes)
 
-    # `.exclude()` on a related column: Django resolves the join into a
-    # subquery over primary keys for the UPDATE, so this is one statement on
-    # both PostgreSQL and the SQLite the test suite runs on.
+    # Step 1: the Runs whose Sandboxes are supposed to still be alive. Read as
+    # a list of pks so step 2 filters on SandboxRecord's own `run_id` column
+    # rather than joining. `values_list` keeps this to one field over the wire.
+    active_run_pks = list(
+        Run.objects.filter(status__in=ACTIVE_RUN_STATUSES).values_list("pk", flat=True)
+    )
+
+    # Step 2: one single-collection conditional update. `status="active"` is
+    # what makes it idempotent and safe against an overlapping pass; the
+    # `exclude` is on the local FK column, so nothing here spans collections.
     reapable = SandboxRecord.objects.filter(
         status="active",
         last_heartbeat_at__lt=cutoff,
-    ).exclude(run__status__in=ACTIVE_RUN_STATUSES)
+    ).exclude(run_id__in=active_run_pks)
 
     return reapable.update(status="torn_down", torn_down_at=now)
 

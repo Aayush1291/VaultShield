@@ -6,9 +6,13 @@
 FROM python:3.11-slim
 
 # `requires-python = ">=3.11"` in pyproject.toml; the slim variant is enough
-# because no dependency needs a compiler — `psycopg[binary]` bundles libpq and
-# Pillow ships manylinux wheels, which is why `psycopg[binary]` was chosen over
-# `psycopg` in the first place.
+# because no dependency needs a compiler. `pymongo` (pulled in by
+# `django-mongodb-backend`) ships manylinux wheels including its optional C
+# extensions, and Pillow ships them too, so there is no build toolchain to add.
+#
+# The MongoDB migration made this simpler rather than harder: the database
+# driver it replaced needed `psycopg[binary]` specifically, chosen over plain
+# `psycopg` to avoid needing libpq and a compiler in this image.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
