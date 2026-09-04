@@ -16,6 +16,7 @@ function in isolation.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import secrets
@@ -36,10 +37,12 @@ KEY_SHAPE = re.compile(r"^[A-Za-z0-9_\-]{16,}$")
 # most frameworks, at import time — then fails to start, so the Sandbox could not
 # run the application whose screenshots the Run is supposed to capture.
 #
-# Captured groups are the parts that are safe to REUSE (scheme, host, port,
-# path) and are deliberately separate from the parts that are not (userinfo).
-# The password is matched only so it can be discarded; it is never carried into
-# the output. See `_generate_dummy_connection_string`.
+# Captured groups are deliberately separate so each can be judged on its own.
+# Scheme, port and path/query are reused: they describe the shape a parser needs
+# and identify nothing. Userinfo is always discarded. The host is reused only if
+# `_is_preservable_host` proves it local — see that function for why, and the
+# password is matched only so it can be dropped. See
+# `_generate_dummy_connection_string`.
 CONNECTION_STRING_SHAPE = re.compile(
     r"""^
     (?P<scheme>
@@ -48,7 +51,10 @@ CONNECTION_STRING_SHAPE = re.compile(
     )
     ://
     (?:(?P<userinfo>[^/@\s]*)@)?      # optional user[:password]@ — discarded
-    (?P<host>[^/?\#\s:]*)             # host, safe to keep: not a secret
+    (?P<host>                         # host — preserved ONLY if provably local
+        \[[0-9A-Fa-f:.]+\]            #   bracketed IPv6, e.g. [::1]
+      | [^/?\#\s:]*                   #   hostname or IPv4 literal
+    )
     (?::(?P<port>\d+))?               # optional port, safe to keep
     (?P<rest>[/?\#].*)?               # optional path/query/fragment
     $""",
@@ -59,8 +65,103 @@ CONNECTION_STRING_SHAPE = re.compile(
 # never derived from the input, so no part of a real credential can survive.
 _DUMMY_USER = "dummy_user"
 _DUMMY_PASSWORD = "dummy_password"
-# Host used when the real value's host is empty or would itself echo the input.
+# Host substituted for any host that is not provably local — see
+# `_is_preservable_host`.
 _DUMMY_HOST = "localhost"
+
+# --- host preservation policy ------------------------------------------------
+#
+# A host is REPLACED unless it is provably local. This is an allowlist, and the
+# default is to replace.
+#
+# The earlier implementation preserved every host on the reasoning that a host is
+# "not a credential". That was wrong, and it leaked: a real MongoDB Atlas URI's
+# cluster hostname survived verbatim into `.env.sandbox` and therefore into the
+# Sandbox the agent runs in. Requirement 3.3 excludes every real value from that
+# file, and infrastructure identity is exactly the kind of value the threat model
+# cares about — a hostname names a reachable target, identifies the provider and
+# often the account, and is enough to attack or fingerprint on its own.
+#
+# Only hosts that cannot identify anything outside the developer's own machine or
+# private network are kept, because for those the *shape* is the only information
+# they carry.
+_PRESERVED_HOSTNAMES = frozenset({"localhost"})
+
+# The IPv4 ranges preserved, written out so the policy is readable here rather
+# than inferred from a library predicate:
+#
+#   127.0.0.0/8       loopback
+#   10.0.0.0/8        RFC 1918 private
+#   172.16.0.0/12     RFC 1918 private  (second octet 16-31)
+#   192.168.0.0/16    RFC 1918 private
+#
+# Deliberately NOT `ipaddress.ip_address(...).is_private`. That property is
+# broader than this policy: it also covers 0.0.0.0/8, 169.254.0.0/16 link-local,
+# 100.64.0.0/10 carrier-grade NAT, 192.0.0.0/24, benchmarking and reserved
+# ranges. Some of those are routable in a way that matters and none of them were
+# reviewed for this decision, so relying on the property would silently widen the
+# allowlist whenever the stdlib's definition changed. In particular `0.0.0.0` is
+# a wildcard bind address rather than a destination and must NOT be preserved —
+# the checks below reject it because its first octet matches none of the ranges.
+_LOOPBACK_IPV4_FIRST_OCTET = 127
+_PRIVATE_10_FIRST_OCTET = 10
+_PRIVATE_172_FIRST_OCTET = 172
+_PRIVATE_172_SECOND_OCTET_RANGE = range(16, 32)  # 172.16 - 172.31 inclusive
+_PRIVATE_192_168_OCTETS = (192, 168)
+# The one IPv6 address preserved. Compared against a parsed value rather than the
+# literal text so every spelling of it (`::1`, `0:0:0:0:0:0:0:1`) is recognised.
+_LOOPBACK_IPV6 = ipaddress.IPv6Address("::1")
+
+
+def _is_preservable_host(host: str) -> bool:
+    """True only for a host that cannot identify anything outside this machine.
+
+    The allowlist behind `_generate_dummy_connection_string`. Returns True for
+    `localhost`, IPv4/IPv6 loopback, and the three RFC 1918 private IPv4 ranges;
+    False for everything else, which is what gets replaced with `_DUMMY_HOST`.
+
+    A DNS name is NEVER preserved, however internal it looks.
+    `db.company.internal` and `cluster0.abcde.mongodb.net` are treated
+    identically: both name a host the sandboxed agent has no business learning,
+    and "sounds internal" is not a security property. Only an IP literal can be
+    checked, so anything that does not parse as one is replaced.
+
+    Bracketed IPv6 (`[::1]`, the form RFC 3986 requires inside a URI) is accepted
+    with the brackets stripped.
+
+    `ipaddress` is used only to PARSE and normalise the literal. Every
+    accept/reject decision is an explicit comparison against the constants above,
+    so the policy can be audited by reading this function.
+    """
+    candidate = host.strip()
+    if not candidate:
+        return False
+    if candidate.lower() in _PRESERVED_HOSTNAMES:
+        return True
+
+    literal = candidate[1:-1] if candidate.startswith("[") and candidate.endswith("]") else candidate
+    try:
+        address = ipaddress.ip_address(literal)
+    except ValueError:
+        # Not an IP literal, so it is a DNS name (or nonsense). Replaced.
+        return False
+
+    if isinstance(address, ipaddress.IPv6Address):
+        # Only loopback. An IPv6 ULA (fc00::/7) is private but was not reviewed
+        # for this policy, so it is replaced rather than quietly admitted.
+        return address == _LOOPBACK_IPV6
+
+    first, second = address.packed[0], address.packed[1]
+    if first == _LOOPBACK_IPV4_FIRST_OCTET:
+        return True
+    if first == _PRIVATE_10_FIRST_OCTET:
+        return True
+    if first == _PRIVATE_172_FIRST_OCTET and second in _PRIVATE_172_SECOND_OCTET_RANGE:
+        return True
+    if (first, second) == _PRIVATE_192_168_OCTETS:
+        return True
+    # Everything else: public addresses, 0.0.0.0, link-local, CGNAT.
+    return False
 
 # KEY=value assignment, allowing whitespace around `=`. Restricted to
 # standard shell/env identifier syntax (letters/digits/underscore, not
@@ -157,20 +258,23 @@ def _generate_dummy_connection_string(value: str) -> str:
         postgresql://user:REALPASS@localhost:5432/db
             -> postgresql://dummy_user:dummy_password@localhost:5432/db
 
-    What is kept is what is structural and not secret: the scheme (an
-    application dispatches its driver on it), the host, the port, and the
-    path/query. What is replaced is the whole userinfo section — both the
-    username and the password — with fixed strings that are not derived from the
-    input in any way.
+    What is kept is what is structural and identifies nothing: the scheme (an
+    application dispatches its driver on it), the port, and the path/query. What
+    is replaced is the whole userinfo section — both the username and the
+    password — with fixed strings that are not derived from the input in any way.
 
-    Keeping the host is a deliberate judgment. It is not a credential, and
-    replacing it would break the shape in a way that matters: an application
-    pointed at `localhost:5432` in the Sandbox behaves as configured, whereas one
-    pointed at `example.invalid` fails differently for a reason unrelated to the
-    Run. A host is nonetheless still an internal detail, which is why
-    `build_sandbox_env`'s guarantee is about *values*, not hosts — and why the
-    only thing preserved from the original is text the developer wrote in a
-    config file, never a secret.
+    The host is kept ONLY when `_is_preservable_host` proves it local, and
+    replaced with `_DUMMY_HOST` otherwise. A hostname is infrastructure identity:
+    it names a reachable target and usually the provider and account behind it,
+    which is precisely what Requirement 3.3 keeps out of the Sandbox and what the
+    threat model is about. Preserving it verbatim leaked a real MongoDB Atlas
+    cluster hostname into `.env.sandbox`, so the default is now to replace.
+
+    Shape survives either way, which is why replacing costs nothing structurally:
+    `_DUMMY_HOST` is itself a valid host, so the value still parses and the
+    application still starts. It just no longer resolves to anything real — the
+    intended outcome, since the Sandbox reaching real infrastructure is the thing
+    being prevented.
 
     Property 5 still holds: the result must not contain `value` as a substring.
     Userinfo is always rewritten, so a `value` carrying one cannot survive. A
@@ -188,9 +292,10 @@ def _generate_dummy_connection_string(value: str) -> str:
     port = match.group("port")
     rest = match.group("rest") or ""
 
-    # A host that is empty, or that would let the input reappear in the output,
-    # is replaced outright rather than patched.
-    if not host or host in (_DUMMY_USER, _DUMMY_PASSWORD):
+    # Replace by default. Only a provably local host is carried through, and an
+    # empty host or one that would let the input reappear in the output is
+    # replaced outright rather than patched.
+    if not host or host in (_DUMMY_USER, _DUMMY_PASSWORD) or not _is_preservable_host(host):
         host = _DUMMY_HOST
 
     authority = f"{_DUMMY_USER}:{_DUMMY_PASSWORD}@{host}"

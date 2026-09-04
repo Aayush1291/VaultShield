@@ -22,9 +22,11 @@ from __future__ import annotations
 import pytest
 
 from vaultshield.credentials import (
+    _DUMMY_HOST,
     _DUMMY_PASSWORD,
     _DUMMY_USER,
     _GENERIC_PLACEHOLDER,
+    _is_preservable_host,
     classify_shape,
     generate_dummy,
 )
@@ -98,14 +100,34 @@ class TestConnectionStringShapes:
         """design.md's Property 5, restated for this shape."""
         assert value not in generate_dummy(value)
 
-    def test_host_port_and_path_are_preserved(self):
-        """The parts that are structural but not secret are kept, so the Sandbox
-        talks to the same place with different credentials."""
-        dummy = generate_dummy("postgresql://u:pw@db.internal:5432/appdb?sslmode=require")
+    def test_port_and_path_are_preserved_for_a_local_host(self):
+        """Scheme, port and path/query are structural and identify nothing, so
+        they are kept; a local host is kept with them.
+
+        REPLACES an earlier version of this test that used `db.internal` and
+        asserted that host survived verbatim. That expectation was the F-5 leak,
+        not a requirement: it encoded "a host is not a credential", which is how a
+        real Atlas cluster hostname reached `.env.sandbox`. The non-local half of
+        the old case now lives in
+        `test_an_internal_looking_dns_host_is_still_replaced`, so the coverage the
+        old test intended (structure survives) is kept and only the wrong claim
+        about hosts is dropped.
+        """
+        dummy = generate_dummy("postgresql://u:pw@10.0.0.5:5432/appdb?sslmode=require")
         assert dummy == (
-            f"postgresql://{_DUMMY_USER}:{_DUMMY_PASSWORD}@db.internal:5432/appdb"
+            f"postgresql://{_DUMMY_USER}:{_DUMMY_PASSWORD}@10.0.0.5:5432/appdb"
             "?sslmode=require"
         )
+
+    def test_an_internal_looking_dns_host_is_still_replaced(self):
+        """The other half of the old `db.internal` case, with the correct
+        expectation: structure survives, the hostname does not."""
+        dummy = generate_dummy("postgresql://u:pw@db.internal:5432/appdb?sslmode=require")
+        assert dummy == (
+            f"postgresql://{_DUMMY_USER}:{_DUMMY_PASSWORD}@{_DUMMY_HOST}:5432/appdb"
+            "?sslmode=require"
+        )
+        assert "db.internal" not in dummy
 
     def test_the_username_is_replaced_too_not_just_the_password(self):
         """A username can itself identify an account, and Requirement 3.3 is
@@ -176,3 +198,221 @@ class TestPreexistingShapesAreUnchanged:
         known structure, so guessing at one would be worse than a placeholder."""
         assert classify_shape("ldap://dc.example.com/dc=example") == "generic"
         assert generate_dummy("ldap://x:y@h/z") == _GENERIC_PLACEHOLDER
+
+
+# --- host preservation policy (F-5 follow-up) --------------------------------
+#
+# The original F-5 fix preserved the host unconditionally, reasoning that a host
+# is not a credential. That leaked: a real MongoDB Atlas URI's cluster hostname
+# reached `.env.sandbox` verbatim, handing the sandboxed agent the identity of
+# real infrastructure and contradicting Requirement 3.3.
+#
+# The policy is now an allowlist. A host is REPLACED unless it is provably local,
+# so a host that nobody thought about is replaced rather than leaked.
+
+# Hosts kept, each of which identifies nothing outside the developer's own
+# machine or private network. `[::1]` is bracketed because RFC 3986 requires that
+# form inside a URI; `_is_preservable_host` is unit-tested on the bare `::1`
+# below.
+PRESERVED_HOSTS = ["localhost", "127.0.0.1", "[::1]", "10.0.0.5", "172.16.0.1", "192.168.1.20"]
+
+# Hosts replaced. `0.0.0.0` is a wildcard bind address rather than a destination
+# and is the easiest of these to get wrong, because it looks local and several
+# "is this private?" predicates accept it.
+REPLACED_HOSTS = [
+    "0.0.0.0",
+    "8.8.8.8",
+    "cluster0.abcde.mongodb.net",
+    "db.company.internal",
+    "myapp.rds.amazonaws.com",
+]
+
+# (scheme, port_suffix, rest) — one row per scheme F-5 names, so each is checked
+# with both a preserved and a replaced host.
+SCHEME_CASES = [
+    ("postgresql", ":5432", "/appdb?sslmode=require"),
+    ("redis", ":6379", "/0"),
+    ("mongodb", ":27017", "/mydb"),
+    ("mongodb+srv", "", "/?retryWrites=true"),
+    ("https", ":8443", "/v1?key=value"),
+]
+
+_REAL_USER = "realadminname"
+_REAL_PASSWORD = "REALSECRETVALUE"
+
+
+def _assert_structure_and_secrecy(dummy, *, scheme, port_suffix, rest, original_host, expected_host):
+    """Both halves of the contract, for every case.
+
+    STRUCTURE: scheme, port and path/query survive, so the value still parses and
+    an application in the Sandbox still starts.
+    SECRECY: the original host, username and password appear nowhere in the
+    output.
+    """
+    assert dummy == f"{scheme}://{_DUMMY_USER}:{_DUMMY_PASSWORD}@{expected_host}{port_suffix}{rest}"
+    # Structure, asserted independently of the equality above so a future change
+    # to the dummy userinfo cannot quietly drop these.
+    assert dummy.startswith(f"{scheme}://")
+    if port_suffix:
+        assert port_suffix in dummy
+    assert dummy.endswith(rest)
+    # Secrecy.
+    assert _REAL_USER not in dummy
+    assert _REAL_PASSWORD not in dummy
+    if original_host != expected_host:
+        assert original_host not in dummy
+
+
+class TestHostIsPreservedOnlyWhenProvablyLocal:
+    """Requirement 3.3 applied to the host, not just the userinfo."""
+
+    @pytest.mark.parametrize("host", PRESERVED_HOSTS)
+    def test_a_local_host_is_preserved(self, host):
+        """Loopback, localhost and RFC 1918 literals name nothing outside the
+        developer's own machine or private network, so only their shape is
+        information and keeping them leaks nothing."""
+        value = f"postgresql://{_REAL_USER}:{_REAL_PASSWORD}@{host}:5432/appdb?sslmode=require"
+        _assert_structure_and_secrecy(
+            generate_dummy(value),
+            scheme="postgresql",
+            port_suffix=":5432",
+            rest="/appdb?sslmode=require",
+            original_host=host,
+            expected_host=host,
+        )
+
+    @pytest.mark.parametrize("host", REPLACED_HOSTS)
+    def test_a_non_local_host_is_replaced(self, host):
+        """Everything else, whether it is a public address or a hostname that
+        merely sounds internal."""
+        value = f"postgresql://{_REAL_USER}:{_REAL_PASSWORD}@{host}:5432/appdb?sslmode=require"
+        _assert_structure_and_secrecy(
+            generate_dummy(value),
+            scheme="postgresql",
+            port_suffix=":5432",
+            rest="/appdb?sslmode=require",
+            original_host=host,
+            expected_host=_DUMMY_HOST,
+        )
+
+    def test_the_wildcard_bind_address_is_replaced_not_preserved(self):
+        """`0.0.0.0` called out on its own because it is the one case most likely
+        to be waved through: it looks local, and `ipaddress.is_private` treats
+        0.0.0.0/8 as private. It is a wildcard bind address, not a destination, so
+        it is not evidence that anything is local."""
+        value = f"postgresql://{_REAL_USER}:{_REAL_PASSWORD}@0.0.0.0:5432/appdb"
+        dummy = generate_dummy(value)
+        assert dummy == f"postgresql://{_DUMMY_USER}:{_DUMMY_PASSWORD}@{_DUMMY_HOST}:5432/appdb"
+        assert "0.0.0.0" not in dummy
+        assert _is_preservable_host("0.0.0.0") is False
+
+    @pytest.mark.parametrize("scheme,port_suffix,rest", SCHEME_CASES)
+    def test_every_scheme_preserves_a_local_host(self, scheme, port_suffix, rest):
+        """The policy is a property of the host, not of the scheme."""
+        value = f"{scheme}://{_REAL_USER}:{_REAL_PASSWORD}@192.168.1.20{port_suffix}{rest}"
+        _assert_structure_and_secrecy(
+            generate_dummy(value),
+            scheme=scheme,
+            port_suffix=port_suffix,
+            rest=rest,
+            original_host="192.168.1.20",
+            expected_host="192.168.1.20",
+        )
+
+    @pytest.mark.parametrize("scheme,port_suffix,rest", SCHEME_CASES)
+    def test_every_scheme_replaces_a_remote_host(self, scheme, port_suffix, rest):
+        """Same, for a host that must not survive under any scheme."""
+        host = "myapp.rds.amazonaws.com"
+        value = f"{scheme}://{_REAL_USER}:{_REAL_PASSWORD}@{host}{port_suffix}{rest}"
+        _assert_structure_and_secrecy(
+            generate_dummy(value),
+            scheme=scheme,
+            port_suffix=port_suffix,
+            rest=rest,
+            original_host=host,
+            expected_host=_DUMMY_HOST,
+        )
+
+    def test_the_atlas_cluster_hostname_that_leaked_no_longer_survives(self):
+        """The exact regression. A real `.env` carrying a MongoDB Atlas URI put
+        its cluster hostname into `.env.sandbox` unchanged, which is how this was
+        found. The hostname identifies the provider, the cluster and effectively
+        the account."""
+        value = (
+            f"mongodb+srv://{_REAL_USER}:{_REAL_PASSWORD}"
+            "@cluster0.abcde.mongodb.net/mydb?retryWrites=true&w=majority"
+        )
+        dummy = generate_dummy(value)
+        assert dummy == (
+            f"mongodb+srv://{_DUMMY_USER}:{_DUMMY_PASSWORD}@{_DUMMY_HOST}"
+            "/mydb?retryWrites=true&w=majority"
+        )
+        # No fragment of the hostname survives, not just the whole string.
+        for fragment in ("cluster0", "abcde", "mongodb.net", "cluster0.abcde.mongodb.net"):
+            assert fragment not in dummy
+        assert _REAL_USER not in dummy and _REAL_PASSWORD not in dummy
+        # Structure intact: an Atlas driver still accepts this.
+        assert dummy.startswith("mongodb+srv://")
+        assert dummy.endswith("/mydb?retryWrites=true&w=majority")
+
+    def test_a_dns_name_is_never_preserved_however_internal_it_sounds(self):
+        """"Sounds internal" is not a security property. An attacker-visible
+        difference between these two would itself be a disclosure, so they are
+        treated identically."""
+        internal = generate_dummy(f"postgresql://{_REAL_USER}:{_REAL_PASSWORD}@db.company.internal:5432/d")
+        public = generate_dummy(f"postgresql://{_REAL_USER}:{_REAL_PASSWORD}@db.company.com:5432/d")
+        assert internal == public
+        assert "company" not in internal
+
+
+class TestPreservableHostAllowlist:
+    """`_is_preservable_host` directly, including boundaries a URI-level test
+    cannot reach and the range edges most likely to be got wrong."""
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "localhost",
+            "LOCALHOST",  # case-insensitive
+            "127.0.0.1",
+            "127.255.255.254",  # 127.0.0.0/8 is loopback in full, not just .0.0.1
+            "::1",  # bare, as the policy states it
+            "[::1]",  # bracketed, as a URI must spell it
+            "0:0:0:0:0:0:0:1",  # unabbreviated spelling of ::1
+            "10.0.0.5",
+            "10.255.255.254",
+            "172.16.0.1",
+            "172.31.255.254",  # top of 172.16.0.0/12
+            "192.168.1.20",
+        ],
+    )
+    def test_allowed(self, host):
+        assert _is_preservable_host(host) is True
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "0.0.0.0",  # wildcard bind address
+            "8.8.8.8",
+            "172.15.0.1",  # just below 172.16.0.0/12
+            "172.32.0.1",  # just above 172.16.0.0/12
+            "192.167.0.1",  # near-miss on 192.168.0.0/16
+            "192.169.0.1",
+            "11.0.0.1",  # near-miss on 10.0.0.0/8
+            "126.0.0.1",  # near-miss on 127.0.0.0/8
+            "128.0.0.1",
+            "169.254.1.1",  # link-local: private per stdlib, not per this policy
+            "100.64.0.1",  # carrier-grade NAT: same
+            "fc00::1",  # IPv6 ULA: private but not reviewed, so replaced
+            "2001:4860:4860::8888",
+            "cluster0.abcde.mongodb.net",
+            "db.company.internal",
+            "myapp.rds.amazonaws.com",
+            "localhost.evil.com",  # prefix must not be enough
+            "notlocalhost",
+            "10.0.0.5.evil.com",  # an IP-looking prefix on a DNS name
+            "",
+        ],
+    )
+    def test_rejected(self, host):
+        assert _is_preservable_host(host) is False

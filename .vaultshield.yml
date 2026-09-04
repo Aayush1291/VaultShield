@@ -1,0 +1,6 @@
+start_command: 'python -m http.server 8000'
+port: 8000
+ready_path: '/'
+agent: mock
+routes: ['/']
+off_limits_paths: ['protected.txt']
