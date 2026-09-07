@@ -267,9 +267,15 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
             self.run_id = run_id
             seen["sandbox"] = self
 
-        def create(self, repo_url, base_image, env_file, *, publish_port=None):
+        def create(
+            self, repo_url, base_image, env_file, *, publish_port=None, project_dir=""
+        ):
             calls.append("sandbox.create")
             seen["publish_port"] = publish_port
+            # `project_dir` moves where dependencies are installed for a repo
+            # whose application is nested. Recorded, not just tolerated, so the
+            # test below can assert `run` forwards the validated config value.
+            seen["project_dir"] = project_dir
 
         def teardown(self):
             calls.append("sandbox.teardown")
@@ -286,6 +292,9 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
         # the stage being stubbed moved.
         calls.append("monitor.supervise_in_sandbox")
         seen["supervise_args"] = (sandbox, adapter, prompt, run_dir, off_limits_paths)
+        # The agent's working directory inside the container, which `project_dir`
+        # moves. Recorded so a test can assert `run` resolves and forwards it.
+        seen["agent_workdir"] = kwargs.get("agent_workdir")
         # The real implementation writes the Event_Log before returning, and the
         # failure messages under test name that path, so it has to exist.
         log_path = event_log_path(run_dir)
@@ -1237,3 +1246,80 @@ def test_teardown_removes_the_sandbox_without_a_dashboard_token(monkeypatch):
     assert "Sandbox for run 20240101120000-abcd1234 removed" in result.output
     assert "Skipped the branch check" in result.output
     assert "Traceback" not in result.output
+
+
+# --- project_dir reaches the stages that need it -----------------------------
+#
+# `config.project_dir` is validated in `load_config` and then has to arrive at
+# two different stages in two different forms: the raw relative value at
+# `Sandbox.create` (which resolves it itself for dependency install), and the
+# resolved container path at `supervise_in_sandbox` (the agent's working
+# directory). These pin the forwarding, which is the part a refactor would
+# silently drop — nothing else in the suite would notice a `project_dir` that
+# validated correctly and then went nowhere.
+
+_NESTED_PROJECT_DIR = "citizen-samadhan-setu-main"
+
+_NESTED_CONFIG_YAML = f"""\
+start_command: npm run dev
+port: 3000
+ready_path: /
+agent: antigravity
+project_dir: {_NESTED_PROJECT_DIR}
+routes: []
+off_limits_paths: []
+"""
+
+
+def test_run_forwards_the_project_dir_to_sandbox_create(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_NESTED_CONFIG_YAML)
+        _calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 0, result.output
+        # The raw relative value: `create` resolves it for dependency install.
+        assert seen["project_dir"] == _NESTED_PROJECT_DIR
+
+
+def test_run_forwards_the_resolved_agent_workdir_to_the_monitor(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_NESTED_CONFIG_YAML)
+        _calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 0, result.output
+        # The resolved container path: this becomes the agent process's cwd.
+        assert seen["agent_workdir"] == f"/workspace/repo/{_NESTED_PROJECT_DIR}"
+
+
+def test_run_defaults_both_to_the_repository_root_without_a_project_dir(monkeypatch):
+    """Backwards compatibility for every config written before the field
+    existed."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        _calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 0, result.output
+        assert seen["project_dir"] == ""
+        assert seen["agent_workdir"] == "/workspace/repo"
+
+
+def test_run_rejects_a_traversing_project_dir_before_any_side_effect(monkeypatch):
+    """The security case at the CLI boundary: a `project_dir` that escapes the
+    clone stops the Run in step 1, so no Run_Directory, no credential file, and
+    no container are ever created."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(
+            _NESTED_CONFIG_YAML.replace(
+                f"project_dir: {_NESTED_PROJECT_DIR}", "project_dir: ../../etc"
+            )
+        )
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code != 0
+        assert "project_dir" in result.output
+        # Nothing was created: the same guarantee the other config-rejection
+        # tests above assert.
+        assert not Path(".vaultshield").exists()

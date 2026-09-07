@@ -50,6 +50,10 @@ class ProjectConfig:
     agent: str
     routes: list[str]
     off_limits_paths: list[str]
+    # Optional, and last with a default so every existing keyword construction
+    # of this dataclass keeps working. See `_optional_project_dir` for what a
+    # value may be and why it is validated so strictly.
+    project_dir: str = ""
 
 
 class ConfigError(Exception):
@@ -167,6 +171,7 @@ def load_config(repo_root: Path) -> ProjectConfig:
         agent=_optional_text(raw, "agent", path),
         routes=_require_string_list(raw, "routes", path),
         off_limits_paths=_require_string_list(raw, "off_limits_paths", path),
+        project_dir=_optional_project_dir(raw, "project_dir", path),
     )
 
 
@@ -257,6 +262,85 @@ def _require_port(raw: dict, field: str, path: Path) -> int:
             f"Invalid `{field}` in {path}: expected a TCP port in 1-65535, got {port}"
         )
     return port
+
+
+def _optional_project_dir(raw: dict, field: str, path: Path) -> str:
+    """An optional repository-relative subdirectory, defaulting to `""`.
+
+    `""` means "the application root is the repository root", which is what
+    every config before this field said implicitly, so absent and empty are
+    both normal and mean exactly what they used to.
+
+    A value names the application root *inside the clone*, for a repository
+    whose app is nested — e.g. `citizen-samadhan-setu-main` for a clone whose
+    `package.json` is at `/workspace/repo/citizen-samadhan-setu-main`. It is
+    consumed by `sandbox.container_path_under_repo`, which resolves it against
+    `/workspace/repo` and re-checks containment.
+
+    ### Why this is validated as strictly as a security control
+
+    This string becomes a container working directory. It reaches
+    `exec_stream`/`exec_detached` as `workdir`, so an accepted value decides
+    where the agent and the target application run. `..` segments are the
+    obvious attack, and `/workspace` holds two things worth escaping to: the
+    read-only `.env.sandbox` mount one level up, and the rest of the container
+    filesystem above that. Refusing anything that is not a plain relative
+    subpath is cheap; being permissive here is not.
+
+    Validation happens in `load_config`, which `run` calls as step 1 — before
+    the Run_Directory exists, before credentials are generated, and before any
+    container is created. A rejected `project_dir` therefore costs nothing and
+    leaves nothing behind.
+
+    Accepted: a non-empty relative POSIX subpath with no `..` segment
+    (`app`, `services/api`, `./app` which normalises to `app`).
+
+    Raises:
+        ConfigError: not a string; empty/whitespace-only after stripping when
+            the key was present with a non-empty value; absolute (`/srv/app`);
+            a Windows path or drive (`C:\\app`, `a\\b`); containing a `..`
+            segment; or normalising to nothing or to outside the repository.
+    """
+    if field not in raw or raw[field] is None:
+        return ""
+    value = raw[field]
+    if not isinstance(value, str):
+        raise _type_error(path, field, value, "a repository-relative subdirectory")
+    candidate = value.strip()
+    if not candidate:
+        # Present-but-blank is the same as absent: the app is at the repo root.
+        return ""
+
+    # Backslashes first, so a Windows-style path cannot smuggle a separator past
+    # the POSIX checks below (`..\\..\\etc` has no `/` to split on).
+    if "\\" in candidate or ":" in candidate:
+        raise ConfigError(
+            f"Invalid `{field}` in {path}: expected a POSIX repository-relative "
+            f"subdirectory, got {candidate!r}. Use forward slashes and no drive "
+            "letter — this names a path inside the container's clone."
+        )
+    if candidate.startswith("/"):
+        raise ConfigError(
+            f"Invalid `{field}` in {path}: expected a path relative to the "
+            f"repository root, got the absolute path {candidate!r}. "
+            "`project_dir` is resolved inside the container's clone, so it "
+            "cannot name an absolute location."
+        )
+
+    # Reject `..` by segment rather than by substring, so a legitimate name
+    # containing dots (`my..app`, `..hidden`) is not caught by accident while a
+    # real traversal segment always is.
+    segments = [part for part in candidate.split("/") if part not in ("", ".")]
+    if any(part == ".." for part in segments):
+        raise ConfigError(
+            f"Invalid `{field}` in {path}: {candidate!r} contains a `..` "
+            "segment. `project_dir` must stay inside the repository, because it "
+            "becomes the working directory the agent and the application run in."
+        )
+    if not segments:
+        # `.` or `./` — names the repo root the long way round.
+        return ""
+    return "/".join(segments)
 
 
 def _require_string_list(raw: dict, field: str, path: Path) -> list[str]:

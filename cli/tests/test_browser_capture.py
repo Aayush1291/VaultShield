@@ -205,11 +205,19 @@ class FakeSandbox:
         self.run_id = "20250614-091530-deadbeefdeadbeef"
         self.container = FakeContainer(container_port, host_port)
         self.started: list[tuple[list[str], dict[str, str] | None]] = []
+        # Every `workdir` the application was started in, so a test can assert
+        # a nested `project_dir` reaches the process that has to honour it.
+        self.workdirs: list[str | None] = []
 
     def exec_detached(
-        self, cmd: list[str], *, env: dict[str, str] | None = None
+        self,
+        cmd: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        workdir: str | None = None,
     ) -> None:
         self.started.append((cmd, env))
+        self.workdirs.append(workdir)
 
 
 def _config(**overrides: object) -> ProjectConfig:

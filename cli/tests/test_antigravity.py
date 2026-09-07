@@ -3,19 +3,28 @@ its reliance on the Monitor's PTY) and Task 20.2 (the clean-exit/
 empty-output failure check) in `cli/vaultshield/adapters/antigravity.py`.
 
 Scoped to those tasks' three requirements: Requirement 16.1 (invoke `agy`
-as `agy -p "<prompt>" --non-interactive`), Requirement 16.2 (rely on the
+non-interactively with the prompt as one argument — see
+`test_argv_is_what_the_real_agy_cli_accepts` for why the requirement's
+literal `--non-interactive` spelling is NOT what gets passed), Requirement 16.2 (rely on the
 Monitor's PTY wrapper to satisfy the `agy` process's `isatty()` check) and
 Requirement 16.3 (a clean exit that produced empty output is a failed Run,
 not a successful one). Property 25 is Task 20.3's scope, so the property
 itself is not asserted across generated inputs here — these are fixed
 examples of each branch.
 
-The `agy` CLI is not installed on a dev machine, so the tests that need a
-real process substitute a stand-in executable (`_install_stub_agy`) for
-`ANTIGRAVITY_EXECUTABLE` and run the real adapter, the real
-`subprocess.Popen` call and — for the `isatty()` check — the real
-`PtyOutputCapture` against it. Nothing about the adapter itself is mocked
-or stubbed: what varies is only which binary gets executed.
+These tests never depend on whether the real `agy` CLI is installed, in
+either direction. A test that needs a real process substitutes a stand-in
+executable (`_install_stub_agy`); the test that needs `agy` to be missing
+arranges that too (`_path_without_agy`), rather than assuming a machine
+without it. Each then runs the real adapter, the real `subprocess.Popen`
+call and — for the `isatty()` check — the real `PtyOutputCapture`. Nothing
+about the adapter itself is mocked or stubbed: what varies is only which
+binary the spawn can find.
+
+That symmetry is deliberate. An earlier version of this docstring asserted
+that `agy` "is not installed on a dev machine", and the missing-executable
+test rested on it; when `agy` was in fact installed, the test stopped
+testing the error path and launched the real agent instead.
 """
 
 from __future__ import annotations
@@ -64,6 +73,32 @@ def _install_stub_agy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
     return stub
 
 
+def _path_without_agy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Points `PATH` at one empty directory, so `agy` is genuinely absent,
+    and returns it.
+
+    The mirror image of `_install_stub_agy`: that one makes a stand-in
+    findable, this one makes the real thing unfindable. Both work by
+    changing only what the spawn can locate, so the adapter, the argv it
+    builds and the `subprocess.Popen` call underneath stay real.
+
+    An empty directory rather than an empty string, because an empty `PATH`
+    entry means "the current directory" to the exec lookup — harmless here,
+    but it would make the test's determinism depend on the working
+    directory's contents rather than on nothing at all.
+
+    Necessary because `agy` may well be installed on the developer's
+    machine: `ANTIGRAVITY_EXECUTABLE` is the bare name `agy`, so whether the
+    spawn fails is otherwise decided by the host's `PATH`. Without this the
+    "missing executable" test silently stops testing anything the moment
+    `agy` is present — and, worse, launches the real agent.
+    """
+    empty = tmp_path / "empty-path-dir"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    return empty
+
+
 def _drain(events: "queue.Queue[EventLogRecord]") -> list[EventLogRecord]:
     items: list[EventLogRecord] = []
     while True:
@@ -73,17 +108,55 @@ def _drain(events: "queue.Queue[EventLogRecord]") -> list[EventLogRecord]:
             return items
 
 
-def test_argv_is_exactly_what_requirement_16_1_mandates():
-    """`agy -p "<prompt>" --non-interactive`, in that element order, with
-    the prompt as one argv element rather than a shell-quoted string.
+def test_argv_is_what_the_real_agy_cli_accepts():
+    """`agy -p "<prompt>" --dangerously-skip-permissions --output-format text`,
+    in that element order, with the prompt as one argv element rather than a
+    shell-quoted string.
+
+    CHANGED, AND THE CHANGE IS A DELIBERATE DIVERGENCE FROM REQUIREMENT 16.1.
+    This test previously asserted `agy -p "<prompt>" --non-interactive`, which is
+    what the requirement's text says. The shipping CLI (verified against 1.1.26,
+    both on the host and inside the Sandbox image) has no `--non-interactive`
+    flag and refuses to start when given one:
+
+        flags provided but not defined: -non-interactive
+
+    so the previously-asserted argv failed 100% of real Runs. The requirement's
+    intent survives — `agy --help` documents `-p` as "Run a single prompt
+    non-interactively", i.e. `-p` IS the non-interactive switch — and the two
+    added flags are what an unattended, file-editing Run needs. The old
+    expectation is not weakened here so much as corrected against the binary it
+    describes; the requirement text is the thing that is stale.
     """
     assert build_antigravity_argv("add a health check endpoint") == [
         "agy",
         "-p",
         "add a health check endpoint",
-        "--non-interactive",
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "text",
     ]
     assert ANTIGRAVITY_EXECUTABLE == "agy"
+
+
+def test_the_nonexistent_non_interactive_flag_is_never_passed():
+    """Regression guard for the flag that broke every real Run.
+
+    Separate from the exact-argv assertion above so that a future edit which
+    reorders or extends the argv cannot quietly reintroduce `--non-interactive`
+    while still looking reasonable.
+    """
+    assert "--non-interactive" not in build_antigravity_argv("do the thing")
+
+
+def test_the_prompt_is_still_the_element_immediately_after_p():
+    """Requirement 16.1's recognisable shape: `-p` then the prompt, first.
+
+    The added flags go after the prompt, so the part of the mandated invocation
+    that is still accurate stays intact.
+    """
+    argv = build_antigravity_argv("add a health check endpoint")
+    assert argv[:3] == ["agy", "-p", "add a health check endpoint"]
 
 
 def test_argv_carries_prompt_verbatim_without_quoting():
@@ -111,13 +184,31 @@ def test_empty_prompt_is_rejected_before_any_process_starts(
         Antigravity_Adapter().launch(prompt, str(tmp_path))
 
 
-def test_missing_executable_is_reported_as_adapter_error(tmp_path: Path):
+def test_missing_executable_is_reported_as_adapter_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """No `agy` on PATH is an invocation that could not be constructed, so
     it surfaces as `AdapterError` (naming the executable) rather than as a
     raw `FileNotFoundError` the caller would have to know to catch.
+
+    The absence is arranged rather than assumed (`_path_without_agy`). This
+    test used to rely on `agy` not being installed on the developer's
+    machine, which made it pass for a reason it did not control: once `agy`
+    was installed it stopped exercising the error path at all and instead
+    spawned the real agent. The translation under test is still the real one
+    — `Popen` raises `FileNotFoundError`, `_spawn` turns it into
+    `AdapterError` — only the executable's absence is now guaranteed.
     """
-    with pytest.raises(AdapterError, match="cannot start"):
+    _path_without_agy(tmp_path, monkeypatch)
+
+    with pytest.raises(AdapterError, match="cannot start") as caught:
         Antigravity_Adapter().launch("do the thing", str(tmp_path))
+
+    message = str(caught.value)
+    # "naming the executable", per the contract above, so the developer is
+    # told what was not found rather than only that something was not.
+    assert ANTIGRAVITY_EXECUTABLE in message
+    assert "PATH" in message
 
 
 def test_agent_process_inherits_the_monitors_pty(

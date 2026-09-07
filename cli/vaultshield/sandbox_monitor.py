@@ -86,16 +86,46 @@ _WATCHER_DRAIN_POLL_S = 0.1
 # the container's CPU walking the tree.
 _WATCH_INTERVAL_S = 0.15
 
-# Directory names never worth walking: `.git` churns constantly during git
-# capture and would bury real agent changes under hundreds of records.
-_WATCH_EXCLUDES = (".git",)
+# Directory names never worth walking, for one reason that applies to all of
+# them: none of their contents is agent work, and walking them buries the changes
+# that are.
+#
+#   .git           churns constantly during git capture.
+#   node_modules   installed by `Sandbox._install_dependencies` BEFORE the agent
+#                  starts. On the repository this was built for it holds ~32,000
+#                  files, which is not a tidiness problem but a correctness one:
+#                  a snapshot that size takes longer than the drain window in
+#                  `_collect_file_changes`, so the watcher was still walking when
+#                  its output was read and a Run reported ZERO file_change events
+#                  while `diff.json` proved files had changed. Requirement G —
+#                  never rely on the agent's own account of what it touched —
+#                  was silently not being met for any Node project.
+#   .venv, __pycache__, .mypy_cache, .pytest_cache
+#                  the same thing for Python projects: installed or generated
+#                  content, high file count, zero review value.
+#
+# The tradeoff, stated because it is a real one: `off_limits_paths` cannot match
+# inside a directory that is never walked. That is already true of `.git` and is
+# acceptable for the rest — these hold dependency and cache content, not the
+# files a developer protects — but it is the reason this list is short, explicit,
+# and made of exact directory names rather than patterns.
+_WATCH_EXCLUDES = (
+    ".git",
+    "node_modules",
+    ".venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+)
 
 # The in-container watcher. Standard library only; see the module docstring.
 _WATCHER_PROGRAM = '''
 import json, os, stat, sys, time
 
 root, out_path, stop_path, interval = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
-EXCLUDE = {".git"}
+# Injected from `_WATCH_EXCLUDES` so the host and the container cannot disagree
+# about what is skipped; the previous copy was a second hardcoded literal.
+EXCLUDE = set(json.loads(sys.argv[5]))
 
 
 def snapshot():
@@ -173,6 +203,7 @@ def supervise_in_sandbox(
     *,
     off_limits_paths: tuple[str, ...] | list[str] | None = None,
     workdir: str = Sandbox.REPO_DIR,
+    agent_workdir: str | None = None,
 ) -> Path:
     """Runs `adapter` inside `sandbox` and writes the merged Event_Log.
 
@@ -185,7 +216,27 @@ def supervise_in_sandbox(
         off_limits_paths: Project_Config_File entries (Requirement 4.5),
             matched against paths relative to the repository root inside the
             container.
-        workdir: the agent's working directory inside the container.
+        workdir: the directory the file-change watcher walks — the repository
+            root inside the container. Also the agent's working directory
+            unless `agent_workdir` overrides it.
+        agent_workdir: the agent's working directory inside the container, when
+            it differs from the watch root. This is `config.project_dir`
+            resolved: for a repository whose application is nested, the agent
+            should start where the app lives.
+
+            Deliberately a SEPARATE parameter rather than repointing `workdir`,
+            for two reasons that both matter more than the extra argument:
+
+            * `off_limits_paths` entries are documented and matched as
+              repository-relative. Moving the watch root into a subdirectory
+              would silently reinterpret every entry against a different base,
+              so `secrets/` would stop protecting `<repo>/secrets/` without
+              anyone being told. Quietly changing what a security control
+              covers is worse than not supporting nesting at all.
+            * The watcher would stop seeing changes outside the project
+              directory. An agent that edits something at the clone root is
+              exactly the case worth capturing, so the watch stays as wide as
+              the repository while only the agent's cwd narrows.
 
     Returns:
         The path of the Event_Log written on the host.
@@ -203,7 +254,10 @@ def supervise_in_sandbox(
     before the agent can touch anything, write the Event_Log before raising
     anything, and let the adapter's own error take precedence over a violation.
     """
-    invocation = adapter.sandbox_invocation(prompt, workdir)
+    # The agent is told, and is started in, its own working directory; the
+    # watcher below is rooted at the repository regardless. See `agent_workdir`.
+    resolved_agent_workdir = agent_workdir or workdir
+    invocation = adapter.sandbox_invocation(prompt, resolved_agent_workdir)
 
     events: "queue.Queue[EventLogRecord]" = queue.Queue()
     patterns = _normalize_off_limits_entries(off_limits_paths)
@@ -212,7 +266,9 @@ def supervise_in_sandbox(
 
     agent_error: Exception | None = None
     try:
-        exit_code = _stream_agent(sandbox, invocation, workdir, events)
+        exit_code = _stream_agent(
+            sandbox, invocation, resolved_agent_workdir, events
+        )
     except SandboxError:
         # Docker-level failure: the caller distinguishes this from an agent
         # failure, so it is not rewrapped. The watcher is still stopped below.
@@ -261,6 +317,7 @@ def _start_watcher(sandbox: Sandbox, workdir: str) -> None:
                 WATCHER_OUTPUT,
                 WATCHER_STOP_FILE,
                 str(_WATCH_INTERVAL_S),
+                json.dumps(list(_WATCH_EXCLUDES)),
             ]
         )
     except SandboxError as exc:

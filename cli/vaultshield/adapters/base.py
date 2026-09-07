@@ -189,6 +189,55 @@ class Agent_Adapter(ABC):
             "on the host."
         )
 
+    def auth_invocation(self) -> SandboxInvocation | None:
+        """How to authenticate this agent inside the Sandbox, or `None`.
+
+        `None` — the default, and the answer for every adapter except
+        Antigravity — means "this agent needs no in-Sandbox sign-in step". An
+        adapter whose credential is an API key returns `None` because its key
+        travels in `sandbox_invocation().env` and needs no interaction.
+
+        An adapter returns an invocation here only when its agent cannot be
+        authenticated any other way. Antigravity is the case that forced this to
+        exist: it authenticates by Google OAuth alone, reads no API-key variable,
+        and persists its session as a file inside the container. There is no value
+        `sandbox_invocation().env` could carry that would authenticate it.
+
+        Returned separately from `sandbox_invocation` because the two run under
+        different rules. The monitored invocation's every byte becomes an
+        Event_Log record; this one exchanges an authorization code with a human
+        and must be recorded nowhere. `vaultshield run` executes this through
+        `Sandbox.exec_interactive` and the monitored one through
+        `Sandbox.exec_stream`, and only the latter is wired to the Event_Log.
+
+        Only ever run when the developer passes `--interactive-auth`. Absent that
+        flag the auth phase does not happen at all, so the default behaviour of
+        every agent — including Antigravity — is exactly what it was before this
+        method existed.
+        """
+        return None
+
+
+class AuthError(Exception):
+    """Raised when an agent's in-Sandbox authentication phase failed.
+
+    Distinct from `AdapterError` because the two need different messages and
+    happen at different points. `AdapterError` from `sandbox_invocation` means the
+    Run never began; `AdapterError` from the monitored run means the agent failed
+    with an Event_Log already on disk. This means the Sandbox exists, the repo is
+    cloned, and the agent was never started — so there is no Event_Log to point
+    the developer at, and the fix is to sign in again rather than to inspect
+    artifacts.
+
+    NOT a subclass of `AdapterError`, deliberately: `cli.py`'s `AdapterError`
+    handler appends "(Event_Log preserved at ...)" to its message, which would be
+    a lie here.
+
+    Never carries an authorization code or a session token. The auth exchange
+    happens on a socket, and nothing that crosses it is interpolated into this
+    message — see `Sandbox.exec_interactive`.
+    """
+
 
 class AdapterError(Exception):
     """Raised by an Agent_Adapter for either of two distinct failure cases

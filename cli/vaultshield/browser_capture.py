@@ -200,7 +200,7 @@ import httpx
 
 from vaultshield.config import ProjectConfig
 from vaultshield.run_directory import screenshots_dir
-from vaultshield.sandbox import Sandbox, SandboxError
+from vaultshield.sandbox import Sandbox, SandboxError, container_path_under_repo
 
 # The only status code that means "ready" (Requirements 9.2, 9.4 and
 # design.md both say "a 200 response", not "any 2xx"). A 204 or a 301 from
@@ -402,6 +402,20 @@ def start_and_capture(
     # port when the container starts, so this is answerable before the
     # application exists, and an unreachable Sandbox is worth failing on
     # before a dev server has been started that nothing could ever poll.
+    if not config.routes:
+        # Nothing to capture, so nothing to start. `capture_route_screenshots`
+        # already returned `[]` for empty routes, but it did so three steps
+        # later — after the application had been started and after readiness had
+        # been polled to a 200 or to a `ReadinessTimeout`. That made a Run with
+        # `routes: []` depend on the application coming up in order to capture
+        # zero screenshots, and a project whose `start_command` was a
+        # placeholder failed a Run whose agent work had already succeeded.
+        #
+        # Returning here keeps the observable no-routes result identical (an
+        # empty list, no `screenshots/` directory) while removing the readiness
+        # requirement that had no purpose.
+        return []
+
     base_url = resolve_base_url(sandbox, config.port)
     _start_app(sandbox, config)
     wait_until_ready(
@@ -519,7 +533,14 @@ def _start_app(sandbox: Sandbox, config: ProjectConfig) -> None:
     for host_var in _HOST_ENV_VARS:
         env[host_var] = _BIND_ALL_INTERFACES
 
-    sandbox.exec_detached(["sh", "-c", config.start_command], env=env)
+    sandbox.exec_detached(
+        ["sh", "-c", config.start_command],
+        env=env,
+        # The application root, which is the clone root unless `project_dir`
+        # names a subdirectory. `npm run dev` has to run where `package.json`
+        # is.
+        workdir=container_path_under_repo(config.project_dir),
+    )
 
 
 def capture_route_screenshots(

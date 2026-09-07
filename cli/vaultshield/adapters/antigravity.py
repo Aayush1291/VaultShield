@@ -118,16 +118,31 @@ mechanism divergence.
    exists, per `base.py`'s contract. Same shape as `Codex_Adapter` and
    `Kiro_Adapter`.
 
-2. **No credential is injected.** Requirement 8.1 names `CODEX_API_KEY`
-   and Requirement 15.1 names `KIRO_API_KEY`, so those two adapters carry
-   an `api_key` parameter and an env-injection step. Requirement 16.1
-   names no credential for `agy` at all, so this adapter has neither —
-   the child simply inherits this process's environment (`_spawn` passes
-   no `env`), which is what keeps its PATH, HOME and terminal settings
-   intact. Inventing an `ANTIGRAVITY_API_KEY` the spec never mentions
-   would mean failing Runs over an unset variable nothing asked for. If a
-   given `agy` build needs credentials, they are already in the
-   environment `vaultshield run` inherits.
+2. **No credential is injected, and for `agy` no env var could do it.**
+   Requirement 8.1 names `CODEX_API_KEY` and Requirement 15.1 names
+   `KIRO_API_KEY`, so those two adapters carry an `api_key` parameter and
+   an env-injection step. Requirement 16.1 names no credential for `agy`,
+   and — verified against 1.1.26 running in a container — none exists to
+   name: `agy` authenticates by Google OAuth only. It ignores
+   `GEMINI_API_KEY`/`GOOGLE_API_KEY` (both were passed and both were
+   disregarded), has no `auth`/`login` subcommand, and on an
+   unauthenticated invocation prints a consent URL and blocks on a pasted
+   authorization code before doing any work.
+
+   The session it obtains is persisted as a FILE, not an environment
+   variable: `~/.gemini/antigravity-cli/jetski_state.pbtxt`, mode 600. So
+   the `SandboxInvocation.env` whitelist that carries Codex's and Kiro's
+   keys has nothing it could carry here, and this adapter injects nothing
+   rather than inventing a variable the binary does not read.
+
+   The consequence is honest and worth stating plainly: a Sandbox built
+   from a clean image is unauthenticated, so a real `agy` Run reaches its
+   auth prompt and fails there. Making it authenticate requires placing
+   that one file inside the container — which is a decision about a
+   broadly-scoped Google OAuth token (its scopes include `cloud-platform`
+   and `userinfo.email`), not a narrow per-service API key, and therefore
+   is deliberately NOT done implicitly by this adapter. `sandbox-image/`'s
+   header records that the image bakes in no credential of any kind.
 
 3. **A non-zero exit status yields an in-band `"error"` event AND then
    raises `AdapterError`.** Requirements 16.1/16.2 say nothing about exit
@@ -209,6 +224,109 @@ from vaultshield.adapters.base import (
 # it at a stand-in binary without reaching into the argv builder itself.
 ANTIGRAVITY_EXECUTABLE = "agy"
 
+# --- the real `agy` flag contract --------------------------------------------
+#
+# Requirement 16.1 specifies `agy -p "<prompt>" --non-interactive`. The shipping
+# CLI (verified against 1.1.26) DOES NOT HAVE `--non-interactive`; passing it
+# aborts before any work with:
+#
+#     flags provided but not defined: -non-interactive
+#
+# so the mandated argv fails 100% of real Runs. The requirement's *intent* is
+# already satisfied without it — `agy --help` documents `-p`/`--print` as "Run a
+# single prompt non-interactively and print the response", i.e. `-p` IS the
+# non-interactive switch. `--non-interactive` was a plausible guess at a flag
+# that does not exist.
+#
+# This divergence is deliberate and is flagged rather than hidden: the argv below
+# is what the real binary accepts, and Requirement 16.1's literal text is stale.
+_PRINT_FLAG = "-p"
+
+# Auto-approves the agent's tool-permission requests. Required for autonomous
+# operation: in print mode `agy` still asks before editing files, and inside a
+# Sandbox there is no human on the other end of that prompt, so without this the
+# agent reliably produces a transcript and changes nothing.
+#
+# The flag's name is a warning aimed at developers running `agy` on their own
+# machine, where auto-approval means unreviewed edits to real work. That warning
+# does not transfer here, and the reason is the whole point of VaultShield: this
+# process runs in a disposable container with no host mount, no host HOME, no
+# Docker socket and dummy credentials, and every file it touches is captured as
+# a file_change event and committed to a review branch. Auto-approval inside
+# *this* boundary is what the boundary is for.
+_SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
+
+# Plain text, which is what a pty transcript and the Event_Log want. Stated
+# explicitly rather than relying on the documented default so a future change to
+# `agy`'s default output format cannot silently turn every Event_Log into JSON.
+_OUTPUT_FORMAT_FLAG = "--output-format"
+_OUTPUT_FORMAT = "text"
+
+# --- the in-Sandbox sign-in ----------------------------------------------------
+#
+# `agy` authenticates by Google OAuth and nothing else. Verified inside the
+# Sandbox image: `GOOGLE_APPLICATION_CREDENTIALS` is never even opened (0 of 730
+# traced `openat` calls), `GEMINI_API_KEY`/`GOOGLE_API_KEY` are ignored, and there
+# is no `auth`/`login` subcommand. So there is no key to inject and the only way
+# to authenticate is to complete the OAuth exchange.
+#
+# `agy models` looked like the natural minimal probe and is not usable: it refuses
+# with "Please sign in to view available models. Launch the CLI without arguments
+# to sign in" and never starts the flow. Bare `agy` does start it but launches the
+# interactive TUI, which does not exit. The `-p` form is what actually triggers
+# the flow AND returns control, and it is the shape whose success was confirmed by
+# hand.
+#
+# The probe prompt is deliberately trivial and answerable without touching
+# anything: it exists to make `agy` authenticate and exit, and its answer proves
+# the session works end to end rather than merely that a file was written.
+_AUTH_PROBE_PROMPT = "Reply with exactly the word: ready"
+
+# `--dangerously-skip-permissions` is deliberately ABSENT here, unlike the
+# monitored invocation. The sign-in step has no business editing anything, and
+# withholding auto-approval means that even if the probe prompt somehow provoked a
+# tool call, it could not modify the repository unattended.
+#
+# The auth exec is also run from a neutral directory rather than the clone (see
+# `cli.py`), so the repository is not even its working directory.
+
+# Where `agy` persists the session it obtains, inside the container. Confirmed by
+# syscall trace — it is the ONLY credential-shaped path `agy` opens — and by a
+# successful manual sign-in, which created it mode 0600.
+#
+# Two properties of this path matter, and both are why the token cannot reach a
+# VaultShield artifact:
+#
+#   * it is under HOME, NOT under `Sandbox.REPO_DIR`, so the file-change watcher
+#     (which walks the repository) never sees it and it cannot appear as a
+#     file_change event or in `diff.json`;
+#   * it lives in the container's overlay writable layer, so
+#     `teardown`'s `remove(v=True, force=True)` destroys it. Verified: a probe
+#     file written there in one container is absent from a fresh one.
+#
+# Named here for tests to assert against, not read by this module at runtime.
+ANTIGRAVITY_TOKEN_PATH = "/root/.gemini/antigravity-cli/antigravity-oauth-token"
+
+# The Google scopes the session carries. Stated so `cli.py` can show them before
+# the developer consents, and so nobody has to take "broad" on trust. These are
+# NOT narrow: `cloud-platform` is general Google Cloud authority, and the
+# `userinfo.*` pair identifies the human behind the account.
+ANTIGRAVITY_OAUTH_SCOPES = (
+    "cloud-platform",
+    "userinfo.email",
+    "userinfo.profile",
+    "cclog",
+    "experimentsandconfigs",
+    "aicode",
+    "openid",
+)
+
+# `agy`'s own wait for the pasted code, from its output ("Waiting for
+# authentication (timeout 60s)..."). VaultShield's auth phase is bounded slightly
+# longer so that when the window closes it is `agy`'s own message the developer
+# sees, not a VaultShield timeout racing it.
+ANTIGRAVITY_AUTH_TIMEOUT_S = 75.0
+
 # Bytes requested per `os.read()` against the tap's master fd. Only bounds
 # how much of an already-arrived burst one call returns; chunk boundaries
 # are invisible downstream, since `_pump_output` reassembles lines across
@@ -224,13 +342,19 @@ _TAP_READER_JOIN_TIMEOUT = 5.0
 
 
 def build_antigravity_argv(prompt: str) -> list[str]:
-    """Builds the exact `agy` invocation Requirement 16.1 mandates:
-    `agy -p "<prompt>" --non-interactive`.
+    """Builds the `agy` invocation this adapter runs:
+    `agy -p "<prompt>" --dangerously-skip-permissions --output-format text`.
 
-    Element order matches that requirement literally — `-p` and its value,
-    then `--non-interactive` — rather than being normalized into some
-    other flag order that would be equivalent to `agy` but no longer the
-    command the spec names.
+    Requirement 16.1 asks for `agy -p "<prompt>" --non-interactive`. The real
+    CLI has no `--non-interactive` flag and refuses to start when given it, and
+    `-p` already means "run non-interactively"; the two extra flags here are what
+    make an unattended, file-editing Run actually work. See the
+    "real `agy` flag contract" note above each constant for the full reasoning —
+    this is a deliberate, flagged divergence from the requirement's literal text,
+    not a silent reinterpretation of it.
+
+    `-p` and its value stay first, in that order, so the shape Requirement 16.1
+    describes is still recognisable in the output.
 
     `prompt` is passed as a single argv element rather than interpolated
     into a shell string, so no quoting/escaping of its content is needed
@@ -253,7 +377,14 @@ def build_antigravity_argv(prompt: str) -> list[str]:
             "Antigravity_Adapter cannot construct a valid invocation: prompt "
             "is empty. Pass a non-empty --prompt."
         )
-    return [ANTIGRAVITY_EXECUTABLE, "-p", prompt, "--non-interactive"]
+    return [
+        ANTIGRAVITY_EXECUTABLE,
+        _PRINT_FLAG,
+        prompt,
+        _SKIP_PERMISSIONS_FLAG,
+        _OUTPUT_FORMAT_FLAG,
+        _OUTPUT_FORMAT,
+    ]
 
 
 def captured_output_is_empty(captured_lines: Sequence[str]) -> bool:
@@ -342,10 +473,11 @@ class Antigravity_Adapter(Agent_Adapter):
         definition of Requirement 16.1's invocation, and it raises
         `AdapterError` for an empty prompt before anything starts.
 
-        `env` is empty. Requirement 16.1 names no credential for `agy` (this
-        adapter deliberately invents none — see judgment call 2 in the module
-        docstring), so there is nothing to export, and `SandboxInvocation`
-        forbids copying the host environment in.
+        `env` is empty, and for this agent it could not usefully be otherwise:
+        `agy` authenticates by Google OAuth and reads no API-key variable, so
+        there is no key to whitelist — see judgment call 2. `SandboxInvocation`
+        forbids copying the host environment in regardless, so nothing from the
+        developer's shell crosses the boundary here.
 
         Requirement 16.2's `isatty()` check is satisfied by the Sandbox rather
         than by this adapter: `Sandbox.exec_stream` allocates a pseudo-terminal
@@ -353,11 +485,43 @@ class Antigravity_Adapter(Agent_Adapter):
         this adapter opening a tap of its own. That is why no `_OutputTap` is
         involved here — the pty now lives on the container side of the boundary.
 
-        Requires the `agy` executable in the Sandbox image; the default
+        Requires the `agy` executable in the Sandbox image. The default
         `python:3.11` base image does not have it, so `--agent=antigravity`
-        needs `--base-image` pointing at one that does.
+        needs `--base-image` pointing at one that does; `cli/sandbox-image/`
+        builds exactly that image (`vaultshield-sandbox:local`), with `agy`
+        pinned and checksum-verified alongside the `git`, `python` and
+        `node`/`npm` the clone, the watcher and a Node target application need.
         """
         return SandboxInvocation(argv=build_antigravity_argv(prompt), env={})
+
+    def auth_invocation(self) -> SandboxInvocation:
+        """The in-Sandbox Google sign-in, for `--interactive-auth`.
+
+        `agy -p "<trivial prompt>" --output-format text`, which is the only shape
+        that both starts the OAuth flow and returns control — see the
+        "in-Sandbox sign-in" note above for why `agy models` and bare `agy` do
+        not work.
+
+        `env` is empty, as it is for the monitored invocation: there is no
+        credential to inject, which is the whole reason this interactive path
+        exists. Nothing here carries a token, a code, or a host path — the
+        authorization code is typed by the developer and reaches the process on
+        `Sandbox.exec_interactive`'s socket, never through argv or the
+        environment.
+
+        Note the absence of `--dangerously-skip-permissions`, which the monitored
+        invocation does pass: a sign-in must not be able to edit anything.
+        """
+        return SandboxInvocation(
+            argv=[
+                ANTIGRAVITY_EXECUTABLE,
+                _PRINT_FLAG,
+                _AUTH_PROBE_PROMPT,
+                _OUTPUT_FORMAT_FLAG,
+                _OUTPUT_FORMAT,
+            ],
+            env={},
+        )
 
 
 class _OutputTap:

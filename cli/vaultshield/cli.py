@@ -57,6 +57,7 @@ suite.
 """
 
 import uuid
+import sys
 from pathlib import Path
 
 import click
@@ -69,7 +70,7 @@ from vaultshield import __version__
 # command function Click registers under that same name.
 from vaultshield import uploader
 from vaultshield.adapters.antigravity import Antigravity_Adapter
-from vaultshield.adapters.base import AdapterError, Agent_Adapter
+from vaultshield.adapters.base import AdapterError, Agent_Adapter, AuthError
 from vaultshield.adapters.codex import Codex_Adapter
 from vaultshield.adapters.kiro import Kiro_Adapter
 from vaultshield.adapters.mock import Mock_Adapter
@@ -94,7 +95,17 @@ from vaultshield.run_directory import (
     generate_run_id,
     screenshots_dir,
 )
-from vaultshield.sandbox import Sandbox, SandboxError
+from vaultshield.adapters.antigravity import (
+    ANTIGRAVITY_AUTH_TIMEOUT_S,
+    ANTIGRAVITY_OAUTH_SCOPES,
+)
+from vaultshield.sandbox import Sandbox, SandboxError, container_path_under_repo
+
+# Substring of `agy`'s own prompt for the pasted code ("Or, paste the
+# authorization code here and press Enter:"), matched case-insensitively so the
+# auth phase knows when to stop displaying and start asking. Matched on a
+# fragment rather than the whole sentence so a reworded prompt still works.
+_AUTH_PROMPT_MARKER = "paste the authorization code"
 # `submit` is imported under another name for the same reason `uploader` is
 # imported as a module: the `submit` command below and `submit.submit` share
 # a name, so a plain `from vaultshield.submit import submit` would be
@@ -577,6 +588,17 @@ def login(backend_url: str, username: str | None) -> None:
         "before failing the Run with no screenshots."
     ),
 )
+@click.option(
+    "--interactive-auth",
+    is_flag=True,
+    default=False,
+    help=(
+        "Sign the agent in to its own service inside the Sandbox before the Run, "
+        "by completing an OAuth exchange in your terminal. Only Antigravity needs "
+        "this. The session is created in the container and destroyed with it; your "
+        "host login is never read."
+    ),
+)
 @_backend_url_option("VaultShield backend this Run's artifacts are uploaded to")
 def run(
     agent: str,
@@ -585,6 +607,7 @@ def run(
     base_image: str,
     env_file: Path | None,
     ready_timeout: int,
+    interactive_auth: bool,
     backend_url: str,
 ) -> None:
     """Execute one sandboxed, monitored Run and write its Event_Log.
@@ -654,9 +677,23 @@ def run(
         # publishes `config.port` on an ephemeral host port that
         # `browser_capture.resolve_base_url` reads back off the container.
         sandbox.create(
-            repo_url, base_image, sandbox_env, publish_port=config.port
+            repo_url,
+            base_image,
+            sandbox_env,
+            publish_port=config.port,
+            # Only moves where dependencies are installed. The clone still
+            # lands at Sandbox.REPO_DIR, so git capture is unaffected.
+            project_dir=config.project_dir,
         )
         click.echo(f"Sandbox created for run {run_id} (cloned {repo_url}).")
+
+        # 5b. Optional in-Sandbox sign-in (`--interactive-auth`). Between the
+        #     Sandbox existing and the agent starting, because the agent cannot
+        #     start unauthenticated and the session has to live in the container
+        #     that is about to run it. Skipped entirely without the flag, so the
+        #     default behaviour of every agent is unchanged.
+        if interactive_auth:
+            _authenticate_in_sandbox(sandbox, adapter, agent)
 
         # 6. Monitor, INSIDE the Sandbox. The agent runs as a real process in
         #    the container, with the container's clone as its working
@@ -677,6 +714,12 @@ def run(
             prompt,
             run_dir,
             off_limits_paths=config.off_limits_paths,
+            # The agent starts in the application root when the repository
+            # nests it. The file-change watcher stays rooted at the repository
+            # either way, so `off_limits_paths` keeps its repository-relative
+            # meaning and changes outside the app directory are still captured
+            # — see `supervise_in_sandbox`'s `agent_workdir`.
+            agent_workdir=container_path_under_repo(config.project_dir),
         )
 
         # 7. Browser_Capture_Module (Requirement 9.1): agent execution has
@@ -702,6 +745,12 @@ def run(
             f"Committed run {run_id} to branch {branch} in the Sandbox; "
             f"structured diff written to {diff_file}"
         )
+    except AuthError as exc:
+        # The Sandbox exists and the repo is cloned, but the agent was never
+        # started, so unlike the `AdapterError` clause below there is no
+        # Event_Log to name. The `finally` still tears the Sandbox down, which
+        # destroys any partial session with it.
+        raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
     except SandboxError as exc:
         raise click.ClickException(str(exc)) from exc
     except SandboxMonitorError as exc:
@@ -773,6 +822,157 @@ def run(
     #     final — package them and submit them to the backend, which is what
     #     makes this Run retrievable through `GET /api/runs/<run_id>/`.
     _upload_run_artifacts(run_dir, run_id, backend_url)
+
+
+def _authenticate_in_sandbox(sandbox: Sandbox, adapter, agent: str) -> None:
+    """Runs the agent's in-Sandbox sign-in, reading the authorization code from
+    the developer's terminal.
+
+    Only reached for `--interactive-auth`. An adapter that needs no sign-in
+    returns `None` from `auth_invocation()` and this is a no-op with a note, so
+    passing the flag to `--agent=mock` is harmless rather than an error.
+
+    ### What must not happen here, and how each is prevented
+
+    The authorization code is a bearer of the developer's Google identity for as
+    long as it is unredeemed, and the session it mints is readable by the agent.
+    Five channels are closed deliberately:
+
+    * **argv** — the code is written to the exec's stdin socket. It is never an
+      argument, so it cannot appear in `docker inspect` or in a process list.
+    * **environment** — `Sandbox.exec_interactive` takes no `env` parameter at
+      all, so there is nowhere to put it even by mistake.
+    * **the Event_Log** — this runs through `exec_interactive`, which no part of
+      `sandbox_monitor` touches. The monitored path (`exec_stream`) has no stdin
+      to record. The separation is structural, not a filter.
+    * **the terminal** — read with `getpass`, so the host terminal does not echo
+      it; and because a container TTY echoes stdin back into its own output, every
+      line displayed from the container is scrubbed of the code before printing.
+      `agy` needs the TTY (without one it prints no consent URL at all), so
+      suppressing the echo at the display layer is the only available answer.
+    * **exceptions** — `AuthError` messages below are fixed strings plus `agy`'s
+      own output; the code is never interpolated into one.
+
+    The consent banner prints BEFORE the exec starts, because `agy`'s wait for the
+    code is 60 seconds and the developer should not be spending it reading.
+
+    Raises:
+        AuthError: the sign-in failed, timed out, or was refused. The caller's
+            `finally` tears the Sandbox down either way.
+    """
+    invocation = adapter.auth_invocation()
+    if invocation is None:
+        click.echo(
+            f"--interactive-auth was passed, but the {agent} adapter needs no "
+            "in-Sandbox sign-in. Continuing without one."
+        )
+        return
+
+    scopes = getattr(adapter, "OAUTH_SCOPES", None) or ANTIGRAVITY_OAUTH_SCOPES
+    click.echo("")
+    click.echo("──────────────── Antigravity authentication ────────────────")
+    click.echo(
+        "This authentication is created inside the disposable VaultShield\n"
+        "sandbox. Your existing host Antigravity login is not read or modified."
+    )
+    click.echo("")
+    click.echo("The sandboxed agent will have the following Google scopes:")
+    for scope in scopes:
+        click.echo(f"  {scope}")
+    click.echo("")
+    click.echo(
+        "These scopes are broad, not narrow: `cloud-platform` is general Google\n"
+        "Cloud authority and `userinfo.*` identifies your account. The agent can\n"
+        "read its own authentication session while it runs, and VaultShield cannot\n"
+        "prevent it from using that session. The session is destroyed when the\n"
+        "Sandbox is torn down."
+    )
+    click.echo("")
+    click.echo(
+        "Open the authorization URL below in your browser, approve access, then\n"
+        "paste the authorization code at the prompt."
+    )
+    click.echo("─────────────────────────────────────────────────────────────")
+
+    # A neutral working directory: the sign-in has no business running in the
+    # clone, so even a probe that misbehaved could not touch the repository.
+    exec_handle = sandbox.exec_interactive(
+        invocation.argv,
+        workdir=Sandbox.WORKDIR,
+        timeout_s=ANTIGRAVITY_AUTH_TIMEOUT_S,
+    )
+
+    asked = False
+    try:
+        # ONE pass over the output, with the code supplied from inside it. Reading
+        # in two passes opens a second iterator over the same socket and loses the
+        # exchange — measured against real `agy`, which then waited out its full
+        # 60s for a code it never received. See `InteractiveExec.read_output`.
+        for line in exec_handle.read_output():
+            click.echo(line)
+            if asked or _AUTH_PROMPT_MARKER not in line.lower():
+                continue
+
+            asked = True
+            # Flushed before prompting so the consent URL is on screen first: a
+            # non-TTY stdout is block-buffered while the prompt flushes
+            # immediately, which would ask for a code before showing the URL to
+            # get it from.
+            sys.stdout.flush()
+
+            code = click.prompt(
+                "Authorization code", hide_input=True, prompt_suffix=": "
+            ).strip()
+            if not code:
+                raise AuthError(
+                    f"No authorization code was entered, so the {agent} agent "
+                    "could not be signed in."
+                )
+
+            # Written through the SAME socket the loop above is reading, with no
+            # settle delay. An earlier version slept here; that was compensating
+            # for the two-pass read, not for anything real. Measured after the
+            # single-pass fix: 4/4 deliveries with zero delay.
+            #
+            # Redaction arms itself inside `send_line`, so the TTY echo that
+            # arrives on the next iteration is already covered.
+            exec_handle.send_line(code)
+
+        tail = exec_handle.flush_remaining()
+        if tail.strip():
+            click.echo(tail)
+
+        if exec_handle.timed_out:
+            raise AuthError(
+                f"The {agent} sign-in produced no further output for "
+                f"{ANTIGRAVITY_AUTH_TIMEOUT_S:.0f}s and was abandoned. Nothing "
+                "was started."
+            )
+
+        if not asked:
+            raise AuthError(
+                f"The {agent} sign-in ended before asking for an authorization "
+                "code. Its output is above."
+            )
+
+        exit_code = exec_handle.wait()
+        if exit_code not in (0, None):
+            raise AuthError(
+                f"The {agent} sign-in failed inside the Sandbox (exit code "
+                f"{exit_code}). Its output is above; the authorization code may "
+                "have expired or been mistyped. Nothing was started."
+            )
+    except KeyboardInterrupt as exc:
+        # Ctrl-C during a sign-in is a deliberate abort, and the `finally` in
+        # `run` still tears the Sandbox down.
+        raise AuthError(
+            f"The {agent} sign-in was cancelled. No agent was started."
+        ) from exc
+    finally:
+        exec_handle.close()
+
+    click.echo("Authenticated inside the Sandbox. Starting monitored agent run...")
+    click.echo("")
 
 
 def _upload_run_artifacts(run_dir: Path, run_id: str, backend_url: str) -> None:
