@@ -18,6 +18,7 @@ import userEvent from '@testing-library/user-event';
 
 import { createApiClient, createMemoryTokenStore } from './api.js';
 import RunDetailView, {
+  DecisionControls,
   DIFF_FILE_TESTID,
   EMPTY_DIFF_MESSAGE,
   EMPTY_SCREENSHOTS_MESSAGE,
@@ -29,6 +30,7 @@ import RunDetailView, {
   TIMELINE_EVENT_TESTID,
   sortEventsChronologically,
 } from './RunDetailView.jsx';
+import { RunStatusBadge } from './RunHistoryView.jsx';
 
 /** A stand-in for `Response`, which jsdom does not provide. */
 function jsonResponse(body, { status = 200, statusText = 'OK' } = {}) {
@@ -316,6 +318,20 @@ it('re-fetches when the Reviewer retries after a transport failure', async () =>
   await waitFor(() => expect(screen.getAllByTestId(DIFF_FILE_TESTID)).toHaveLength(2));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(calls).toHaveLength(2);
+});
+
+it('offers no decision for a failed Run and shows its status as stored', () => {
+  // A `failed` Run ended before it could be reviewed, and `apply_decision`
+  // refuses anything but `awaiting_review`, so neither button is offered.
+  render(<DecisionControls status="failed" runId="run-20240508-ffff" />);
+
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+
+  render(<RunStatusBadge status="failed" />);
+
+  const badge = screen.getByText('failed');
+  expect(badge).toHaveAttribute('data-status', 'failed');
 });
 
 describe('sortEventsChronologically', () => {

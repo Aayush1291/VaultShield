@@ -6,12 +6,18 @@ with a registered `init` command. `init` now performs real file writes
 isolated filesystem to avoid writing `.vaultshield.yml` into the real repo.
 """
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from vaultshield import cli as cli_module
+from vaultshield import git_capture
 from vaultshield.adapters.antigravity import Antigravity_Adapter
+from vaultshield.adapters.base import AdapterError, AuthError
 from vaultshield.adapters.codex import Codex_Adapter
 from vaultshield.adapters.kiro import Kiro_Adapter
 from vaultshield.browser_capture import (
@@ -21,7 +27,10 @@ from vaultshield.browser_capture import (
 )
 from vaultshield.cli import _AGENT_ADAPTERS, cli
 from vaultshield.git_capture import GitCaptureError, run_branch_name
+from vaultshield.monitor import OffLimitsViolation
 from vaultshield.run_directory import diff_path, event_log_path, screenshots_dir
+from vaultshield.sandbox import ExecResult, SandboxError
+from vaultshield.sandbox_monitor import SandboxMonitorError
 from vaultshield.submit import CredentialError, SubmitError
 from vaultshield.teardown import TeardownError
 from vaultshield.uploader import UploadError, token_path
@@ -72,11 +81,18 @@ def test_init_reports_detected_config_path():
 # are covered by Task 8.3's own test; the checks here are the ones that are
 # meaningful without one.
 
+# A backend Project id shaped like the real thing (a 24-hex ObjectId). `run`
+# now registers its Run under a project before any Sandbox exists, so every
+# `run` invocation that is meant to get past step 1 names one; the backend is
+# stubbed, so the value is never checked against a real Project.
+_PROJECT_ID = "0123456789abcdef01234567"
+
 _RUN_ARGS = [
     "run",
     "--agent=mock",
     "--prompt=do the thing",
     "--repo-url=https://example.com/acme/widgets.git",
+    f"--project={_PROJECT_ID}",
 ]
 
 # An `--agent` value the dispatch table will never hold, used to exercise
@@ -243,10 +259,19 @@ routes:
 _TEST_TOKEN = "test-dashboard-token"
 
 
-def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
+def _wire_run_pipeline(
+    monkeypatch,
+    capture,
+    commit=None,
+    upload=None,
+    create=None,
+    complete=None,
+    mark_failed=None,
+):
     """Stands in for `run`'s network- and Docker-dependent stages: the
     Sandbox, the Monitor, Browser_Capture_Module (`capture`), git capture,
-    and the Uploader.
+    the Uploader, and the backend Run registration, completion and failed
+    mark.
 
     `commit` optionally replaces what `commit_run_branch` does — return a
     branch name, or raise — and defaults to committing successfully to this
@@ -255,12 +280,28 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
     to fail replaces `uploader.load_token` after calling this, since this
     stub returns a token successfully.
 
+    The three backend Run-control calls (`uploader.create_run`,
+    `complete_run`, `mark_run_failed`) are recorded into `seen["backend"]`,
+    a list of `("create" | "complete" | "failed", details)`, and NOT into
+    `calls`, so every exact `calls == [...]` assertion about the pipeline's
+    stages is unaffected by them. By default each succeeds. `create`,
+    `complete`, and `mark_failed` optionally take over one of them: when
+    given, the stub also appends `"backend.create"` / `"backend.complete"` /
+    `"backend.failed"` to `calls` (so a test can assert ordering against
+    `"sandbox.teardown"` and `"upload"`), then calls it with the `run_id`. A
+    `create`/`complete` that raises is the failure under test; whatever
+    `mark_failed` returns is `mark_run_failed`'s return value (`None` or a
+    warning), and it may also raise.
+
+    `docker.from_env` is recorded in `seen["docker_from_env_calls"]` (a
+    count), again outside `calls`.
+
     Returns `(calls, seen)`: `calls` is the stage-invocation log, in order,
-    and `seen` records what the Sandbox, the capture, git capture, and the
-    upload were handed.
+    and `seen` records what the Sandbox, the capture, git capture, the
+    upload, and the backend were handed.
     """
     calls: list[str] = []
-    seen: dict[str, object] = {}
+    seen: dict[str, object] = {"backend": []}
 
     class _RecordingSandbox:
         def __init__(self, run_id, client):
@@ -268,10 +309,13 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
             seen["sandbox"] = self
 
         def create(
-            self, repo_url, base_image, env_file, *, publish_port=None, project_dir=""
+            self, repo_url, base_image, env_file, *, publish_port=None, project_dir="",
+            **egress_kwargs,
         ):
             calls.append("sandbox.create")
             seen["publish_port"] = publish_port
+            # Batch 3 D11: the egress guard's extra kwargs; `{}` with egress off.
+            seen["create_egress_kwargs"] = egress_kwargs
             # `project_dir` moves where dependencies are installed for a repo
             # whose application is nested. Recorded, not just tolerated, so the
             # test below can assert `run` forwards the validated config value.
@@ -298,12 +342,16 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
         # The real implementation writes the Event_Log before returning, and the
         # failure messages under test name that path, so it has to exist.
         log_path = event_log_path(run_dir)
-        log_path.write_text("")
+        # Appends, like the real writer (`_append_event_log`), so an event
+        # recorded before the agent (Batch 3 snapshot #1) survives.
+        with log_path.open("a"):
+            pass
         return log_path
 
-    def _start_and_capture(sandbox, config, run_dir, ready_timeout_s=None):
+    def _start_and_capture(sandbox, config, run_dir, ready_timeout_s=None, *, published_by=None):
         calls.append("browser_capture")
         seen["capture_args"] = (sandbox, config, run_dir, ready_timeout_s)
+        seen["published_by"] = published_by
         return capture(run_dir)
 
     def _commit_run_branch(sandbox, run_id):
@@ -312,6 +360,13 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
         if commit is not None:
             return commit(run_id)
         return run_branch_name(run_id)
+
+    def _resolve_diff_base(sandbox, branch):
+        # Not recorded in `calls`: choosing the base ref is part of the
+        # diff stage, not a stage of its own. `seen["base_args"]` proves it
+        # was asked about this Run's Sandbox and branch.
+        seen["base_args"] = (sandbox, branch)
+        return f"{branch}~1"
 
     def _build_structured_diff(sandbox, base_ref, branch, run_dir):
         calls.append("git.diff")
@@ -328,20 +383,139 @@ def _wire_run_pipeline(monkeypatch, capture, commit=None, upload=None):
         # token this returned is the one the upload was given.
         return _TEST_TOKEN
 
-    def _upload_run(run_dir, run_id, backend_url, token):
+    def _upload_run(run_dir, run_id, backend_url, token, *, scrub=None):
         calls.append("upload")
         seen["upload_args"] = (run_dir, run_id, backend_url, token)
+        # Batch 3 FR5: `run` always hands the upload its SecretSet's scrub.
+        seen["upload_scrub"] = scrub
         if upload is not None:
             upload(run_id)
 
+    def _create_run(backend_url, token, *, project, run_id, agent):
+        seen["backend"].append(
+            (
+                "create",
+                {
+                    "backend_url": backend_url,
+                    "token": token,
+                    "project": project,
+                    "run_id": run_id,
+                    "agent": agent,
+                },
+            )
+        )
+        if create is not None:
+            calls.append("backend.create")
+            create(run_id)
+
+    def _complete_run(backend_url, token, run_id):
+        seen["backend"].append(("complete", (backend_url, token, run_id)))
+        if complete is not None:
+            calls.append("backend.complete")
+            complete(run_id)
+
+    def _mark_run_failed(backend_url, token, run_id):
+        seen["backend"].append(("failed", (backend_url, token, run_id)))
+        if mark_failed is not None:
+            calls.append("backend.failed")
+            return mark_failed(run_id)
+        return None
+
+    def _from_env():
+        seen["docker_from_env_calls"] = seen.get("docker_from_env_calls", 0) + 1
+        return object()
+
+    # Batch 3 trusted capture (§5.4.1). Recorded into `seen["trusted"]`, NOT
+    # into `calls`, so every exact `calls == [...]` assertion about the
+    # pipeline's stages is unaffected; `test_run_trusted_capture_order` below
+    # asserts their order against `calls` through `seen["timeline"]`.
+    seen["trusted"] = []
+    seen["timeline"] = calls
+
+    class _TrustedBase:
+        commit_oid = None
+
+        def close(self):
+            seen["trusted"].append("base.close")
+
+    class _Split:
+        notices: list = []
+
+        def close(self):
+            seen["trusted"].append("split.close")
+
+    class _RecordingCapture:
+        def __init__(self, run_id, client, *, image_id):
+            seen["capture_helper"] = self
+            seen["trusted"].append("capture.init")
+
+        def start(self):
+            seen["trusted"].append("capture.start")
+
+        def load(self, split, base):
+            seen["trusted"].append("capture.load")
+
+        def remove(self):
+            seen["trusted"].append("capture.remove")
+
+    def _record_trusted_base(sandbox, *, caps):
+        seen["trusted"].append(("record_trusted_base", len(calls)))
+        return _TrustedBase()
+
+    def _kill_sandbox(sandbox):
+        seen["trusted"].append(("kill_sandbox", len(calls)))
+
+    def _archive(sandbox, *, caps):
+        seen["trusted"].append("archive")
+        return _Split()
+
+    def _check_run_outputs(capture_obj, secrets, run_dir, branch, base_ref):
+        seen["trusted"].append("check_run_outputs")
+        seen["check_args"] = (capture_obj, secrets, run_dir, branch, base_ref)
+
+    def _remove_capture_helper(run_id, client):
+        seen["trusted"].append("remove_capture_helper")
+        return False
+
+    def _upload_events_best_effort(backend_url, token, run_id, run_dir, *, scrub):
+        seen.setdefault("events_upload", []).append(run_id)
+        return None
+
+    def _snapshot(sandbox, roots, *, credential_files=None):
+        from vaultshield.token_hygiene import SecretSet, Snapshot
+
+        seen["trusted"].append(("snapshot", len(calls), credential_files))
+        return Snapshot(
+            secrets=SecretSet(),
+            credential_files=frozenset() if credential_files is None else credential_files,
+            skipped=seen.get("snapshot_skipped", 0),
+        )
+
+    monkeypatch.setattr(cli_module.token_hygiene, "snapshot", _snapshot)
+    monkeypatch.setattr(cli_module, "record_trusted_base", _record_trusted_base)
+    monkeypatch.setattr(cli_module, "kill_sandbox", _kill_sandbox)
+    monkeypatch.setattr(cli_module, "sandbox_image_id", lambda sandbox: "sha256:fake")
+    monkeypatch.setattr(cli_module, "TrustedCapture", _RecordingCapture)
+    monkeypatch.setattr(cli_module, "archive_sandbox_repo", _archive)
+    monkeypatch.setattr(cli_module, "check_run_outputs", _check_run_outputs)
+    monkeypatch.setattr(
+        cli_module.trusted_capture, "remove_capture_helper", _remove_capture_helper
+    )
+    monkeypatch.setattr(
+        cli_module.uploader, "upload_events_best_effort", _upload_events_best_effort
+    )
     monkeypatch.setattr(cli_module, "Sandbox", _RecordingSandbox)
     monkeypatch.setattr(cli_module, "supervise_in_sandbox", _supervise_in_sandbox)
     monkeypatch.setattr(cli_module, "start_and_capture", _start_and_capture)
     monkeypatch.setattr(cli_module, "commit_run_branch", _commit_run_branch)
     monkeypatch.setattr(cli_module, "build_structured_diff", _build_structured_diff)
+    monkeypatch.setattr(cli_module, "resolve_diff_base", _resolve_diff_base)
     monkeypatch.setattr(cli_module.uploader, "load_token", _load_token)
     monkeypatch.setattr(cli_module.uploader, "upload_run", _upload_run)
-    monkeypatch.setattr(cli_module.docker, "from_env", lambda: object())
+    monkeypatch.setattr(cli_module.uploader, "create_run", _create_run)
+    monkeypatch.setattr(cli_module.uploader, "complete_run", _complete_run)
+    monkeypatch.setattr(cli_module.uploader, "mark_run_failed", _mark_run_failed)
+    monkeypatch.setattr(cli_module.docker, "from_env", _from_env)
     return calls, seen
 
 
@@ -471,9 +645,10 @@ def test_run_succeeds_with_no_configured_routes(monkeypatch):
 # Requirements 10.1 and 10.2): that `commit_run_branch` and then
 # `build_structured_diff` run immediately after Browser_Capture_Module and
 # before teardown, that they are handed this Run's Sandbox, `run_id`, and
-# Run_Directory, that the diff is computed against the capture commit's
-# first parent, and that a failed capture fails the Run while still tearing
-# the Sandbox down.
+# Run_Directory, that the diff is computed against the base
+# `resolve_diff_base` returns (the capture commit's first parent, or the
+# empty tree for a root commit), and that a failed capture fails the Run
+# while still tearing the Sandbox down.
 #
 # What the two functions actually do to a repository — the branch name, the
 # commit contents, `diff.json`'s shape and counts — is Task 12.1/12.2's own
@@ -503,15 +678,19 @@ def test_run_captures_the_branch_and_diff_after_browser_capture(monkeypatch):
             "upload",
         ]
 
+        # Batch 3 FR5 (trusted capture): git capture runs on the capture
+        # helper, never on the Sandbox.
         commit_sandbox, run_id = seen["commit_args"]
-        assert commit_sandbox is seen["sandbox"]
+        assert commit_sandbox is seen["capture_helper"]
+        assert commit_sandbox is not seen["sandbox"]
 
         diff_sandbox, base_ref, branch, run_dir = seen["diff_args"]
-        assert diff_sandbox is seen["sandbox"]
+        assert diff_sandbox is seen["capture_helper"]
         # `vaultshield/run-<run_id>` for this Run (Requirement 10.1), diffed
-        # against the capture commit's first parent — the pre-agent state of
-        # the Sandbox's clone.
+        # against the base `resolve_diff_base` chose for it: the capture
+        # commit's first parent, or the empty tree for a root commit.
         assert branch == run_branch_name(run_id)
+        assert seen["base_args"] == (seen["capture_helper"], branch)
         assert base_ref == f"{branch}~1"
         # Requirement 10.2: saved into this Run's Run_Directory, the same one
         # browser capture was handed.
@@ -633,6 +812,7 @@ def test_run_uploads_for_every_registered_agent(monkeypatch):
                     f"--agent={agent}",
                     "--prompt=do the thing",
                     "--repo-url=https://example.com/acme/widgets.git",
+                    f"--project={_PROJECT_ID}",
                 ],
             )
 
@@ -640,11 +820,18 @@ def test_run_uploads_for_every_registered_agent(monkeypatch):
             assert calls[-1] == "upload", agent
 
 
-def test_run_reports_a_missing_token_and_preserves_the_artifacts(monkeypatch):
+def test_run_aborts_before_any_sandbox_without_a_token(monkeypatch):
+    """REWRITTEN for Batch 2 (approved premise change). This used to be
+    `test_run_reports_a_missing_token_and_preserves_the_artifacts`, which ran
+    the whole Run and found the missing token only at upload. The token is
+    now needed to register the Run in step 2b, before any Sandbox exists, so
+    no Event_Log or diff is ever written to preserve; what this asserts
+    instead is that nothing past the Run_Directory was started at all.
+    """
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path(".vaultshield.yml").write_text(_CONFIG_YAML)
-        calls, _ = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
 
         def _no_token():
             raise UploadError(
@@ -656,17 +843,16 @@ def test_run_reports_a_missing_token_and_preserves_the_artifacts(monkeypatch):
 
         result = runner.invoke(cli, _RUN_ARGS)
 
-        # Not logged in: the Run is reported as unuploaded, in one line, and
-        # nothing was posted.
+        # Not logged in: one line naming the fix, and nothing was started.
         assert result.exit_code != 0
         assert "vaultshield login" in result.output
+        assert "(no Sandbox was created)" in result.output
         assert "Traceback" not in result.output
+        assert "sandbox.create" not in calls
+        assert "sandbox" not in seen  # `Sandbox` was never constructed
+        assert "docker_from_env_calls" not in seen
+        assert [b for b in seen["backend"] if b[0] == "create"] == []
         assert "upload" not in calls
-        # Requirement 14.4: the artifacts the Run did produce are all still
-        # there, so the same Run can be uploaded once the token exists.
-        run_dir = next(Path(".vaultshield/runs").iterdir())
-        assert event_log_path(run_dir).is_file()
-        assert diff_path(run_dir).is_file()
 
 
 def test_run_reports_an_unreachable_backend_and_preserves_the_artifacts(monkeypatch):
@@ -700,6 +886,490 @@ def test_run_reports_an_unreachable_backend_and_preserves_the_artifacts(monkeypa
         assert str(run_dir) in result.output
         assert event_log_path(run_dir).is_file()
         assert diff_path(run_dir).read_text() == '{"files": []}\n'
+
+
+# --- Run registration, completion and the failed mark (Batch 2) ------------
+#
+# `run` registers its Run with the backend in step 2b, before any Docker call,
+# and aborts there if it cannot. From then on every failure marks the Run
+# `failed` exactly once, after the Sandbox teardown, without changing the
+# error the developer sees; the success path instead marks it
+# `awaiting_review` after the last artifact. What the three uploader calls
+# send over the wire is `test_uploader.py`'s; these are the wiring checks.
+
+_CONFIG_PROJECT_ID = "fedcba9876543210fedcba98"
+
+
+def _failed_marks(seen) -> list:
+    """The `mark_run_failed` calls `_wire_run_pipeline` recorded."""
+    return [entry for entry in seen["backend"] if entry[0] == "failed"]
+
+
+def _error_line(output: str) -> str:
+    """The single `Error: ...` line Click prints for a ClickException."""
+    lines = [line for line in output.splitlines() if line.startswith("Error: ")]
+    assert len(lines) == 1, output
+    return lines[0]
+
+
+def _run_args_without_project() -> list[str]:
+    return [arg for arg in _RUN_ARGS if not arg.startswith("--project=")]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("backend_down", "All connection attempts failed"),
+        ("token_rejected", "vaultshield login --backend-url http://localhost:8000"),
+        ("missing_token", "vaultshield login"),
+    ],
+)
+def test_run_aborts_before_any_sandbox_when_the_run_cannot_be_registered(
+    monkeypatch, case, expected
+):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+
+        def _refuse(run_id):
+            if case == "backend_down":
+                raise UploadError(
+                    "Cannot reach the VaultShield backend at "
+                    "http://localhost:8000/api/runs/: All connection attempts failed"
+                )
+            raise UploadError(
+                "The backend at http://localhost:8000/api/runs/ rejected the "
+                "dashboard auth token (HTTP 401). Run `vaultshield login "
+                "--backend-url http://localhost:8000` again."
+            )
+
+        calls, seen = _wire_run_pipeline(
+            monkeypatch, lambda run_dir: [], create=_refuse
+        )
+        if case == "missing_token":
+
+            def _no_token():
+                raise UploadError(
+                    f"No dashboard auth token at {token_path()}. Run "
+                    "`vaultshield login` first."
+                )
+
+            monkeypatch.setattr(cli_module.uploader, "load_token", _no_token)
+
+        result = runner.invoke(cli, _RUN_ARGS)
+
+        # Acceptance 8: non-zero, one line naming the cause, and nothing was
+        # started — no Docker client, no Sandbox, no failed mark (there is no
+        # registered Run to mark).
+        assert result.exit_code != 0
+        line = _error_line(result.output)
+        assert line.startswith("Error: Cannot start run ")
+        assert expected in line
+        assert line.endswith("(no Sandbox was created)")
+        assert "Traceback" not in result.output
+        assert "sandbox" not in seen
+        assert "docker_from_env_calls" not in seen
+        assert "sandbox.create" not in calls
+        assert _failed_marks(seen) == []
+
+
+def test_run_without_a_project_stops_before_anything_exists(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+
+        result = runner.invoke(cli, _run_args_without_project())
+
+        assert result.exit_code != 0
+        line = _error_line(result.output)
+        assert "No project for this Run" in line
+        assert "--project <project-id>" in line
+        assert "GET /api/projects/" in line
+        assert "Traceback" not in result.output
+        # Resolved in step 1, so not even the Run_Directory exists.
+        assert not Path(".vaultshield").exists()
+        assert seen["backend"] == []
+        assert "sandbox" not in seen
+        assert "docker_from_env_calls" not in seen
+        assert calls == []
+
+
+def test_run_option_project_beats_the_config_project(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(
+            _CONFIG_YAML + f"project: {_CONFIG_PROJECT_ID}\n"
+        )
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+
+        result = runner.invoke(cli, _RUN_ARGS)
+
+        assert result.exit_code == 0, result.output
+        [(kind, details)] = [b for b in seen["backend"] if b[0] == "create"]
+        assert details["project"] == _PROJECT_ID
+
+
+def test_run_uses_the_config_project_without_the_option(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(
+            _CONFIG_YAML + f"project: {_CONFIG_PROJECT_ID}\n"
+        )
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+
+        result = runner.invoke(cli, _run_args_without_project())
+
+        assert result.exit_code == 0, result.output
+        [(kind, details)] = [b for b in seen["backend"] if b[0] == "create"]
+        assert details["project"] == _CONFIG_PROJECT_ID
+
+
+def test_run_rejects_a_config_project_of_the_wrong_type(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML + "project:\n  - a\n  - b\n")
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+
+        result = runner.invoke(cli, _RUN_ARGS)
+
+        # A `ConfigError`, so step 1 stops the Run with nothing on disk, even
+        # though `--project` was given.
+        assert result.exit_code != 0
+        assert "`project`" in result.output
+        assert "Traceback" not in result.output
+        assert not Path(".vaultshield").exists()
+        assert seen["backend"] == []
+
+
+def test_run_registers_then_completes_the_run_after_the_last_upload(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(
+            monkeypatch, lambda run_dir: [], complete=lambda run_id: None
+        )
+
+        result = runner.invoke(cli, _RUN_ARGS)
+
+        assert result.exit_code == 0, result.output
+        # Acceptance 11: exactly one completion PATCH, after the upload, and
+        # no failed mark.
+        assert calls[-3:] == ["sandbox.teardown", "upload", "backend.complete"]
+        assert [b[0] for b in seen["backend"]] == ["create", "complete"]
+        _, created = seen["backend"][0]
+        run_id = seen["commit_args"][1]
+        assert created == {
+            "backend_url": "http://localhost:8000",
+            "token": _TEST_TOKEN,
+            "project": _PROJECT_ID,
+            "run_id": run_id,
+            "agent": "mock",
+        }
+        assert seen["backend"][1] == (
+            "complete",
+            ("http://localhost:8000", _TEST_TOKEN, run_id),
+        )
+        assert f"Run {run_id} registered with http://localhost:8000." in result.output
+
+
+def _arrange_stage_failure(monkeypatch, stage: str):
+    """Wires the pipeline so that `stage` fails, with the failed mark recorded
+    into `calls` as `"backend.failed"`. Returns `(calls, seen, extra_args)`.
+    """
+    capture = lambda run_dir: []  # noqa: E731 - the harness's default shape
+    wire = {"mark_failed": lambda run_id: None}
+    extra: list[str] = []
+
+    if stage == "readiness_timeout":
+
+        def capture(run_dir):
+            raise ReadinessTimeout("http://127.0.0.1:54321/healthz", 60)
+
+    elif stage == "screenshot_error":
+
+        def capture(run_dir):
+            raise ScreenshotError(
+                "Failed to capture a screenshot of http://127.0.0.1:1/: boom",
+                saved=[],
+            )
+
+    elif stage == "keyboard_interrupt":
+
+        def capture(run_dir):
+            raise KeyboardInterrupt
+
+    elif stage == "git_capture":
+
+        def _refused(run_id):
+            raise GitCaptureError("Git capture failed: fatal: refused by test")
+
+        wire["commit"] = _refused
+    elif stage == "upload":
+
+        def _unreachable(run_id):
+            raise UploadError("Upload failed at stage 'events': backend gone")
+
+        wire["upload"] = _unreachable
+    elif stage == "completion":
+
+        def _conflict(run_id):
+            raise UploadError(
+                "The backend refused to mark the run ready for review: it is "
+                "no longer running (backend reports `failed`)"
+            )
+
+        wire["complete"] = _conflict
+
+    calls, seen = _wire_run_pipeline(monkeypatch, capture, **wire)
+
+    if stage == "credential_file":
+        extra.append("--env-file=missing.env")
+    elif stage == "docker_from_env":
+
+        def _no_daemon():
+            raise cli_module.docker.errors.DockerException("daemon not running")
+
+        monkeypatch.setattr(cli_module.docker, "from_env", _no_daemon)
+    elif stage == "sandbox_create":
+        recording = cli_module.Sandbox
+
+        class _FailingCreate(recording):
+            def create(self, *args, **kwargs):
+                super().create(*args, **kwargs)
+                raise SandboxError("Sandbox creation failed: clone refused by test")
+
+        monkeypatch.setattr(cli_module, "Sandbox", _FailingCreate)
+    elif stage == "interactive_auth":
+
+        def _auth(sandbox, adapter, agent):
+            raise AuthError("The mock sign-in failed inside the Sandbox by test")
+
+        monkeypatch.setattr(cli_module, "_authenticate_in_sandbox", _auth)
+        extra.append("--interactive-auth")
+    elif stage.startswith("supervise_"):
+        error = {
+            "supervise_adapter_error": AdapterError("mock agent exited 3 by test"),
+            "supervise_off_limits": OffLimitsViolation("protected.txt", "protected.txt"),
+            "supervise_monitor_error": SandboxMonitorError("no python on PATH by test"),
+            "supervise_os_error": OSError("watch could not be established by test"),
+        }[stage]
+
+        def _supervise(*args, **kwargs):
+            calls.append("monitor.supervise_in_sandbox")
+            raise error
+
+        monkeypatch.setattr(cli_module, "supervise_in_sandbox", _supervise)
+
+    return calls, seen, extra
+
+
+# (stage, text the original error surfaces with, whether a Sandbox existed)
+_STAGE_FAILURES = [
+    ("credential_file", "--env-file not found", False),
+    ("docker_from_env", "Cannot reach the Docker daemon", False),
+    ("sandbox_create", "clone refused by test", True),
+    ("interactive_auth", "sign-in failed inside the Sandbox by test", True),
+    ("supervise_adapter_error", "mock agent exited 3 by test", True),
+    ("supervise_off_limits", "off_limits_paths violation: protected.txt", True),
+    ("supervise_monitor_error", "no python on PATH by test", True),
+    ("supervise_os_error", "watch could not be established by test", True),
+    ("readiness_timeout", "No screenshots were captured", True),
+    ("screenshot_error", "Failed to capture a screenshot", True),
+    ("git_capture", "fatal: refused by test", True),
+    ("upload", "could not be uploaded: Upload failed at stage 'events'", True),
+    ("completion", "could not be marked ready for review", True),
+    ("keyboard_interrupt", "Aborted!", True),
+]
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected", "sandbox_existed"),
+    _STAGE_FAILURES,
+    ids=[case[0] for case in _STAGE_FAILURES],
+)
+def test_a_failure_at_any_stage_marks_the_run_failed_exactly_once(
+    monkeypatch, stage, expected, sandbox_existed
+):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen, extra = _arrange_stage_failure(monkeypatch, stage)
+
+        result = runner.invoke(cli, [*_RUN_ARGS, *extra])
+
+        # The original error is what surfaces, unchanged.
+        if stage == "keyboard_interrupt":
+            assert result.exit_code == 1
+        else:
+            assert result.exit_code != 0
+            assert expected in _error_line(result.output)
+        assert expected in result.output
+        assert "Traceback" not in result.output
+        assert "Warning:" not in result.output
+
+        # Acceptance 9: exactly one failed mark, for the registered Run, and
+        # it is the last thing `run` did.
+        [created] = [b for b in seen["backend"] if b[0] == "create"]
+        run_id = created[1]["run_id"]
+        assert _failed_marks(seen) == [
+            ("failed", ("http://localhost:8000", _TEST_TOKEN, run_id))
+        ]
+        assert calls.count("backend.failed") == 1
+        assert calls[-1] == "backend.failed"
+        if sandbox_existed:
+            # Teardown first, then the failed PATCH.
+            assert calls.index("sandbox.teardown") < calls.index("backend.failed")
+        else:
+            assert "sandbox" not in seen
+            assert "sandbox.teardown" not in calls
+        # The artifacts directory is left as it was: nothing is cleaned up.
+        assert (Path(".vaultshield/runs") / run_id).is_dir()
+
+
+def _invoke_with_a_git_capture_failure(monkeypatch, mark_failed):
+    """Runs `run` to a git-capture failure with `mark_failed` standing in for
+    `mark_run_failed`'s outcome. Returns `(result, run_id)`."""
+
+    def _refused(run_id):
+        raise GitCaptureError("Git capture failed: fatal: refused by test")
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        _, seen = _wire_run_pipeline(
+            monkeypatch, lambda run_dir: [], commit=_refused, mark_failed=mark_failed
+        )
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert len(_failed_marks(seen)) == 1
+        run_id = seen["backend"][0][1]["run_id"]
+        # The error names the Run_Directory, whose path differs per isolated
+        # filesystem and per run_id; normalised so two runs can be compared.
+        error = _error_line(result.output)
+        error = error.replace(str(Path.cwd()), "<cwd>").replace(run_id, "<id>")
+        return result, run_id, error
+
+
+def _raise_runtime_error(run_id):
+    raise RuntimeError("detail-that-must-not-be-printed")
+
+
+@pytest.mark.parametrize(
+    ("mark_failed", "warning"),
+    [
+        (lambda run_id: "backend answered HTTP 500: boom", "backend answered HTTP 500: boom"),
+        (_raise_runtime_error, "unexpected RuntimeError"),
+    ],
+    ids=["returns_a_warning", "raises"],
+)
+def test_a_failed_mark_that_fails_does_not_change_the_original_error(
+    monkeypatch, mark_failed, warning
+):
+    baseline, _, baseline_error = _invoke_with_a_git_capture_failure(
+        monkeypatch, lambda run_id: None
+    )
+    result, run_id, error = _invoke_with_a_git_capture_failure(monkeypatch, mark_failed)
+
+    # Acceptance 10: same exit code, same error text, at most one warning line,
+    # and no traceback — the mark's own failure never replaces the original.
+    assert result.exit_code == baseline.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert error == baseline_error
+    assert "fatal: refused by test" in error
+    assert "Warning:" not in baseline.output
+    warnings = [line for line in result.output.splitlines() if "Warning:" in line]
+    assert warnings == [
+        f"Warning: could not mark run {run_id} as failed on the backend: {warning}"
+    ]
+    assert "detail-that-must-not-be-printed" not in result.output
+    assert "Traceback" not in result.output
+
+
+class _LocalGitSandbox:
+    """A minimal `Sandbox` stand-in whose `exec` runs against a real local
+    repository instead of inside a container — the same shape as
+    `LocalGitSandbox` in `test_git_capture.py`: the repository is the working
+    directory, a non-zero exit is returned rather than raised, and output is
+    decoded the way `Sandbox.exec` decodes it."""
+
+    def __init__(self, repo: Path, env: dict[str, str]) -> None:
+        self.repo = repo
+        self.env = env
+
+    def exec(self, cmd: list[str], *, env: dict[str, str] | None = None) -> ExecResult:
+        # `env` mirrors `Sandbox.exec(cmd, env=...)` (Batch 3 FR5).
+        completed = subprocess.run(
+            cmd, cwd=self.repo, env={**self.env, **(env or {})}, capture_output=True
+        )
+        return ExecResult(
+            exit_code=completed.returncode,
+            stdout=completed.stdout.decode("utf-8", errors="replace"),
+            stderr=completed.stderr.decode("utf-8", errors="replace"),
+            stdout_bytes=completed.stdout,
+        )
+
+
+def test_run_reports_diff_metadata_over_the_upload_cap(monkeypatch, tmp_path):
+    """Carried item 6(b): the user-facing text when the diff's metadata alone
+    is over `MAX_DIFF_REQUEST_BYTES`.
+
+    The REAL `build_structured_diff` runs, against a real single-commit
+    repository through a local-git stand-in for the Sandbox, with the cap
+    lowered so ten one-line files are over it. Only the pipeline's other
+    stages are stubbed.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
+
+    _git("init", "-q")
+    for index in range(10):
+        (repo / f"file{index}.txt").write_text(f"line {index}\n")
+    _git("add", "-A")
+    _git(
+        "-c", "user.name=Dev Eloper", "-c", "user.email=dev@example.invalid",
+        "-c", "commit.gpgsign=false", "commit", "-q", "-m", "ten files",
+    )
+    local = _LocalGitSandbox(repo, env)
+    # A single-commit repository: `HEAD~1` does not resolve, so this is the
+    # root-commit fallback, i.e. git's empty tree.
+    empty_tree = git_capture.resolve_diff_base(local, "HEAD")
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(
+            monkeypatch, lambda run_dir: [], mark_failed=lambda run_id: None
+        )
+        monkeypatch.setattr(git_capture, "MAX_DIFF_REQUEST_BYTES", 256)
+        monkeypatch.setattr(
+            cli_module,
+            "build_structured_diff",
+            lambda sandbox, base_ref, branch, run_dir: git_capture.build_structured_diff(
+                local, empty_tree, "HEAD", run_dir
+            ),
+        )
+
+        result = runner.invoke(cli, _RUN_ARGS)
+
+        assert result.exit_code != 0
+        line = _error_line(result.output)
+        assert "Run " in line
+        assert "failed:" in line
+        assert "MAX_DIFF_REQUEST_BYTES" in line
+        assert "10 changed files" in line
+        assert "events.jsonl" in line
+        assert "Traceback" not in result.output
+        assert len(_failed_marks(seen)) == 1
+        assert calls.index("sandbox.teardown") < calls.index("backend.failed")
+        # Raised before `diff.json` is written: no partial diff is left behind.
+        assert not list(Path(".vaultshield").rglob("diff.json"))
 
 
 # --- `login` command wiring (Task 18.1) ------------------------------------
@@ -1323,3 +1993,230 @@ def test_run_rejects_a_traversing_project_dir_before_any_side_effect(monkeypatch
         # Nothing was created: the same guarantee the other config-rejection
         # tests above assert.
         assert not Path(".vaultshield").exists()
+
+
+# --- Batch 3: egress, trusted capture, token hygiene in `run` ----------------
+
+
+class _RecordingGuard:
+    """Stands in for `EgressGuard`; records into the pipeline's `calls`."""
+
+    def __init__(self, calls, *, active, fail_at=None):
+        self.calls, self.active, self.fail_at = calls, active, fail_at
+        self.port_publisher = object() if active else None
+
+    def start(self):
+        self.calls.append("guard.start")
+        if self.fail_at == "start":
+            raise cli_module.EgressError("egress: could not start the egress proxy: boom")
+
+    def sandbox_create_kwargs(self):
+        return {"network": "vaultshield-open-x", "cap_drop": ["NET_RAW"]} if self.active else {}
+
+    def isolate(self, sandbox):
+        self.calls.append("guard.isolate")
+        if self.fail_at == "isolate":
+            raise cli_module.EgressError("egress: could not isolate sandbox network: x")
+
+    def teardown(self, run_dir):
+        self.calls.append("guard.teardown")
+        if self.fail_at == "teardown":  # a real guard never raises; prove it is contained anyway
+            raise AssertionError("teardown must never be reached with a raise")
+
+
+def _install_guard(monkeypatch, calls, *, active=False, fail_at=None):
+    holder = {}
+
+    def _factory(run_id, client, policy, *, app_port):
+        holder["policy"] = policy
+        holder["guard"] = _RecordingGuard(calls, active=active, fail_at=fail_at)
+        return holder["guard"]
+
+    monkeypatch.setattr(cli_module, "EgressGuard", _factory)
+    return holder
+
+
+def test_run_egress_choices():
+    option = next(p for p in cli.commands["run"].params if p.name == "egress_mode")
+    assert list(option.type.choices) == ["off", "log-only", "allowlist"]
+    assert option.default is None
+
+
+def test_off_mode_creates_the_sandbox_exactly_as_before(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 0, result.output
+        assert seen["publish_port"] == 3000
+        assert seen["create_egress_kwargs"] == {}
+        assert seen["docker_from_env_calls"] == 1
+        # The scrub reaches the upload on the success path too.
+        assert callable(seen["upload_scrub"])
+
+
+def test_allowlist_call_order(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        holder = _install_guard(monkeypatch, calls, active=True)
+        result = runner.invoke(cli, [*_RUN_ARGS, "--egress=allowlist"])
+        assert result.exit_code == 0, result.output
+        assert holder["policy"].mode == "allowlist"
+        assert calls[:4] == ["guard.start", "sandbox.create", "guard.isolate", "monitor.supervise_in_sandbox"]
+        assert seen["publish_port"] is None
+        assert seen["create_egress_kwargs"]["cap_drop"] == ["NET_RAW"]
+        # Step 7 reaches the app through the proxy's published port (D4).
+        assert seen["published_by"] is holder["guard"].port_publisher is not None
+        assert calls.index("guard.teardown") == calls.index("sandbox.teardown") + 1
+
+
+def test_trusted_capture_order(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        _install_guard(monkeypatch, calls, active=True)
+        result = runner.invoke(cli, [*_RUN_ARGS, "--egress=allowlist"])
+        assert result.exit_code == 0, result.output
+        t = seen["trusted"]
+        # `record_trusted_base` after create + isolate, before the agent (index = len(calls) then).
+        rec = next(e for e in t if isinstance(e, tuple) and e[0] == "record_trusted_base")
+        assert calls[: rec[1]] == ["guard.start", "sandbox.create", "guard.isolate"]
+        snaps = [e for e in t if isinstance(e, tuple) and e[0] == "snapshot"]
+        assert len(snaps) == 3
+        assert snaps[0][2] is None and snaps[1][2] is not None and snaps[2][2] is not None
+        assert calls[snaps[0][1] - 1] == "guard.isolate"            # #1 before the agent
+        assert calls[snaps[1][1] - 1] == "monitor.supervise_in_sandbox"  # #2a after it
+        kill = next(e for e in t if isinstance(e, tuple) and e[0] == "kill_sandbox")
+        assert calls[kill[1] - 1] == "browser_capture"
+        names = [e if isinstance(e, str) else e[0] for e in t]
+        assert names.index("kill_sandbox") < names.index("snapshot", names.index("kill_sandbox"))
+        assert names.index("capture.start") < names.index("archive") < names.index("capture.load")
+        assert names.index("check_run_outputs") < names.index("capture.remove")
+        assert names.index("capture.remove") < names.index("remove_capture_helper")
+        assert names.index("split.close") < names.index("base.close")
+        assert seen["check_args"][0] is seen["capture_helper"]
+
+
+@pytest.mark.parametrize("fail_at", ["start", "isolate"])
+def test_an_egress_failure_marks_the_run_failed_once_after_teardown(monkeypatch, fail_at):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [], mark_failed=lambda r: None)
+        _install_guard(monkeypatch, calls, active=True, fail_at=fail_at)
+        result = runner.invoke(cli, [*_RUN_ARGS, "--egress=allowlist"])
+        assert result.exit_code == 1
+        assert "egress:" in result.output
+        assert calls.count("backend.failed") == 1
+        assert calls.index("backend.failed") > calls.index("guard.teardown") > calls.index("sandbox.teardown")
+
+
+def test_a_token_violation_uploads_only_the_scrubbed_timeline(monkeypatch):
+    from vaultshield.token_hygiene import Finding, TokenHygieneViolation
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [], mark_failed=lambda r: None)
+
+        def _violate(*a):
+            raise TokenHygieneViolation([Finding("credential_bytes", "diff.json", "a.txt")], ["/root/.gemini"])
+
+        monkeypatch.setattr(cli_module, "check_run_outputs", _violate)
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 1
+        assert "credential material from /root/.gemini found in diff.json" in result.output
+        assert "Event_Log preserved at" in result.output
+        assert "upload" not in calls
+        assert len(seen["events_upload"]) == 1
+        assert calls.count("backend.failed") == 1
+
+
+def test_the_events_upload_runs_before_the_failed_mark_and_cannot_mask_it(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [], mark_failed=lambda r: None)
+
+        def _boom_events(*a, **k):
+            calls.append("events_upload")
+            raise RuntimeError("must be swallowed")
+
+        def _git_fail(sandbox, run_id):
+            raise GitCaptureError("Git capture failed while creating branch x")
+
+        monkeypatch.setattr(cli_module.uploader, "upload_events_best_effort", _boom_events)
+        monkeypatch.setattr(cli_module, "commit_run_branch", _git_fail)
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 1
+        assert "Git capture failed while creating branch x" in result.output
+        assert calls.index("events_upload") < calls.index("backend.failed")
+        assert result.output.count("Warning: could not upload the timeline") == 1
+
+
+def test_a_failing_capture_helper_backstop_adds_one_warning_only(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+
+        def _refuse(run_id, client):
+            raise cli_module.docker.errors.APIError("refused")
+
+        monkeypatch.setattr(cli_module.trusted_capture, "remove_capture_helper", _refuse)
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 0, result.output
+        assert result.output.count("Warning: could not remove the capture helper") == 1
+
+
+def test_a_pre_agent_capture_failure_does_not_claim_an_event_log(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [], mark_failed=lambda r: None)
+
+        def _bad_base(sandbox, *, caps):
+            raise GitCaptureError("trusted capture: cannot read the pre-agent base commit: x")
+
+        monkeypatch.setattr(cli_module, "record_trusted_base", _bad_base)
+        result = runner.invoke(cli, _RUN_ARGS)
+        assert result.exit_code == 1
+        assert "(the agent never started)" in result.output
+        assert "Event_Log preserved" not in result.output
+        assert calls.count("backend.failed") == 1
+
+
+def test_a_skipped_snapshot_event_is_appended_only_when_needed(monkeypatch):
+    import json as _json
+
+    for skipped, expected in ((0, 0), (2, 3)):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+            calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+            seen["snapshot_skipped"] = skipped
+            result = runner.invoke(cli, _RUN_ARGS)
+            assert result.exit_code == 0, result.output
+            run_dir = seen["upload_args"][0]
+            lines = [l for l in event_log_path(run_dir).read_text().splitlines() if l.strip()]
+            payloads = [_json.loads(l)["payload"] for l in lines]
+            hits = [p for p in payloads if p.startswith("token hygiene: 2 credential-root files")]
+            # One per snapshot (#1, #2a, #2) when files were skipped, none otherwise.
+            assert len(hits) == expected
+
+
+def test_an_app_port_that_collides_with_the_proxy_stops_at_step_1(monkeypatch):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML.replace("port: 3000", "port: 443"))
+        calls, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        result = runner.invoke(cli, [*_RUN_ARGS, "--egress=allowlist"])
+        assert result.exit_code == 1
+        assert "app port 443 collides with the egress proxy" in result.output
+        assert not Path(".vaultshield/runs").exists()
+        assert "docker_from_env_calls" not in seen
+        assert seen["backend"] == []

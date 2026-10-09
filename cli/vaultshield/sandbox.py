@@ -61,7 +61,7 @@ import io
 import posixpath
 import socket
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, Sequence
 from urllib.parse import urlsplit
@@ -139,6 +139,9 @@ def container_path_under_repo(relative: str) -> str:
 # coreutils extension that busybox-based images (e.g. Alpine) don't
 # support, while `tail -f` is available on both.
 _KEEP_ALIVE_CMD = ["tail", "-f", "/dev/null"]
+# Public alias for the trusted capture helper (Batch 3 FR5, `trusted_capture`),
+# which keeps its own container alive the same way.
+KEEP_ALIVE_CMD = _KEEP_ALIVE_CMD
 
 _DEPENDENCY_INSTALL_SCRIPT = (
     "if [ -f package.json ]; then npm install; "
@@ -468,11 +471,19 @@ class ExecResult:
     caller actually needs — `exit_code` to check success, `stdout`/
     `stderr` as separate decoded text — rather than a single combined
     byte stream.
+
+    `stdout_bytes` is stdout exactly as the process wrote it, before
+    `_decode`'s lossy `errors="replace"`. `git_capture` needs it to tell a
+    file name that is not valid UTF-8 from one that really contains U+FFFD
+    (Requirement 17.1: the security scan must not be blinded silently). It
+    defaults to `b""` so hand-built results still construct, and
+    `repr=False` keeps large outputs out of error reprs.
     """
 
     exit_code: int
     stdout: str
     stderr: str
+    stdout_bytes: bytes = field(default=b"", repr=False)
 
 
 class SandboxError(Exception):
@@ -508,6 +519,18 @@ class Sandbox:
         self.run_id = run_id
         self.container: Container | None = None
         self._client = client
+        # Environment merged UNDER the caller's env in `exec_stream`,
+        # `exec_interactive` and `exec_detached` (Batch 3 FR2, D11). Empty by
+        # default, so every exec is today's. `egress.EgressGuard.isolate` sets
+        # the proxy variables (`HTTPS_PROXY`, `NO_PROXY`, …), which are not
+        # secrets. Exec env never persists into the container.
+        self.exec_env_defaults: dict[str, str] = {}
+
+    def _merged_env(self, env: dict[str, str] | None) -> dict[str, str] | None:
+        """`exec_env_defaults` overlaid with `env`, or `None` when both are
+        empty (so an exec without either is byte-identical to before)."""
+        merged = {**self.exec_env_defaults, **(env or {})}
+        return merged or None
 
     def create(
         self,
@@ -518,6 +541,10 @@ class Sandbox:
         publish_port: int | None = None,
         resolve_credential: Callable[[str], Credential] | None = None,
         project_dir: str = "",
+        network: str | None = None,
+        cap_drop: list[str] | None = None,
+        sysctls: dict[str, str] | None = None,
+        extra_hosts: dict[str, str] | None = None,
     ) -> None:
         """Builds/reuses `base_image`, clones `repo_url` into the container,
         mounts `env_file` at the expected path, installs dependencies.
@@ -579,6 +606,13 @@ class Sandbox:
         "private-repository cloning" note for how the token is kept away from
         both `argv` and the agent.
 
+        `network`, `cap_drop`, `sysctls` and `extra_hosts` (keyword-only, Batch 3
+        FR2, D11) are the egress guard's knobs: the per-Run open network the
+        clone and install run on, `["NET_RAW"]`, IPv6 off, and the allowlisted
+        names mapped to the egress proxy. Each is passed to `containers.create`
+        only when not `None`, so with all four left `None` (egress `off`, the
+        default) the call is byte-identical to before.
+
         Any exception raised by our own clone/install steps is already a
         `SandboxError` with a specific reason and is re-raised as-is
         (after cleanup) rather than being wrapped a second time. Any
@@ -596,6 +630,16 @@ class Sandbox:
 
             self._ensure_image(base_image)
 
+            egress_kwargs = {
+                key: value
+                for key, value in (
+                    ("network", network),
+                    ("cap_drop", cap_drop),
+                    ("sysctls", sysctls),
+                    ("extra_hosts", extra_hosts),
+                )
+                if value is not None
+            }
             self.container = self._client.containers.create(
                 base_image,
                 command=_KEEP_ALIVE_CMD,
@@ -613,6 +657,7 @@ class Sandbox:
                 ports=(
                     {f"{publish_port}/tcp": None} if publish_port is not None else None
                 ),
+                **egress_kwargs,
             )
             self.container.start()
 
@@ -626,9 +671,15 @@ class Sandbox:
                 f"Sandbox creation failed for run {self.run_id}: {exc}"
             ) from exc
 
-    def exec(self, cmd: list[str]) -> ExecResult:
+    def exec(self, cmd: list[str], *, env: dict[str, str] | None = None) -> ExecResult:
         """Runs `cmd` inside the existing container, returning its exit
         code and separated stdout/stderr.
+
+        `env` (keyword-only, Batch 3 FR5, D11) is passed to `exec_run` as the
+        process environment when given; it is how git capture's fixed
+        `_GIT_ENV` reaches git. Omitted, the call is exactly as before.
+        `exec_env_defaults` is deliberately NOT merged here: `exec` serves
+        VaultShield's own commands, not the agent's.
 
         Runs with `working_dir=_REPO_DIR` by default: `Sandbox` exists to
         operate on the cloned repository, so callers (git capture, browser
@@ -652,9 +703,14 @@ class Sandbox:
             )
 
         try:
-            exit_code, (stdout, stderr) = self.container.exec_run(
-                cmd, workdir=_REPO_DIR, demux=True
-            )
+            if env is None:
+                exit_code, (stdout, stderr) = self.container.exec_run(
+                    cmd, workdir=_REPO_DIR, demux=True
+                )
+            else:
+                exit_code, (stdout, stderr) = self.container.exec_run(
+                    cmd, workdir=_REPO_DIR, demux=True, environment=env
+                )
         except Exception as exc:
             raise SandboxError(
                 f"Sandbox exec failed for run {self.run_id}: {exc}"
@@ -664,6 +720,7 @@ class Sandbox:
             exit_code=exit_code,
             stdout=_decode(stdout),
             stderr=_decode(stderr),
+            stdout_bytes=stdout or b"",
         )
 
     def exec_detached(
@@ -714,7 +771,12 @@ class Sandbox:
 
         try:
             self.container.exec_run(
-                cmd, workdir=workdir or _REPO_DIR, environment=env, detach=True
+                cmd,
+                workdir=workdir or _REPO_DIR,
+                # `exec_env_defaults` under `env` (Batch 3 D11); `env` alone
+                # when there are no defaults, exactly as before.
+                environment=self._merged_env(env) if self.exec_env_defaults else env,
+                detach=True,
             )
         except Exception as exc:
             raise SandboxError(
@@ -778,7 +840,8 @@ class Sandbox:
                 self.container.id,
                 cmd,
                 workdir=workdir or _REPO_DIR,
-                environment=env or None,
+                # `exec_env_defaults` under `env` (Batch 3 D11).
+                environment=self._merged_env(env),
                 tty=tty,
                 stdout=True,
                 stderr=True,
@@ -842,7 +905,10 @@ class Sandbox:
                 self.container.id,
                 cmd,
                 workdir=workdir or _REPO_DIR,
-                # No `environment`: see the docstring.
+                # No caller env: see the docstring. Only `exec_env_defaults`
+                # (the egress proxy variables, Batch 3 D11, never a secret), and
+                # nothing at all when there are none.
+                environment=self._merged_env(None),
                 tty=True,
                 stdin=True,
                 stdout=True,

@@ -217,6 +217,17 @@ class Agent_Adapter(ABC):
         """
         return None
 
+    def credential_paths(self) -> tuple[str, ...]:
+        """Container paths holding this agent's own credential (Batch 3 FR5).
+
+        `token_hygiene.snapshot` reads them through the Docker API and the
+        host scans everything that leaves the machine for their bytes. Empty —
+        the default — means the agent keeps no credential file in the Sandbox
+        (an API key in the exec env is not covered; see the design's out of
+        scope list).
+        """
+        return ()
+
 
 class AuthError(Exception):
     """Raised when an agent's in-Sandbox authentication phase failed.

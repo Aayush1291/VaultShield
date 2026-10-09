@@ -84,9 +84,9 @@ executing in it. After that, no CLI command needs the container —
 `vaultshield submit` works from the host checkout and its
 Repository_Host_Provider credential, `vaultshield teardown` removes a
 container by name whatever the Run's status, and the dashboard reads
-uploaded rows — so `awaiting_review`, `approved`, `rejected`, and
-`submitted` are all states in which a still-`active` record is stale
-bookkeeping.
+uploaded rows — so `awaiting_review`, `approved`, `rejected`,
+`submitted`, and `failed` are all states in which a still-`active` record
+is stale bookkeeping.
 
 The consequence worth naming: a Run whose CLI was killed mid-flight keeps
 `status="running"` forever, so this task will never close its record out.
@@ -94,7 +94,9 @@ That follows from Requirement 25.1 rather than from a choice made here, and
 it fails in the safe direction — the alternative marks a long-running Run's
 live container as torn down. `vaultshield teardown <run-id>` is the
 unconditional, host-side answer for that case, and it is the only one that
-can actually remove the container.
+can actually remove the container. An error the CLI survives, by contrast,
+now ends in `failed` (a best-effort `PATCH status=failed`), which this task
+does reap.
 """
 
 from __future__ import annotations
@@ -190,7 +192,7 @@ def cleanup_orphaned_sandboxes(ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES) -
     so it is stated plainly rather than glossed:
 
     - It is not reachable through VaultShield's own lifecycle. `Run.status`
-      advances `running -> awaiting_review -> approved/rejected -> submitted`;
+      advances `running -> awaiting_review | failed -> approved/rejected -> submitted`;
       nothing moves a Run *back* to `running`, and only a hand-edit or a
       `PATCH /api/runs/:id/` could. A record also has to be `ttl_minutes`
       stale to be a candidate at all, so a Run actively heartbeating is not

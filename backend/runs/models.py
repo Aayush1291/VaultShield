@@ -43,21 +43,30 @@ class Run(models.Model):
     Created by the CLI through `POST /api/runs/` (Requirement 12.2), filled
     in by the artifact ingest endpoints (Requirement 13), moved through
     review by approve/reject (Requirement 21), and finished by
-    `vaultshield submit` writing `pr_url` (Requirement 22.4).
+    `vaultshield submit` writing `pr_url` (Requirement 22.4), or marked
+    `failed` by the CLI on any error after registration.
     """
 
-    # Requirement 11.2: Run_Status is exactly these five values. The
+    # Requirement 11.2: Run_Status is exactly these six values. The
     # display half of each pair intentionally repeats the stored value —
     # design.md specifies these as the literal Run_Status strings, and the
     # dashboard renders its own human-facing copy (Requirement 21.4's
     # "approved — awaiting submission"), so a prettified label here would
     # be a second, competing source of truth.
+    #
+    # `failed` is set by the CLI when a Run errors after it was registered
+    # (`PATCH status=failed`, only from `running`; see
+    # `runs.views.GATED_PATCH_TRANSITIONS`). It is terminal for the CLI: the
+    # completion PATCH (`awaiting_review`, also gated to `running`) refuses a
+    # `failed` Run. Only a hand-made, unrestricted `PATCH status=running`
+    # could revive one.
     STATUS_CHOICES = [
         ("running", "running"),
         ("awaiting_review", "awaiting_review"),
         ("approved", "approved"),
         ("rejected", "rejected"),
         ("submitted", "submitted"),
+        ("failed", "failed"),
     ]
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="runs")
@@ -177,7 +186,8 @@ class RunDiff(models.Model):
     # a per-file table: nothing queries individual file rows. The scanner
     # (Task 22.1) and the dashboard's Diff tab both read the whole change
     # set at once, so a JSON column keeps the round trip exact.
-    files = models.JSONField()  # [{"path", "additions", "deletions"}, ...]
+    # [{"path", "additions", "deletions", "patch"?, "patch_truncated"?}, ...]
+    files = models.JSONField()
 
     def __str__(self) -> str:
         return f"diff for {self.run.run_id}"

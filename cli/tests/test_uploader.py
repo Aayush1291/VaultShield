@@ -44,8 +44,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Iterator
 
+import httpx
 import pytest
 
+from vaultshield import uploader
 from vaultshield.run_directory import (
     diff_path,
     event_log_path,
@@ -55,11 +57,16 @@ from vaultshield.uploader import (
     DIFF_PATH_TEMPLATE,
     EVENTS_PATH_TEMPLATE,
     LOGIN_PATH,
+    RUN_DETAIL_PATH_TEMPLATE,
+    RUNS_PATH,
     SCREENSHOTS_PATH_TEMPLATE,
     TOKEN_FILE_MODE,
     UploadError,
+    complete_run,
+    create_run,
     load_token,
     login,
+    mark_run_failed,
     store_token,
     token_path,
     upload_run,
@@ -451,6 +458,11 @@ class _IngestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    # The Run-control PATCHes (`complete_run`, `mark_run_failed`) are recorded
+    # and answered exactly like a POST. Tests tell the two apart by path
+    # (`/api/runs/` vs `/api/runs/<id>/`), so `_IngestRequest` stays as is.
+    do_PATCH = do_POST  # noqa: N815 - name fixed by BaseHTTPRequestHandler
+
     def log_message(self, *args: object) -> None:
         """Silences the handler's default stderr access log."""
 
@@ -778,3 +790,270 @@ def test_upload_run_rejects_an_unsafe_run_id_before_any_request(tmp_path: Path):
 
     assert "../projects" in str(excinfo.value)
     assert received == []
+
+
+# --- create_run / complete_run / mark_run_failed (Batch 2) -----------------
+#
+# The Run-control calls `run` makes around the artifact upload: register the
+# Run before any Sandbox exists, mark it `awaiting_review` after the last
+# artifact, and mark it `failed` on any error in between. Same real-server
+# approach as above; `_IngestHandler.do_PATCH` answers PATCHes like POSTs, and
+# requests are told apart by path.
+
+_PROJECT_ID = "0123456789abcdef01234567"
+_RUN_DETAIL_PATH = RUN_DETAIL_PATH_TEMPLATE.format(run_id=_RUN_ID)
+
+
+def _answer(status: int, body: dict | bytes):
+    """A responder that answers every request with `status` and `body`."""
+    payload = body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    def respond(index: int, path: str) -> tuple[int, bytes]:
+        return status, payload
+
+    return respond
+
+
+def test_create_run_posts_the_run_with_the_token():
+    with _ingest_server() as server:
+        create_run(
+            server.origin, _TOKEN, project=_PROJECT_ID, run_id=_RUN_ID, agent="mock"
+        )
+        received = list(server.received)
+
+    assert [request.path for request in received] == [RUNS_PATH]
+    assert received[0].authorization == f"Token {_TOKEN}"
+    assert received[0].content_type.startswith("application/json")
+    # No `status`: the backend's default `running` is the only honest one.
+    assert received[0].json == {
+        "project": _PROJECT_ID,
+        "run_id": _RUN_ID,
+        "agent": "mock",
+    }
+
+
+def test_create_run_names_vaultshield_login_on_a_rejected_token():
+    with _ingest_server(_answer(401, {"detail": "Invalid token."})) as server:
+        with pytest.raises(UploadError) as excinfo:
+            create_run(
+                server.origin, _TOKEN, project=_PROJECT_ID, run_id=_RUN_ID, agent="mock"
+            )
+
+    message = str(excinfo.value)
+    assert "HTTP 401" in message
+    assert f"vaultshield login --backend-url {server.origin}" in message
+    assert _TOKEN not in message
+
+
+def test_create_run_quotes_the_backend_detail_on_a_refusal():
+    refusal = {"project": ['Invalid pk "nope" - object does not exist.']}
+    with _ingest_server(_answer(400, refusal)) as server:
+        with pytest.raises(UploadError) as excinfo:
+            create_run(
+                server.origin, _TOKEN, project="nope", run_id=_RUN_ID, agent="mock"
+            )
+
+    message = str(excinfo.value)
+    assert f"refused to register run {_RUN_ID}" in message
+    assert "HTTP 400" in message
+    assert "object does not exist" in message
+    assert _TOKEN not in message
+
+
+def test_create_run_reports_an_unreachable_backend():
+    origin = f"http://127.0.0.1:{_closed_port()}"
+
+    with pytest.raises(UploadError) as excinfo:
+        create_run(origin, _TOKEN, project=_PROJECT_ID, run_id=_RUN_ID, agent="mock")
+
+    message = str(excinfo.value)
+    assert "Cannot reach the VaultShield backend" in message
+    assert origin in message
+    assert _TOKEN not in message
+
+
+def test_create_run_rejects_an_unsafe_run_id_before_any_request():
+    with _ingest_server() as server:
+        with pytest.raises(UploadError) as excinfo:
+            create_run(
+                server.origin, _TOKEN, project=_PROJECT_ID, run_id="../x", agent="mock"
+            )
+        received = list(server.received)
+
+    assert "Cannot register run '../x'" in str(excinfo.value)
+    assert received == []
+
+
+def test_complete_run_patches_awaiting_review():
+    with _ingest_server(_answer(200, {"status": "awaiting_review"})) as server:
+        complete_run(server.origin, _TOKEN, _RUN_ID)
+        received = list(server.received)
+
+    assert [request.path for request in received] == [_RUN_DETAIL_PATH]
+    assert received[0].authorization == f"Token {_TOKEN}"
+    assert received[0].json == {"status": "awaiting_review"}
+
+
+def test_complete_run_names_the_current_status_on_a_409():
+    conflict = {
+        "detail": "A Run can only move to `awaiting_review` from `running`; "
+        "this Run is `failed`.",
+        "current_status": "failed",
+    }
+    with _ingest_server(_answer(409, conflict)) as server:
+        with pytest.raises(UploadError) as excinfo:
+            complete_run(server.origin, _TOKEN, _RUN_ID)
+
+    message = str(excinfo.value)
+    assert "is no longer running (backend reports `failed`)" in message
+    assert _TOKEN not in message
+
+
+def test_complete_run_names_vaultshield_login_on_a_rejected_token():
+    with _ingest_server(_answer(403, {"detail": "nope"})) as server:
+        with pytest.raises(UploadError) as excinfo:
+            complete_run(server.origin, _TOKEN, _RUN_ID)
+
+    assert "vaultshield login" in str(excinfo.value)
+    assert _TOKEN not in str(excinfo.value)
+
+
+def test_complete_run_reports_an_unreachable_backend():
+    origin = f"http://127.0.0.1:{_closed_port()}"
+
+    with pytest.raises(UploadError) as excinfo:
+        complete_run(origin, _TOKEN, _RUN_ID)
+
+    assert origin in str(excinfo.value)
+    assert _TOKEN not in str(excinfo.value)
+
+
+def test_mark_run_failed_patches_failed_and_returns_none():
+    with _ingest_server(_answer(200, {"status": "failed"})) as server:
+        warning = mark_run_failed(server.origin, _TOKEN, _RUN_ID)
+        received = list(server.received)
+
+    assert warning is None
+    assert [request.path for request in received] == [_RUN_DETAIL_PATH]
+    assert received[0].authorization == f"Token {_TOKEN}"
+    assert received[0].json == {"status": "failed"}
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (409, {"detail": "x", "current_status": "awaiting_review"}, "awaiting_review"),
+        (500, b"boom", "HTTP 500"),
+    ],
+)
+def test_mark_run_failed_returns_a_warning_instead_of_raising(status, body, expected):
+    with _ingest_server(_answer(status, body)) as server:
+        warning = mark_run_failed(server.origin, _TOKEN, _RUN_ID)
+
+    assert isinstance(warning, str)
+    assert expected in warning
+    assert "\n" not in warning
+    assert _TOKEN not in warning
+
+
+def test_mark_run_failed_returns_a_warning_for_an_unreachable_backend():
+    origin = f"http://127.0.0.1:{_closed_port()}"
+
+    warning = mark_run_failed(origin, _TOKEN, _RUN_ID)
+
+    assert isinstance(warning, str)
+    assert origin in warning
+    assert _TOKEN not in warning
+
+
+def test_mark_run_failed_returns_a_warning_for_an_unsafe_run_id():
+    with _ingest_server() as server:
+        warning = mark_run_failed(server.origin, _TOKEN, "../x")
+        received = list(server.received)
+
+    assert isinstance(warning, str)
+    assert "'../x'" in warning
+    assert received == []
+
+
+def test_mark_run_failed_swallows_a_keyboard_interrupt(monkeypatch):
+    def _interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(uploader.httpx, "patch", _interrupted)
+
+    warning = mark_run_failed("http://127.0.0.1:1", _TOKEN, _RUN_ID)
+
+    assert warning == "unexpected KeyboardInterrupt"
+
+
+def test_mark_run_failed_uses_the_bounded_timeout(monkeypatch):
+    seen: dict = {}
+
+    def _spy(url, **kwargs):
+        seen["url"] = url
+        seen["kwargs"] = kwargs
+        return httpx.Response(200, request=httpx.Request("PATCH", url))
+
+    monkeypatch.setattr(uploader.httpx, "patch", _spy)
+
+    assert mark_run_failed("http://127.0.0.1:1", _TOKEN, _RUN_ID) is None
+    assert seen["kwargs"]["timeout"] is uploader._MARK_FAILED_TIMEOUT
+    assert seen["kwargs"]["timeout"] == httpx.Timeout(5.0, connect=2.0)
+
+
+# --- Batch 3 FR4/FR5: scrubbed events, best-effort failed-Run upload ---------
+
+
+def _write_events(run_dir: Path, payloads: list[str]) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "events.jsonl").write_text(
+        "".join(
+            json.dumps({"event_type": "output", "timestamp": "2026-01-01T00:00:00+00:00", "payload": p}) + "\n"
+            for p in payloads
+        )
+    )
+
+
+def test_upload_events_best_effort_posts_scrubbed_events(tmp_path, monkeypatch):
+    sent = []
+
+    class _Client:
+        def __init__(self, **kw):
+            sent.append(("timeout", kw.get("timeout")))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, **kw):
+            sent.append((url, kw["json"]))
+            return httpx.Response(201, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(uploader.httpx, "Client", _Client)
+    _write_events(tmp_path, ["token SECRET here", "ok"])
+    warning = uploader.upload_events_best_effort(
+        "http://backend", "tok", "20250614-091530-3f9a2b7c8d1e4f60", tmp_path,
+        scrub=lambda s: s.replace("SECRET", "***"),
+    )
+    assert warning is None
+    assert sent[0] == ("timeout", uploader._MARK_FAILED_TIMEOUT)
+    url, batch = sent[1]
+    assert url.endswith("/api/runs/20250614-091530-3f9a2b7c8d1e4f60/events/")
+    assert [e["payload"] for e in batch] == ["token *** here", "ok"]
+    assert "SECRET" in (tmp_path / "events.jsonl").read_text()  # file untouched
+
+
+def test_upload_events_best_effort_never_raises(tmp_path):
+    _write_events(tmp_path, ["x"])
+    warning = uploader.upload_events_best_effort(
+        "http://127.0.0.1:1", "tok", "20250614-091530-3f9a2b7c8d1e4f60", tmp_path, scrub=str
+    )
+    assert warning and "\n" not in warning and "tok" not in warning.split("/api")[0][-5:]
+    assert uploader.upload_events_best_effort(
+        "http://127.0.0.1:1", "tok", "../bad", tmp_path, scrub=str) is not None
+    assert uploader.upload_events_best_effort(
+        "http://127.0.0.1:1", "tok", "20250614-091530-3f9a2b7c8d1e4f60", tmp_path / "none", scrub=str
+    ) is None

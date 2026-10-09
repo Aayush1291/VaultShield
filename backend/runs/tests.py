@@ -11,7 +11,10 @@ POST-only detail actions, that none of the ingest serializers accepts a
 body-supplied `run` (the URL owns that), that `sequence` is the server's to
 assign rather than a client's to submit (Requirement 13.1), and that a
 malformed diff payload is rejected before it can reach the scanner
-(Requirement 13.2).
+(Requirement 13.2). A diff entry's optional `patch`/`patch_truncated` are
+checked here too: kept verbatim when sent, absent when not, and rejected
+when wrong-typed, so the scanner (Requirement 17.1) reads exactly what the
+CLI captured.
 
 ### Why these are database-free, and what that shapes
 
@@ -27,8 +30,8 @@ against a real MongoDB in
 That constraint shows up in the payload shapes used for the rejection
 cases: each one names only the field under test and omits the rest. Two of
 `Run`'s writable fields cannot be validated without a query — `project` is
-a `PrimaryKeyRelatedField` that resolves the pk, and `run_id` carries the
-`UniqueValidator` derived from its `unique=True` column — so a payload
+a `PrimaryKeyRelatedField` that resolves the pk, and `run_id` carries a
+`UniqueValidator` for its `unique=True` column — so a payload
 containing a plausible value for either would try to connect. Absent
 required fields never reach their validators, and a blank, over-length,
 or wrong-typed value fails before them, so every case below stays local.
@@ -46,13 +49,18 @@ app: 14.3 (Run_Status choice set), 14.5 (admin registration), 16.3-16.6 and
 28.2 (approve/reject state machine).
 """
 
+import pytest
+from django.core.validators import RegexValidator
 from django.urls import resolve, reverse
 from rest_framework import serializers
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.validators import UniqueValidator
 
-from runs.models import Run
+from runs.models import Run, RunDiff
 from runs.serializers import (
+    RUN_ID_PATTERN,
+    RUN_ID_UNIQUE_MESSAGE,
     RunDetailSerializer,
     RunDiffIngestSerializer,
     RunDiffSerializer,
@@ -62,7 +70,7 @@ from runs.serializers import (
     RunUpdateSerializer,
     ScreenshotIngestSerializer,
 )
-from runs.views import RunViewSet
+from runs.views import GATED_PATCH_TRANSITIONS, RunViewSet, StateTransitionError
 from vaultshield_backend.testing import routed_methods
 
 # One well-formed Event_Log batch as `cli/vaultshield/monitor.py` writes its
@@ -169,10 +177,56 @@ class TestRunSerializerFieldSurface:
         }
 
     def test_status_accepts_only_the_defined_choice_set(self):
-        """Requirement 11.2's five Run_Status values, no others."""
+        """Requirement 11.2's six Run_Status values, no others."""
         status_field = RunSerializer().fields["status"]
 
         assert set(status_field.choices) == {value for value, _label in Run.STATUS_CHOICES}
+
+    def test_failed_is_a_run_status(self):
+        """`failed` is the sixth Run_Status, set by the CLI on an error after
+        registration."""
+        assert [value for value, _label in Run.STATUS_CHOICES] == [
+            "running",
+            "awaiting_review",
+            "approved",
+            "rejected",
+            "submitted",
+            "failed",
+        ]
+        assert ("failed", "failed") in Run.STATUS_CHOICES
+
+    def test_run_id_carries_the_format_and_unique_validators(self):
+        """Run lifecycle: create validates the CLI's safe path-component
+        grammar, and still checks uniqueness with today's message.
+
+        Asserted on the declared validators so it stays database-free; the
+        request-level cases run in `test_mongodb.py`.
+        """
+        validators = RunSerializer().fields["run_id"].validators
+
+        regex_validators = [v for v in validators if isinstance(v, RegexValidator)]
+        unique_validators = [v for v in validators if isinstance(v, UniqueValidator)]
+        assert len(regex_validators) == 1
+        assert regex_validators[0].regex.pattern == RUN_ID_PATTERN
+        assert len(unique_validators) == 1
+        assert unique_validators[0].message == RUN_ID_UNIQUE_MESSAGE
+        assert RUN_ID_UNIQUE_MESSAGE == "run with this run id already exists."
+
+    def test_the_run_id_pattern_is_the_cli_grammar(self):
+        """Same accepted and refused ids as
+        `cli/vaultshield/run_directory._RUN_ID_PATTERN`."""
+        regex = RegexValidator(RUN_ID_PATTERN).regex
+
+        for good in (
+            "20260903-195802-e503f16521bb1a9c",
+            "20240101-000000-abc",
+            "a",
+            "A_b-9",
+            "a" * 64,
+        ):
+            assert regex.search(good), good
+        for bad in ("a/b", "a.b", "-x", "_x", "", "a" * 65, "a b", "a\n"):
+            assert not regex.search(bad), bad
 
 
 class TestRunSerializerRejectsInvalidPayload:
@@ -274,6 +328,55 @@ class TestRunUpdateSerializerSurface:
     def test_response_shape_matches_the_create_serializer(self):
         """"Return the updated Run" means the same `Run` shape as elsewhere."""
         assert set(RunUpdateSerializer().fields) == set(RunSerializer().fields)
+
+
+class TestGatedPatchTransitions:
+    """Run lifecycle: PATCH moves a Run to `awaiting_review` or `failed` only
+    from `running`; the request-level behaviour runs against MongoDB in
+    `test_mongodb.py::TestRunStatusTransitions`."""
+
+    def test_the_gated_table_is_completion_and_failure_from_running(self):
+        assert GATED_PATCH_TRANSITIONS == {
+            "awaiting_review": frozenset({"running"}),
+            "failed": frozenset({"running"}),
+        }
+
+    def test_every_gated_target_and_source_is_a_run_status(self):
+        statuses = {value for value, _label in Run.STATUS_CHOICES}
+
+        for target, sources in GATED_PATCH_TRANSITIONS.items():
+            assert target in statuses
+            assert sources <= statuses
+
+    def test_a_refused_transition_names_target_allowed_and_current_status(self):
+        error = StateTransitionError(
+            "approved", target="failed", allowed=GATED_PATCH_TRANSITIONS["failed"]
+        )
+
+        assert error.status_code == 409
+        assert error.detail["current_status"] == "approved"
+        assert str(error.detail["detail"]) == (
+            "A Run can only move to `failed` from `running`; this Run is `approved`."
+        )
+
+    def test_the_decision_refusal_text_is_unchanged(self):
+        """`target=None` keeps the approve/reject messages byte for byte."""
+        assert str(StateTransitionError("running").detail["detail"]) == (
+            "A decision can only be recorded for a Run in `awaiting_review` "
+            "status; this Run is `running`."
+        )
+        assert str(
+            StateTransitionError("awaiting_review", recorded_decision="approved").detail[
+                "detail"
+            ]
+        ) == (
+            "This Run already carries a recorded decision (`approved`); "
+            "a Run is decided at most once."
+        )
+
+    def test_recorded_decision_and_target_are_mutually_exclusive(self):
+        with pytest.raises(TypeError, match="recorded_decision or target, not both"):
+            StateTransitionError("running", recorded_decision="approved", target="failed")
 
 
 class TestRunDetailSerializerNesting:
@@ -605,7 +708,7 @@ class TestRunDiffIngestSerializer:
         assert not serializer.is_valid()
 
     def test_unrecognised_keys_are_dropped_rather_than_stored(self):
-        """Nothing in the spec writes or reads a fourth key per entry."""
+        """Only the declared keys (stats, `patch`, `patch_truncated`) are kept."""
         serializer = RunDiffIngestSerializer(
             data={"files": [{"path": "src/app.py", "additions": 1, "deletions": 1, "extra": True}]}
         )
@@ -614,6 +717,107 @@ class TestRunDiffIngestSerializer:
         assert serializer.validated_data["files"] == [
             {"path": "src/app.py", "additions": 1, "deletions": 1}
         ]
+
+    # A `-U0` patch as `cli/vaultshield/git_capture.py` captures it, with the
+    # whitespace that must survive byte for byte: a leading-space content
+    # line, a trailing space, and git's no-newline marker.
+    PATCH = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -3 +3,2 @@\n"
+        "-    old = 1 \n"
+        "+    new = 2 \n"
+        "+\tindented\n"
+        "\\ No newline at end of file\n"
+    )
+
+    def test_a_patch_and_truncation_flag_are_kept_verbatim(self):
+        """Requirements 13.2 and 17.1: the scanner reads the patch as sent."""
+        files = [
+            {
+                "path": "src/app.py",
+                "additions": 2,
+                "deletions": 1,
+                "patch": self.PATCH,
+                "patch_truncated": True,
+            }
+        ]
+        serializer = RunDiffIngestSerializer(data={"files": files})
+
+        assert serializer.is_valid(), serializer.errors
+        assert serializer.validated_data["files"] == files
+
+    def test_entries_without_a_patch_validate_to_the_three_stat_keys(self):
+        """Absent optional keys stay absent — never `None` or `False`."""
+        serializer = RunDiffIngestSerializer(data=self.WELL_FORMED)
+
+        assert serializer.is_valid(), serializer.errors
+        for entry in serializer.validated_data["files"]:
+            assert set(entry) == {"path", "additions", "deletions"}
+
+    def test_an_empty_patch_is_accepted(self):
+        """`""` is what the CLI sends once its request budget is spent."""
+        files = [
+            {"path": "a.py", "additions": 1, "deletions": 0, "patch": "", "patch_truncated": True}
+        ]
+        serializer = RunDiffIngestSerializer(data={"files": files})
+
+        assert serializer.is_valid(), serializer.errors
+        assert serializer.validated_data["files"] == files
+
+    def test_a_flagged_entry_without_a_patch_is_accepted(self):
+        """Requirements 13.2 and 17.1: a patch-less flagged entry is what the
+        CLI sends for a path that is not valid UTF-8 and so could not be
+        handed back to git. It validates as-is, with no `patch` key added.
+        """
+        files = [
+            {"path": "\ufffd.txt", "additions": 1, "deletions": 0, "patch_truncated": True}
+        ]
+        serializer = RunDiffIngestSerializer(data={"files": files})
+
+        assert serializer.is_valid(), serializer.errors
+        assert serializer.validated_data["files"] == files
+
+    def test_a_malformed_patch_or_flag_is_rejected(self):
+        """Wrong-typed or null values 400 like the other fields.
+
+        Ints are deliberately absent from the `patch` cases: DRF's
+        `CharField` coerces them to strings.
+        """
+        stat = {"path": "a.py", "additions": 1, "deletions": 0}
+        bad_entries = [{**stat, "patch": bad} for bad in (None, ["x"], {"a": 1}, True)]
+        bad_entries += [{**stat, "patch_truncated": bad} for bad in ("maybe", [], None)]
+        for bad_entry in bad_entries:
+            serializer = RunDiffIngestSerializer(data={"files": [bad_entry]})
+
+            assert not serializer.is_valid(), f"accepted entry={bad_entry!r}"
+            assert "files" in serializer.errors
+
+    def test_the_rendered_diff_round_trips_the_patch(self):
+        """What is stored is what `RunDetailSerializer.diff` renders back.
+
+        Uses an unsaved `RunDiff`, so no database is touched.
+        """
+        posted = {
+            "files": [
+                {
+                    "path": "src/app.py",
+                    "additions": 2,
+                    "deletions": 1,
+                    "patch": self.PATCH,
+                    "patch_truncated": True,
+                },
+                {"path": "assets/logo.png", "additions": 0, "deletions": 0},
+            ]
+        }
+        serializer = RunDiffIngestSerializer(data=posted)
+        assert serializer.is_valid(), serializer.errors
+
+        rendered = RunDiffSerializer(RunDiff(files=serializer.validated_data["files"])).data
+
+        assert rendered["files"] == posted["files"]
 
 
 class TestScreenshotIngestSerializer:

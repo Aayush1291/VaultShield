@@ -129,8 +129,11 @@ mechanism divergence.
    unauthenticated invocation prints a consent URL and blocks on a pasted
    authorization code before doing any work.
 
-   The session it obtains is persisted as a FILE, not an environment
-   variable: `~/.gemini/antigravity-cli/jetski_state.pbtxt`, mode 600. So
+   The session it obtains is persisted as FILES under `~/.gemini/`, not an
+   environment variable. A real sign-in probe (Batch 3) listed them: the
+   OAuth token is `~/.gemini/antigravity-cli/antigravity-oauth-token` (497
+   bytes, mode 600), next to the session state `jetski_state.pbtxt` (mode
+   600). Token hygiene reads exactly those two (`credential_paths`). So
    the `SandboxInvocation.env` whitelist that carries Codex's and Kiro's
    keys has nothing it could carry here, and this adapter injects nothing
    rather than inventing a variable the binary does not read.
@@ -305,7 +308,23 @@ _AUTH_PROBE_PROMPT = "Reply with exactly the word: ready"
 #     file written there in one container is absent from a fresh one.
 #
 # Named here for tests to assert against, not read by this module at runtime.
+# Confirmed by the developer's real sign-in probe (Batch 3, design §9 item 14):
+# 497 bytes, mode 600.
 ANTIGRAVITY_TOKEN_PATH = "/root/.gemini/antigravity-cli/antigravity-oauth-token"
+
+# The session state written by the same sign-in (518 bytes, mode 600). Its
+# structure was inspected (field names and value shapes only, in a throwaway
+# `--network none` container): `post_onboarding.completed_steps`,
+# `installation_uuid`, `migrations` — no OAuth/JWT-shaped value. It is kept as
+# a needle source anyway (mode 600, written by the sign-in; over-inclusion only
+# costs a whole-file needle that agent output never reproduces).
+# `config/config.json` (permission grants, plugin list, no OAuth-shaped value)
+# and the 600 `cache/*.json` / lock files are NOT credential paths.
+ANTIGRAVITY_SESSION_STATE_PATH = "/root/.gemini/antigravity-cli/jetski_state.pbtxt"
+
+# The credential root. Still what path-literal findings name (`/root/.gemini`,
+# §9 item 5); needles come only from the two files above.
+ANTIGRAVITY_CREDENTIAL_ROOT = "/root/.gemini"
 
 # The Google scopes the session carries. Stated so `cli.py` can show them before
 # the developer consents, and so nobody has to take "broad" on trust. These are
@@ -493,6 +512,13 @@ class Antigravity_Adapter(Agent_Adapter):
         `node`/`npm` the clone, the watcher and a Node target application need.
         """
         return SandboxInvocation(argv=build_antigravity_argv(prompt), env={})
+
+    def credential_paths(self) -> tuple[str, ...]:
+        """The confirmed token file and the session state (Batch 3 FR5, §9
+        item 14). Narrowed from the whole `~/.gemini` root, so agent
+        transcripts (`brain/`, `conversations/`) and caches can never become
+        needles. Both are outside `Sandbox.REPO_DIR`."""
+        return (ANTIGRAVITY_TOKEN_PATH, ANTIGRAVITY_SESSION_STATE_PATH)
 
     def auth_invocation(self) -> SandboxInvocation:
         """The in-Sandbox Google sign-in, for `--interactive-auth`.

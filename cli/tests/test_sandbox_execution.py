@@ -48,6 +48,7 @@ from typing import NamedTuple
 
 import pytest
 
+import vaultshield.sandbox as sandbox_module
 from vaultshield.adapters.base import AdapterError, Agent_Adapter, SandboxInvocation
 from vaultshield.sandbox import Sandbox, container_name
 
@@ -275,6 +276,26 @@ def _wait_for_port(port: int, timeout: float = 10.0) -> bool:
     return False
 
 
+# The backend Project id the `run` tests below register under. `run` needs one
+# before any Sandbox exists; `_offline_backend` stands in for the backend, so
+# the value is never checked against a real Project.
+_PROJECT_ARG = "--project=0123456789abcdef01234567"
+
+
+def _offline_backend(monkeypatch, cli_module):
+    """Stands in for the backend's Run registration, completion and failed
+    mark, so the pipeline runs to the stage under test. The real
+    `upload_run` still runs against the unreachable backend URL."""
+    marks = []
+    monkeypatch.setattr(cli_module.uploader, "load_token", lambda: "test-token")
+    monkeypatch.setattr(cli_module.uploader, "create_run", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module.uploader, "complete_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_module.uploader, "mark_run_failed", lambda *a, **k: marks.append(a) or None
+    )
+    return marks
+
+
 @requires_docker
 def test_agent_executes_inside_the_sandbox_and_cannot_reach_the_host(
     host_repo, served_repo, monkeypatch
@@ -302,6 +323,7 @@ def test_agent_executes_inside_the_sandbox_and_cannot_reach_the_host(
         lambda: ProbingAgent(str(host_repo / ".env"), str(Path.home())),
     )
     monkeypatch.chdir(host_repo)
+    marks = _offline_backend(monkeypatch, cli_module)
 
     result = CliRunner().invoke(
         cli_module.cli,
@@ -311,13 +333,17 @@ def test_agent_executes_inside_the_sandbox_and_cannot_reach_the_host(
             "--prompt=isolation probe",
             f"--repo-url={served_repo.for_container}",
             "--backend-url=http://127.0.0.1:1",
+            _PROJECT_ARG,
         ],
         catch_exceptions=False,
     )
 
-    # The upload is expected to fail (no token, unreachable backend). Everything
-    # before it must have succeeded, which the assertions below establish.
+    # The upload is expected to fail: the token and the Run registration are
+    # stubbed, but the real `upload_run` targets an unreachable backend.
+    # Everything before it must have succeeded, which the assertions below
+    # establish, and the failed upload marks the Run failed exactly once.
     assert "PROBE" not in result.output or True  # transcript is in the Event_Log
+    assert len(marks) == 1, result.output
 
     runs = sorted((host_repo / ".vaultshield" / "runs").iterdir())
     assert runs, f"no Run_Directory was created; output was:\n{result.output}"
@@ -457,6 +483,7 @@ def test_off_limits_violation_is_detected_inside_the_sandbox(
 
     monkeypatch.setitem(cli_module._AGENT_ADAPTERS, "mock", TamperingAgent)
     monkeypatch.chdir(host_repo)
+    marks = _offline_backend(monkeypatch, cli_module)
 
     result = CliRunner().invoke(
         cli_module.cli,
@@ -466,6 +493,7 @@ def test_off_limits_violation_is_detected_inside_the_sandbox(
             "--prompt=tamper",
             f"--repo-url={served_repo.for_container}",
             "--backend-url=http://127.0.0.1:1",
+            _PROJECT_ARG,
         ],
         catch_exceptions=False,
     )
@@ -473,6 +501,7 @@ def test_off_limits_violation_is_detected_inside_the_sandbox(
     assert result.exit_code != 0, "a violating Run was reported as successful"
     assert "off_limits_paths violation" in result.output
     assert "protected.txt" in result.output
+    assert len(marks) == 1, result.output
 
     run_dir = sorted((host_repo / ".vaultshield" / "runs").iterdir())[-1]
     records = [
@@ -518,6 +547,7 @@ def test_a_crashing_agent_inside_the_sandbox_fails_the_run(
 
     monkeypatch.setitem(cli_module._AGENT_ADAPTERS, "mock", CrashingAgent)
     monkeypatch.chdir(host_repo)
+    marks = _offline_backend(monkeypatch, cli_module)
 
     result = CliRunner().invoke(
         cli_module.cli,
@@ -527,14 +557,20 @@ def test_a_crashing_agent_inside_the_sandbox_fails_the_run(
             "--prompt=crash",
             f"--repo-url={served_repo.for_container}",
             "--backend-url=http://127.0.0.1:1",
+            _PROJECT_ARG,
         ],
         catch_exceptions=False,
     )
 
     assert result.exit_code != 0, "a crashed agent was reported as a successful Run"
     assert "failed" in result.output.lower()
+    # "failed" alone would also match a registration abort; this Run got past
+    # registration and crashed in the agent stage.
+    assert "Cannot start run" not in result.output
+    assert len(marks) == 1, result.output
 
     run_dir = sorted((host_repo / ".vaultshield" / "runs").iterdir())[-1]
+    assert (run_dir / "events.jsonl").is_file(), result.output
     transcript = (run_dir / "events.jsonl").read_text()
     # The partial transcript survives the failure, which is what makes the crash
     # diagnosable.
@@ -558,6 +594,7 @@ def test_an_adapter_without_sandbox_support_is_refused(host_repo, served_repo, m
 
     monkeypatch.setitem(cli_module._AGENT_ADAPTERS, "mock", HostOnlyAgent)
     monkeypatch.chdir(host_repo)
+    marks = _offline_backend(monkeypatch, cli_module)
 
     result = CliRunner().invoke(
         cli_module.cli,
@@ -567,12 +604,14 @@ def test_an_adapter_without_sandbox_support_is_refused(host_repo, served_repo, m
             "--prompt=host only",
             f"--repo-url={served_repo.for_container}",
             "--backend-url=http://127.0.0.1:1",
+            _PROJECT_ARG,
         ],
         catch_exceptions=False,
     )
 
     assert result.exit_code != 0
     assert "does not support running inside a Sandbox" in result.output
+    assert len(marks) == 1, result.output
 
 
 def test_no_adapter_env_carries_the_host_environment():
@@ -1129,7 +1168,8 @@ def test_a_nested_project_dir_really_is_the_agent_and_app_working_directory(
 #   1. stdin written through `exec_create(stdin=True)` + `exec_start(socket=True)`
 #      actually reaches the process;
 #   2. a container TTY echoes that stdin back into its own output — which is the
-#      reason `read_output(redact=...)` exists at all. `agy` refuses to print its
+#      reason `send_line` arms redaction for what it sends, so `read_output()`
+#      yields that value scrubbed. `agy` refuses to print its
 #      consent URL without a TTY (measured: nothing at all with `tty=False`), so
 #      the echo cannot be avoided and has to be scrubbed instead.
 #
@@ -1179,11 +1219,18 @@ def test_exec_interactive_really_delivers_stdin_to_a_container_process(tmp_path)
 @requires_docker
 @requires_sandbox_image
 def test_a_tty_echoes_stdin_and_redaction_removes_it(tmp_path):
-    """The echo is real, and `redact=` is what keeps it off the developer's screen.
+    """The echo is real, and the redaction `send_line` arms is what keeps it off
+    the developer's screen.
 
     Two assertions in one test on purpose: the first documents the hazard against
     the real daemon, the second proves the mitigation works on that same output.
     Splitting them would let the hazard assertion pass while the mitigation rotted.
+
+    The hazard pass writes the sentinel to the raw socket directly, bypassing
+    `send_line`, because `send_line` is what arms redaction: sending through it
+    would scrub the echo and hide the very hazard being documented. The
+    mitigation pass uses the real API, `send_line` then a single pass over
+    `read_output()`, plus `flush_remaining()` for any tail.
     """
     import docker
 
@@ -1206,7 +1253,9 @@ def test_a_tty_echoes_stdin_and_redaction_removes_it(tmp_path):
             ["sh", "-c", "read value; echo done"], workdir="/workspace"
         )
         try:
-            bare.send_line(_STDIN_SENTINEL)
+            # Raw socket, not `send_line`, so redaction is never armed here.
+            raw = getattr(bare.socket, "_sock", bare.socket)
+            raw.sendall(_STDIN_SENTINEL.encode("utf-8") + b"\n")
             echoed = []
             for line in bare.read_output():
                 echoed.append(line)
@@ -1224,15 +1273,17 @@ def test_a_tty_echoes_stdin_and_redaction_removes_it(tmp_path):
             ["sh", "-c", "read value; echo done"], workdir="/workspace"
         )
         try:
+            # `send_line` arms redaction for exactly what it sends.
             guarded.send_line(_STDIN_SENTINEL)
             shown = []
-            for line in guarded.read_output(redact=_STDIN_SENTINEL):
+            for line in guarded.read_output():
                 shown.append(line)
                 if "done" in line:
                     break
+            shown.append(guarded.flush_remaining())
             rendered = "\n".join(shown)
             assert _STDIN_SENTINEL not in rendered
-            assert "***" in rendered
+            assert sandbox_module._REDACTED in rendered
         finally:
             guarded.close()
     finally:

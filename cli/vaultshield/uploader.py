@@ -173,6 +173,18 @@ natural key), not something this module can fix by holding state — and it
 is why `upload_run` keeps no local record of progress: a partial-progress
 file inside `run_dir` would be a mutation of the artifacts Requirement
 14.4 exists to protect.
+
+### Registering and closing a Run (`create_run`, `complete_run`, `mark_run_failed`)
+
+The artifact endpoints are nested under a Run the backend must already
+know, so `run` registers it first (`create_run`, `POST /api/runs/`, before
+any Sandbox exists) and closes it last: `complete_run` PATCHes
+`awaiting_review` after `upload_run` returns, and on any failure after
+registration `mark_run_failed` PATCHes `failed`. The backend accepts both
+PATCHes only from `running` (409 otherwise). `create_run` and
+`complete_run` raise `UploadError` like everything else here;
+`mark_run_failed` never raises and returns a warning instead, because it
+runs while another error is already on its way to the developer.
 """
 
 from __future__ import annotations
@@ -180,7 +192,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 import click
 import httpx
@@ -263,6 +275,32 @@ _MAX_ERROR_BODY_CHARS = 300
 EVENTS_PATH_TEMPLATE = "/api/runs/{run_id}/events/"
 DIFF_PATH_TEMPLATE = "/api/runs/{run_id}/diff/"
 SCREENSHOTS_PATH_TEMPLATE = "/api/runs/{run_id}/screenshots/"
+
+# The Run collection and detail routes `create_run`, `complete_run`, and
+# `mark_run_failed` address. Trailing slashes for the same reason as above.
+RUNS_PATH = "/api/runs/"
+# Same path as submit.RUN_DETAIL_PATH_TEMPLATE (submit imports this module, so it cannot be shared the other way).
+RUN_DETAIL_PATH_TEMPLATE = "/api/runs/{run_id}/"
+
+# Timeout for registering and completing a Run: one small JSON request each,
+# so far shorter than an artifact upload, but long enough for a cold backend.
+_RUN_CONTROL_TIMEOUT_S = 15.0
+
+# Timeout for the best-effort failed mark. It runs on the way out of a Run that
+# has already failed, so it must not hold that exit up for long. httpx applies
+# a timeout per phase (connect, write, read, pool), not in total: this bounds
+# the connect at 2 s and every other phase at 5 s, and the short connect is
+# what keeps the common "backend is gone" case quick.
+_MARK_FAILED_TIMEOUT = httpx.Timeout(5.0, connect=2.0)
+
+# The two Run_Status values the CLI writes itself, through PATCH. The backend
+# accepts either only from `running` and answers 409 otherwise.
+FAILED_STATUS = "failed"
+AWAITING_REVIEW_STATUS = "awaiting_review"
+
+# Statuses that mean the dashboard auth token itself was refused, so the fix
+# is to log in again rather than anything about the Run.
+_TOKEN_REJECTED_STATUSES = (401, 403)
 
 # The `Authorization` header carrying the Dashboard_Auth_Token, in the form
 # DRF's `TokenAuthentication` parses: the scheme keyword `Token`, a space,
@@ -470,6 +508,7 @@ def upload_run(
     token: str,
     *,
     batch_size: int = _EVENT_BATCH_SIZE,
+    scrub: Callable[[str], str] = lambda text: text,
 ) -> None:
     """Submits a completed Run's artifacts to `backend_url`, authenticated
     with `token` (Requirements 14.2, 14.3).
@@ -492,6 +531,10 @@ def upload_run(
     signature, which stays valid for every positional caller. It exists so
     a test can drive the multi-batch path (and the failure of a *later*
     batch) with a handful of events instead of hundreds.
+
+    `scrub` (keyword-only, Batch 3 FR5) is applied to every event payload
+    before it is sent; `run` passes `SecretSet.scrub`, which replaces the
+    agent's credential needles with `***`. The file on disk is not changed.
 
     `run_dir` is read and never written: no file under it is created,
     moved, truncated, or removed, whether this call succeeds or fails, so a
@@ -526,9 +569,191 @@ def upload_run(
     with httpx.Client(
         headers=_auth_headers(token), timeout=_UPLOAD_REQUEST_TIMEOUT_S
     ) as client:
-        _upload_events(client, events_url, run_dir, batch_size)
+        _upload_events(client, events_url, run_dir, batch_size, scrub)
         _upload_diff(client, diff_url, run_dir)
         _upload_screenshots(client, screenshots_url, run_dir)
+
+
+def create_run(
+    backend_url: str, token: str, *, project: str, run_id: str, agent: str
+) -> None:
+    """Registers a new Run with the backend before anything else about it
+    exists (Requirement 12.2's `POST /api/runs/`, client half).
+
+    POSTs `{project, run_id, agent}` to `/api/runs/`. `status` is not sent:
+    the backend's default is `running`, which is the only state a Run that
+    has not started yet can honestly be in. Registering first is what lets
+    `upload_run` address `/api/runs/<run_id>/...` at the end of the Run, and
+    what lets a failure in between be recorded against the Run as `failed`.
+
+    One-shot `httpx.post`, the same style as `_request_token`: this is a
+    single request, so a `Client` would buy nothing.
+
+    Raises `UploadError` if `run_id` is not a safe path component (checked
+    before any request), if the backend cannot be reached, if it rejects the
+    dashboard auth token (401/403, with the `vaultshield login` fix named),
+    or if it refuses the Run for any other reason (an unknown project or a
+    duplicate `run_id` is a 400 whose detail is quoted). No message ever
+    contains the token.
+    """
+    _guard_run_id(run_id)
+    url = _build_url(backend_url, RUNS_PATH)
+    response = _send_run_control(
+        httpx.post,
+        url,
+        token,
+        {"project": project, "run_id": run_id, "agent": agent},
+    )
+    _raise_for_rejected_token(response, url, backend_url)
+    if not response.is_success:
+        raise UploadError(
+            f"The backend at {url} refused to register run {run_id} "
+            f"(HTTP {response.status_code}): {_error_detail(response)}"
+        )
+
+
+def complete_run(backend_url: str, token: str, run_id: str) -> None:
+    """Moves a registered Run from `running` to `awaiting_review` once every
+    artifact has been uploaded (Requirement 12.4's `PATCH /api/runs/:id/`,
+    with a Requirement 11.2 status; client half).
+
+    PATCHes `{"status": "awaiting_review"}` to `/api/runs/<run_id>/`. This is
+    the completion signal: diff ingest cannot be it, because screenshots are
+    posted after the diff and their number is unknown to the backend. The
+    backend accepts it only from `running`.
+
+    Raises `UploadError` on a bad `run_id`, an unreachable backend, or a
+    rejected token (same messages as `create_run`), on a 409 (the Run is no
+    longer running; the backend's `current_status` is named), and on any
+    other non-2xx status with the backend's detail quoted.
+    """
+    _guard_run_id(run_id)
+    url = _build_url(backend_url, RUN_DETAIL_PATH_TEMPLATE.format(run_id=run_id))
+    response = _send_run_control(
+        httpx.patch, url, token, {"status": AWAITING_REVIEW_STATUS}
+    )
+    _raise_for_rejected_token(response, url, backend_url)
+    if response.status_code == 409:
+        raise UploadError(
+            f"The backend at {url} refused to mark run {run_id} ready for "
+            f"review: it is no longer running (backend reports "
+            f"`{_current_status(response)}`)"
+        )
+    if not response.is_success:
+        raise UploadError(
+            f"The backend at {url} refused to mark run {run_id} ready for "
+            f"review (HTTP {response.status_code}): {_error_detail(response)}"
+        )
+
+
+def mark_run_failed(backend_url: str, token: str, run_id: str) -> str | None:
+    """Best-effort: marks a registered Run `failed` after it errored
+    (Requirement 12.4's PATCH with a Requirement 11.2 status), and returns
+    `None` on success or a one-line warning.
+
+    PATCHes `{"status": "failed"}` to `/api/runs/<run_id>/` with the short
+    `_MARK_FAILED_TIMEOUT`, because it runs on the way out of a Run that has
+    already failed and must not hold that exit up.
+
+    NEVER raises. It catches `Exception` and `KeyboardInterrupt`, so neither a
+    defect here nor a Ctrl-C during the request can replace the error the
+    caller is in the middle of reporting. Every failure becomes the returned
+    warning instead: a bad `run_id`, an unreachable backend, any non-2xx
+    status, including a 409, which means the Run had already left `running`
+    (for example a completion that landed but whose response was lost). It
+    does not print and does not import click: reporting the warning is the
+    caller's decision. No warning ever contains the token.
+    """
+    try:
+        _guard_run_id(run_id)
+        url = _build_url(
+            backend_url, RUN_DETAIL_PATH_TEMPLATE.format(run_id=run_id)
+        )
+        try:
+            response = httpx.patch(
+                url,
+                headers=_auth_headers(token),
+                json={"status": FAILED_STATUS},
+                timeout=_MARK_FAILED_TIMEOUT,
+            )
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            return f"cannot reach the VaultShield backend at {url}: {exc}"
+        if response.is_success:
+            return None
+        if response.status_code == 409:
+            return (
+                f"{url} answered HTTP 409: the run is no longer running "
+                f"(backend reports `{_current_status(response)}`)"
+            )
+        return (
+            f"{url} answered HTTP {response.status_code}: "
+            f"{_error_detail(response)}"
+        )
+    except UploadError as exc:
+        return str(exc)
+    except (Exception, KeyboardInterrupt) as exc:
+        # No str(exc): keep it one line and token-free.
+        return f"unexpected {type(exc).__name__}"
+
+
+def _guard_run_id(run_id: str) -> None:
+    """Raises `UploadError` unless `run_id` is a safe single path component.
+
+    The same check `upload_run` makes, for the same reason: `run_id` is
+    interpolated into a URL path, and an unvalidated value could address a
+    different endpoint entirely.
+    """
+    try:
+        validate_run_id(run_id)
+    except RunDirectoryError as exc:
+        raise UploadError(f"Cannot register run {run_id!r}: {exc}") from exc
+
+
+def _send_run_control(
+    send: Callable[..., httpx.Response], url: str, token: str, payload: dict
+) -> httpx.Response:
+    """Sends one Run-control request (`httpx.post` or `httpx.patch`) and
+    returns the response, or raises `UploadError` naming `url`.
+
+    Catches `(httpx.HTTPError, httpx.InvalidURL)` exactly as `_post` does:
+    `InvalidURL` is not an `HTTPError`, and a malformed `--backend-url` must
+    read as "cannot reach the backend", not as a traceback.
+    """
+    try:
+        return send(
+            url,
+            headers=_auth_headers(token),
+            json=payload,
+            timeout=_RUN_CONTROL_TIMEOUT_S,
+        )
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        raise UploadError(
+            f"Cannot reach the VaultShield backend at {url}: {exc}"
+        ) from exc
+
+
+def _raise_for_rejected_token(
+    response: httpx.Response, url: str, backend_url: str
+) -> None:
+    """Raises `UploadError` naming the `vaultshield login` fix when the
+    backend refused the dashboard auth token itself (401/403)."""
+    if response.status_code in _TOKEN_REJECTED_STATUSES:
+        raise UploadError(
+            f"The backend at {url} rejected the dashboard auth token (HTTP "
+            f"{response.status_code}). Run `vaultshield login --backend-url "
+            f"{backend_url}` again."
+        )
+
+
+def _current_status(response: httpx.Response) -> str:
+    """The `current_status` a 409 `StateTransitionError` body carries, or a
+    placeholder when the body has none."""
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        payload = None
+    status = payload.get("current_status") if isinstance(payload, dict) else None
+    return status if isinstance(status, str) and status else "unknown"
 
 
 def _resolve_credentials(
@@ -628,7 +853,11 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 def _upload_events(
-    client: httpx.Client, url: str, run_dir: Path, batch_size: int
+    client: httpx.Client,
+    url: str,
+    run_dir: Path,
+    batch_size: int,
+    scrub: Callable[[str], str] = lambda text: text,
 ) -> None:
     """POSTs `<run_dir>/events.jsonl` to `url` in batches of `batch_size`,
     in file order, one request at a time.
@@ -641,12 +870,59 @@ def _upload_events(
     than an empty array: there is no artifact to submit, and a request that
     stores zero events only adds a way for the upload to fail.
     """
-    events = _read_event_log(event_log_path(run_dir))
+    events = _scrubbed_events(_read_event_log(event_log_path(run_dir)), scrub)
     for batch in _batched(events, batch_size):
         # Sequential and awaited: batch N must be stored before batch N+1 is
         # sent, because the backend numbers each batch from the highest
         # sequence already stored for the Run.
         _post(client, url, "events", json=batch)
+
+
+def _scrubbed_events(
+    events: list[dict[str, Any]], scrub: Callable[[str], str]
+) -> list[dict[str, Any]]:
+    """`events` with `scrub` applied to every string payload (Batch 3 FR5)."""
+    return [
+        {**event, "payload": scrub(event["payload"])}
+        if isinstance(event.get("payload"), str)
+        else event
+        for event in events
+    ]
+
+
+def upload_events_best_effort(
+    backend_url: str,
+    token: str,
+    run_id: str,
+    run_dir: Path,
+    *,
+    scrub: Callable[[str], str],
+) -> str | None:
+    """Best-effort: POSTs a FAILED Run's `events.jsonl`, scrubbed, so its
+    violations reach the dashboard timeline (Batch 3 FR4, D8). Returns `None`
+    on success (or when there is no Event_Log) and a one-line warning
+    otherwise.
+
+    NEVER raises, for the same reason as `mark_run_failed`: it runs on the way
+    out of a Run that already failed and must not replace that error. Uses the
+    same short timeout. No warning ever contains the token or a payload.
+    """
+    try:
+        _guard_run_id(run_id)
+        url = _build_url(backend_url, EVENTS_PATH_TEMPLATE.format(run_id=run_id))
+        events = _scrubbed_events(_read_event_log(event_log_path(run_dir)), scrub)
+        if not events:
+            return None
+        with httpx.Client(
+            headers=_auth_headers(token), timeout=_MARK_FAILED_TIMEOUT
+        ) as client:
+            for batch in _batched(events, _EVENT_BATCH_SIZE):
+                _post(client, url, "events", json=batch)
+        return None
+    except UploadError as exc:
+        return str(exc).splitlines()[0] if str(exc) else "upload failed"
+    except (Exception, KeyboardInterrupt) as exc:
+        return f"unexpected {type(exc).__name__}"
 
 
 def _upload_diff(client: httpx.Client, url: str, run_dir: Path) -> None:

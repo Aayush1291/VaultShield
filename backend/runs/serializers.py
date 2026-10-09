@@ -43,13 +43,15 @@ one source of truth. For `Run`'s writable fields that yields:
   Requirement 12.2, enforced at validation time rather than as an
   integrity error at `INSERT`.
 - `run_id` — required, non-blank (whitespace-only included: DRF's
-  `CharField` strips before the blank check), at most 64 characters, and
+  `CharField` strips before the blank check), at most 64 characters, in
+  the safe path-component grammar (see "`run_id` format" below), and
   unique, since the column is `unique=True`. A duplicate `run_id` comes
   back as a 400 rather than a database-level `IntegrityError` surfacing as
-  a 500.
+  a 500 — including the race two concurrent creates can lose, which
+  `RunViewSet.perform_create` maps to the same 400.
 - `agent` — required, non-blank, at most 32 characters.
 - `status` — a `ChoiceField` over `Run.STATUS_CHOICES`, so Requirement
-  11.2's five Run_Status values are the only accepted input. Optional on
+  11.2's six Run_Status values are the only accepted input. Optional on
   create because the column defaults to `running`, which is what the CLI
   wants when it opens a Run.
 - `pr_url` — optional and blank-able (the column is `blank=True,
@@ -59,22 +61,30 @@ DRF runs all of that before `create()`/`update()`, so a rejected request
 performs no write — the "SHALL NOT create any record" half of Property 21
 holds by ordering, not by a check in this file.
 
-### `run_id` format is not validated here
+### `run_id` format
 
-`run_id` is checked for length and uniqueness but not for shape, even
-though it is what `RunViewSet` looks a Run up by in the URL. The producer
-side already owns that grammar: `cli/vaultshield/run_directory.py` is the
-only thing that mints a `run_id`, and it validates every id it accepts
-against a single safe path component (alphanumeric start, then
-alphanumerics/`-`/`_`, no dot, no separator) because it also turns the id
-into a filesystem path and a git ref. Re-deriving that pattern here would
-put a second copy of a CLI-side rule in the backend, free to drift from it.
+`run_id` is checked for shape as well as length and uniqueness, because
+it is what `RunViewSet` looks a Run up by in the URL and the CLI now
+registers a Run with its client-supplied id at the very start of
+`vaultshield run`, before anything else exists for it. Every later call
+for that Run — event/diff/screenshot ingest, the completion and `failed`
+PATCHes, `vaultshield submit` — addresses it by that id, so a Run created
+with an id its own detail URL cannot address (Django's default
+detail-lookup pattern excludes `/` and `.`) would be stranded in
+`running` with nothing able to reach it.
 
-The consequence worth naming: a client that posts a `run_id` containing a
-`/` or a `.` creates a Run that its own detail URL cannot address, because
-Django's default detail-lookup pattern excludes both characters. Nothing
-in the spec fixes a backend-side `run_id` grammar, so this is left as the
-CLI's invariant rather than half-enforced in two places.
+The grammar is `RUN_ID_PATTERN`: a single safe path component, an ASCII
+letter or digit first, then letters, digits, `-` or `_`, 64 characters at
+most. It is the rule `cli/vaultshield/run_directory.py` already applies to
+every id it mints or accepts (it also turns the id into a filesystem path
+and a git ref), restated here deliberately equal to it, not the stricter
+`<YYYYmmdd>-<HHMMSS>-<16 hex>` shape the CLI generates. Pinning the
+generated shape would couple the backend to the CLI's minting format;
+the safe-component rule is exactly what addressability needs.
+
+It is enforced on `RunSerializer`, not on the model column, so it is
+request validation (a 400 naming `run_id`) with no migration, and
+`RunUpdateSerializer`, where `run_id` is read-only, is unaffected.
 
 ### Read-side and write-side artifact serializers are separate
 
@@ -104,11 +114,23 @@ one-to-one row, and a screenshot is an ordinary create. Those are spelled
 out on each class.
 """
 
+from django.core.validators import RegexValidator
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
 from runs.models import Run, RunDiff, RunEvent, Screenshot
 from runs.sequences import allocate_event_sequences
 from security_scan.models import SecurityFinding
+
+# The `run_id` grammar (see "`run_id` format" in the module docstring): one
+# safe path component, at most 64 characters. Deliberately equal to
+# `cli/vaultshield/run_directory._RUN_ID_PATTERN`, which every id the CLI
+# mints or accepts already matches; change the two together.
+RUN_ID_PATTERN = r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z"
+
+# Today's DRF-derived text (Django's `unique` error_message for Run.run_id),
+# restated because `extra_kwargs["validators"]` replaces the derived validator.
+RUN_ID_UNIQUE_MESSAGE = "run with this run id already exists."
 
 
 class RunEventSerializer(serializers.ModelSerializer):
@@ -129,7 +151,8 @@ class RunDiffSerializer(serializers.ModelSerializer):
     """The `Run_Diff` as it appears nested in the run detail response.
 
     `files` is a `JSONField`, so the CLI's `diff.json` shape
-    (`[{"path", "additions", "deletions"}, ...]`) round-trips exactly —
+    (`[{"path", "additions", "deletions", "patch"?, "patch_truncated"?},
+    ...]`) round-trips exactly —
     which is what the dashboard's Diff tab (Requirement 20.2) and the
     static scanner (Requirement 17.1) both read.
     """
@@ -210,6 +233,27 @@ class RunSerializer(serializers.ModelSerializer):
         # CLI able to clear it could hide exactly the situation the field
         # exists to surface.
         read_only_fields = ["id", "stuck", "created_at", "updated_at"]
+        # `validators` here replaces the validators DRF would derive from
+        # the column, so the `unique=True` check is listed explicitly next
+        # to the format check, carrying the derived message unchanged: a
+        # duplicate `run_id` reads exactly as it did before the format
+        # check existed.
+        extra_kwargs = {
+            "run_id": {
+                "validators": [
+                    RegexValidator(
+                        RUN_ID_PATTERN,
+                        message=(
+                            "run_id must be 1-64 characters: a letter or digit, "
+                            "then letters, digits, `-` or `_`."
+                        ),
+                    ),
+                    UniqueValidator(
+                        queryset=Run.objects.all(), message=RUN_ID_UNIQUE_MESSAGE
+                    ),
+                ]
+            }
+        }
 
 
 class RunUpdateSerializer(RunSerializer):
@@ -231,15 +275,26 @@ class RunUpdateSerializer(RunSerializer):
       That is DRF's standard behaviour for read-only fields and it is what
       already happens to `id` and `created_at`, so `PATCH {"agent": ...}`
       succeeds and changes nothing rather than 400-ing.
-    - `status` is validated only against Requirement 11.2's choice set, not
-      against the approve/reject state machine. Requirement 21's gate ("a
-      decision is only recordable from `awaiting_review`") is a property of
-      the `approve`/`reject` actions and the `Approval` row they write
-      (Task 28.1), and Requirement 12.4 places no transition restriction on
-      PATCH. Adding one here would be a rule the spec does not state; it is
-      called out rather than silently invented, because it does mean a
-      PATCH can set `status="approved"` without an `Approval` record
-      existing.
+    - `status` is validated here only against Requirement 11.2's choice
+      set, not against the approve/reject state machine. Requirement 21's
+      gate ("a decision is only recordable from `awaiting_review`") is a
+      property of the `approve`/`reject` actions and the `Approval` row
+      they write (Task 28.1). Two values are gated, in the view rather than
+      here (see below); every other value keeps PATCH's unrestricted
+      behaviour, which still means a PATCH can set `status="approved"`
+      without an `Approval` record existing.
+
+    ### `awaiting_review` and `failed` are gated in the view
+
+    The two values the CLI itself writes — `awaiting_review` once its
+    upload completes, `failed` when a registered Run errors — are accepted
+    only from `running`. `RunViewSet.partial_update` sends them through
+    `apply_status_transition` (`runs.views.GATED_PATCH_TRANSITIONS`), the
+    same conditional atomic update `apply_decision` uses, so a Run in any
+    other status gets a 409 naming its stored status and its row
+    (`pr_url` included) is left untouched. This serializer still validates
+    the payload first, so an unknown status is a 400 as before.
+    `running`, `approved`, `rejected` and `submitted` stay unrestricted.
     """
 
     class Meta(RunSerializer.Meta):
@@ -254,6 +309,28 @@ class RunUpdateSerializer(RunSerializer):
             "run_id",
             "agent",
         ]
+
+    def update(self, instance: Run, validated_data: dict) -> Run:
+        """Writes only the fields this PATCH named (Requirement 12.4).
+
+        `ModelSerializer.update` ends in a bare `instance.save()`, which
+        writes every column — including the `status` read when the request
+        loaded the Run. A `pr_url`-only PATCH (how `vaultshield submit`
+        writes back its PR, Requirement 22.4) racing a gated transition or
+        an approve/reject would then put that stale `status` back over the
+        winner. Saving with `update_fields` limits the write to the named
+        columns. `updated_at` is listed so Django still runs its `auto_now`
+        (it only computes `pre_save` for fields in `update_fields`), so the
+        timestamp bumps exactly as before; an empty PATCH body bumps only
+        the timestamp, also as before.
+        """
+        # Only the columns this PATCH named, plus the `auto_now` clock, so a
+        # pr_url-only PATCH cannot write a stale `status` back over a
+        # concurrent gated transition or decision.
+        for name, value in validated_data.items():
+            setattr(instance, name, value)
+        instance.save(update_fields=[*validated_data, "updated_at"])
+        return instance
 
 
 class RunDetailSerializer(RunSerializer):
@@ -454,22 +531,52 @@ class FileDiffStatSerializer(serializers.Serializer):
     file (git prints `-`, and line counts are undefined for binary
     content), so 0 is a real value and only negatives are rejected.
 
-    The validated result carries exactly these three keys, so an entry
-    with extra keys is stored without them. Nothing in the spec produces or
-    reads a fourth key, and letting unrecognised keys through would put
+    The validated result carries `path`, `additions`, and `deletions`, plus
+    `patch` and `patch_truncated` only when the client sent them. DRF leaves
+    an absent optional field with no default out of `validated_data`, so a
+    stored entry never gains a `null` patch or a `false` flag it was not
+    given, and a stats-only upload is stored exactly as before. Any other
+    key is still dropped: letting unrecognised keys through would put
     unvalidated client data into the payload the scanner walks.
+
+    `patch` is the file's unified diff (`git diff -U0`), which the
+    Security_Scan Service reads added lines out of (Requirement 17.1) and
+    which is part of the change set ingested under Requirement 13.2. The CLI
+    omits it for a binary file. Three settings on it are deliberate:
+
+    - `trim_whitespace=False`: diff text is content. A leading space, a
+      trailing space, or a trailing newline must survive byte for byte, or
+      the scanner's line walk and line numbers change.
+    - `allow_blank=True`: `""` is a real value. A mode-only change has an
+      empty hunk body, and the CLI may send `""` with `patch_truncated`
+      when its budget is spent before this file's patch.
+    - No `max_length`: the whole request body is already bounded by
+      Django's `DATA_UPLOAD_MAX_MEMORY_SIZE` (left at its 2.5 MiB default),
+      and the CLI caps each patch and the whole diff to stay under it.
+
+    `patch_truncated: true` means the security scan did not see this file's
+    whole patch. That covers a patch cut at the per-file or total budget, a
+    patch omitted entirely because the budget was spent (`""` or absent),
+    and a path that is not valid UTF-8, for which no patch was captured. An
+    entry with no `patch` and no flag is a binary file. `null` is rejected
+    for both fields, like every other field here.
     """
 
     path = serializers.CharField()
     additions = serializers.IntegerField(min_value=0)
     deletions = serializers.IntegerField(min_value=0)
+    patch = serializers.CharField(
+        required=False, allow_blank=True, trim_whitespace=False
+    )
+    patch_truncated = serializers.BooleanField(required=False)
 
 
 class RunDiffIngestSerializer(serializers.ModelSerializer):
     """The structured diff `POST /api/runs/:id/diff/` accepts (Req. 13.2).
 
     The request body is the CLI's `diff.json` verbatim —
-    `{"files": [{"path", "additions", "deletions"}, ...]}` — which is why
+    `{"files": [{"path", "additions", "deletions", "patch"?,
+    "patch_truncated"?}, ...]}` — which is why
     `files` is the only writable field and why the envelope is not
     unwrapped: `cli/vaultshield/git_capture.py` writes that object, so the
     Uploader posts the parsed artifact through unchanged.

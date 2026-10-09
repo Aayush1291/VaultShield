@@ -156,9 +156,11 @@ import docker
 import httpx
 from docker import DockerClient
 
+from vaultshield.egress import EgressError, remove_egress_resources
 from vaultshield.git_capture import run_branch_name
 from vaultshield.run_directory import RunDirectoryError, validate_run_id
 from vaultshield.sandbox import Sandbox, SandboxError, container_name
+from vaultshield.trusted_capture import capture_container_name, remove_capture_helper
 from vaultshield.submit import (
     DEFAULT_REMOTE,
     RUN_DETAIL_PATH_TEMPLATE,
@@ -354,6 +356,10 @@ def teardown_sandbox(run_id: str, *, client: DockerClient | None = None) -> bool
     through `Sandbox.teardown` — see the module docstring for why the removal
     goes through `Sandbox` rather than through the container directly.
 
+    Afterwards (Batch 3 FR6) it also removes the Run's capture helper, egress
+    proxy, egress networks and proxy staging dirs, whether or not the Sandbox
+    was still there; the return value still describes the Sandbox only.
+
     `False` means the Run has no container: either its `vaultshield run` tore
     the Sandbox down already, or the Run never had one. That is not a failure
     (Requirement 23.1 is conditional on there being an active Sandbox), and it
@@ -366,6 +372,33 @@ def teardown_sandbox(run_id: str, *, client: DockerClient | None = None) -> bool
     name = container_name(_validated_run_id(run_id))
     docker_client = client if client is not None else _docker_client(run_id)
 
+    removed = _remove_sandbox_container(run_id, name, docker_client)
+    _remove_run_side_objects(run_id, docker_client)
+    return removed
+
+
+def _remove_run_side_objects(run_id: str, docker_client: DockerClient) -> None:
+    """Batch 3 FR6: after the Sandbox, the Run's trusted capture helper,
+    then its egress proxy, int and open networks and proxy staging dirs, each
+    by its derived name. Absent objects are skipped; a Docker refusal is a
+    `TeardownError` naming the object."""
+    try:
+        remove_capture_helper(run_id, docker_client)
+    except docker.errors.DockerException as exc:
+        raise TeardownError(
+            f"Cannot remove the capture helper {capture_container_name(run_id)!r} "
+            f"for run {run_id}: {exc}"
+        ) from exc
+    try:
+        remove_egress_resources(run_id, docker_client)
+    except EgressError as exc:
+        raise TeardownError(str(exc)) from exc
+
+
+def _remove_sandbox_container(
+    run_id: str, name: str, docker_client: DockerClient
+) -> bool:
+    """The Sandbox half of `teardown_sandbox`: `True` if it was removed."""
     try:
         container = docker_client.containers.get(name)
     except docker.errors.NotFound:

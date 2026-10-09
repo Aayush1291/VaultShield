@@ -33,6 +33,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -77,6 +78,9 @@ _RUN_ARGS = [
     "--agent=antigravity",
     "--prompt=do the thing",
     "--repo-url=https://example.com/acme/widgets.git",
+    # `run` registers its Run under a backend Project before any Sandbox
+    # exists; the backend is stubbed in `_wire`, so the id is never checked.
+    "--project=0123456789abcdef01234567",
 ]
 
 
@@ -87,8 +91,13 @@ class _FakeInteractiveExec:
     """Scripted stand-in for `InteractiveExec`.
 
     Reproduces the one behaviour that makes this path dangerous: a container TTY
-    echoes stdin back into its own output. `read_output` therefore replays the
-    code it was sent, so a test can prove the display layer scrubs it.
+    echoes stdin back into its own output. After a code is sent, `read_output`
+    yields it back, so a test can prove the display layer scrubs it.
+
+    Mirrors the real contract: redaction is armed by `send_line`, as in
+    `InteractiveExec.send_line`; `read_output` is iterated exactly once, with the
+    code sent from inside the loop, so the echo arrives later in the same pass;
+    `timed_out` mirrors the real field.
     """
 
     def __init__(self, *, prompt_lines=None, exit_code=0, after_send=None) -> None:
@@ -97,24 +106,24 @@ class _FakeInteractiveExec:
         self.after_send = ["hello!", "Signed in."] if after_send is None else list(after_send)
         self.sent: list[str] = []
         self.closed = False
-        self._phase = 0
+        self.timed_out = False
+        self._secret: str | None = None
 
-    def read_output(self, *, redact: str | None = None):
-        if self._phase == 0:
-            self._phase = 1
-            for line in self.prompt_lines:
-                yield _scrub(line, redact)
-        else:
+    def read_output(self):
+        for line in self.prompt_lines:
+            yield _scrub(line, self._secret)
+        if self.sent:
             # The TTY echo: whatever was sent comes straight back.
             for sent in self.sent:
-                yield _scrub(sent, redact)
+                yield _scrub(sent, self._secret)
             for line in self.after_send:
-                yield _scrub(line, redact)
+                yield _scrub(line, self._secret)
 
     def send_line(self, text: str) -> None:
+        self._secret = text
         self.sent.append(text)
 
-    def flush_remaining(self, *, redact: str | None = None) -> str:
+    def flush_remaining(self) -> str:
         return ""
 
     def wait(self) -> int | None:
@@ -137,11 +146,20 @@ def _wire(
 ):
     """Stands in for every Docker- and network-dependent stage of `run`.
 
+    The backend Run registration, completion and failed mark
+    (`uploader.create_run`/`complete_run`/`mark_run_failed`) succeed by
+    default and are recorded into `seen["backend"]` as `("create" |
+    "complete" | "failed", run_id)`, not into `calls`, so the exact stage
+    orders asserted below are unchanged. The failed mark also appends
+    `"backend.failed"` to `calls`, after whatever stage failed, so a test can
+    assert it came after `"sandbox.teardown"`; on the success path it never
+    runs, so `calls` is untouched there.
+
     Returns `(calls, seen)`: `calls` is the stage log in order, `seen` records
     what each stage was handed.
     """
     calls: list[str] = []
-    seen: dict[str, Any] = {}
+    seen: dict[str, Any] = {"backend": []}
     handle = interactive if interactive is not None else _FakeInteractiveExec()
     seen["handle"] = handle
 
@@ -164,7 +182,7 @@ def _wire(
                 "project_dir": project_dir,
             }
 
-        def exec_interactive(self, cmd, *, workdir=None):
+        def exec_interactive(self, cmd, *, workdir=None, timeout_s=None):
             calls.append("sandbox.exec_interactive")
             seen["auth_argv"] = cmd
             seen["auth_workdir"] = workdir
@@ -206,15 +224,84 @@ def _wire(
         seen["diff"] = written
         return written
 
+    # Batch 3 trusted capture and token hygiene (§5.4.1, §5.5), stubbed out of
+    # `calls` so the stage orders asserted below are unchanged.
+    from vaultshield.token_hygiene import SecretSet, Snapshot
+
+    class _Base:
+        commit_oid = None
+
+        def close(self):
+            pass
+
+    class _Split:
+        notices: list = []
+
+        def close(self):
+            pass
+
+    class _Capture:
+        def __init__(self, run_id, client, *, image_id):
+            pass
+
+        def start(self):
+            pass
+
+        def load(self, split, base):
+            pass
+
+        def remove(self):
+            pass
+
+    monkeypatch.setattr(cli_module, "record_trusted_base", lambda sandbox, *, caps: _Base())
+    monkeypatch.setattr(cli_module, "kill_sandbox", lambda sandbox: None)
+    monkeypatch.setattr(cli_module, "sandbox_image_id", lambda sandbox: "sha256:fake")
+    monkeypatch.setattr(cli_module, "TrustedCapture", _Capture)
+    monkeypatch.setattr(cli_module, "archive_sandbox_repo", lambda sandbox, *, caps: _Split())
+    monkeypatch.setattr(cli_module, "check_run_outputs", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_module.token_hygiene,
+        "snapshot",
+        lambda sandbox, roots, *, credential_files=None: Snapshot(
+            SecretSet(), credential_files or frozenset(), 0
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module.trusted_capture, "remove_capture_helper", lambda run_id, client: False
+    )
+    monkeypatch.setattr(
+        cli_module.uploader, "upload_events_best_effort", lambda *a, **k: None
+    )
     monkeypatch.setattr(cli_module, "Sandbox", _Sandbox)
     monkeypatch.setattr(cli_module, "supervise_in_sandbox", _supervise)
     monkeypatch.setattr(cli_module, "start_and_capture", _capture)
     monkeypatch.setattr(cli_module, "commit_run_branch", _commit)
     monkeypatch.setattr(cli_module, "build_structured_diff", _diff)
+    monkeypatch.setattr(
+        cli_module, "resolve_diff_base", lambda sandbox, branch: f"{branch}~1"
+    )
+    def _mark_run_failed(backend_url, token, run_id):
+        seen["backend"].append(("failed", run_id))
+        calls.append("backend.failed")
+        return None
+
     monkeypatch.setattr(cli_module.uploader, "load_token", lambda: "test-token")
     monkeypatch.setattr(
         cli_module.uploader, "upload_run", lambda *a, **k: calls.append("upload")
     )
+    monkeypatch.setattr(
+        cli_module.uploader,
+        "create_run",
+        lambda backend_url, token, *, project, run_id, agent: seen["backend"].append(
+            ("create", run_id)
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module.uploader,
+        "complete_run",
+        lambda backend_url, token, run_id: seen["backend"].append(("complete", run_id)),
+    )
+    monkeypatch.setattr(cli_module.uploader, "mark_run_failed", _mark_run_failed)
     monkeypatch.setattr(cli_module.docker, "from_env", lambda: object())
     return calls, seen
 
@@ -612,3 +699,64 @@ class TestTeardownIsGuaranteedAroundTheAuthPhase:
         from vaultshield.adapters.base import AdapterError
 
         assert not issubclass(AuthError, AdapterError)
+
+    def test_an_abort_at_the_code_prompt_marks_the_run_failed_after_teardown(
+        self, monkeypatch
+    ):
+        """Ctrl-C or EOF at the code prompt is turned into `click.exceptions.Abort`
+        by Click itself, so it never reaches `_authenticate_in_sandbox`'s
+        `except KeyboardInterrupt`. It must still tear the Sandbox down, mark the
+        registered Run failed exactly once, after that teardown, and surface as
+        Click's own `Aborted!`."""
+
+        def _abort(*args, **kwargs):
+            raise click.exceptions.Abort()
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+            calls, seen = _wire(monkeypatch)
+            monkeypatch.setattr(cli_module.click, "prompt", _abort)
+            result = runner.invoke(
+                cli, _RUN_ARGS + ["--interactive-auth"], catch_exceptions=False
+            )
+            assert result.exit_code == 1
+            assert "Aborted!" in result.output
+            assert "monitor.supervise_in_sandbox" not in calls
+            assert [b for b in seen["backend"] if b[0] == "failed"] == [
+                ("failed", seen["sandbox"].run_id)
+            ]
+            assert calls.index("sandbox.teardown") < calls.index("backend.failed")
+            assert seen["handle"].closed is True
+
+    def test_a_sign_in_that_goes_silent_is_reported_as_a_timeout(self, monkeypatch):
+        """Carried item 6(d): the read deadline expired (`timed_out`) before the
+        sign-in printed its code prompt. Reported as a timeout, not as "ended
+        before asking", with nothing started and the Sandbox torn down."""
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+            handle = _FakeInteractiveExec(prompt_lines=["Signing in..."])
+            handle.timed_out = True
+            calls, _seen = _wire(monkeypatch, interactive=handle)
+            result = _invoke(_RUN_ARGS + ["--interactive-auth"])
+            assert result.exit_code != 0
+            assert "produced no further output" in result.output
+            assert "abandoned" in result.output
+            assert "monitor.supervise_in_sandbox" not in calls
+            assert "sandbox.teardown" in calls
+            assert handle.closed is True
+
+
+# --- Batch 3 FR5: the credential root the token-hygiene guard covers --------
+
+
+def test_antigravity_credential_paths_are_the_confirmed_files_outside_the_repo():
+    # Narrowed after the real sign-in probe listed `/root/.gemini` (§9 item 14).
+    paths = Antigravity_Adapter().credential_paths()
+    assert paths == (
+        "/root/.gemini/antigravity-cli/antigravity-oauth-token",
+        "/root/.gemini/antigravity-cli/jetski_state.pbtxt",
+    )
+    assert not any(p == REPO_DIR or p.startswith(REPO_DIR + "/") for p in paths)
+    assert Mock_Adapter().credential_paths() == ()

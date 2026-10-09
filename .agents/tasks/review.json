@@ -1,0 +1,27 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "id": "non-utf8-path-empty-patch",
+      "severity": "non-blocking",
+      "confidence": "confirmed",
+      "summary": "Sandbox._decode turns a non-UTF-8 filename into a U+FFFD path. The per-file `git diff -- <path>` then matches nothing and exits 0, so the entry is sent as a complete `patch: \"\"` with non-zero additions and no patch_truncated flag, and scan_diff sees nothing.",
+      "action": "In build_structured_diff, when stat.path contains U+FFFD, skip the exec and emit patch=\"\" with patch_truncated=True. Document it next to the .gitattributes gap and add a test that builds the path via `git update-index --cacheinfo`."
+    },
+    {
+      "id": "scanner-splitlines",
+      "severity": "follow-up",
+      "confidence": "confirmed",
+      "summary": "rules.py _iter_added_lines uses splitlines(), which also breaks on \\x0b, \\x0c, \\x1c-\\x1e, \\x85, \\u2028 and \\u2029, so parts of such lines go unscanned and later line numbers shift.",
+      "action": "Track as a scanner follow-up; rules.py is frozen for this task."
+    },
+    {
+      "id": "stale-rules-docstring",
+      "severity": "follow-up",
+      "confidence": "confirmed",
+      "summary": "rules.py's module docstring still says the CLI sends no patch.",
+      "action": "Update it in a follow-up once the scanner is unfrozen."
+    }
+  ],
+  "reviewDoc": "/Users/aayush/Codes/VaultShield/.agents/tasks/patch-passthrough-review.md"
+}

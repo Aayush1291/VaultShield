@@ -1,0 +1,10 @@
+{
+  "files": [
+    {
+      "path": "vaultshield_mock_agent.txt",
+      "additions": 1,
+      "deletions": 0,
+      "patch": "diff --git a/vaultshield_mock_agent.txt b/vaultshield_mock_agent.txt\nnew file mode 100644\nindex 0000000..f59c895\n--- /dev/null\n+++ b/vaultshield_mock_agent.txt\n@@ -0,0 +1 @@\n+written by Mock_Adapter inside the Sandbox\n"
+    }
+  ]
+}

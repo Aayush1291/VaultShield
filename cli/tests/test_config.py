@@ -252,6 +252,37 @@ def test_load_config_defaults_optional_fields_when_absent(tmp_path: Path):
     assert config.off_limits_paths == []
 
 
+# --- load_config: the optional backend `project` id -------------------------
+#
+# `run` registers its Run under this Project before any Sandbox exists, and
+# `--project` takes precedence over it. Absent is normal (the option supplies
+# it), so only a wrong type is an error.
+
+_MINIMAL_CONFIG = {"start_command": "npm start", "port": 3000, "ready_path": "/"}
+
+
+def test_load_config_defaults_project_to_empty_when_absent(tmp_path: Path):
+    _write_yaml(tmp_path, dict(_MINIMAL_CONFIG))
+
+    assert load_config(tmp_path).project == ""
+
+
+def test_load_config_reads_a_present_project(tmp_path: Path):
+    _write_yaml(tmp_path, {**_MINIMAL_CONFIG, "project": "0123456789abcdef01234567"})
+
+    assert load_config(tmp_path).project == "0123456789abcdef01234567"
+
+
+def test_load_config_rejects_a_project_of_the_wrong_type(tmp_path: Path):
+    _write_yaml(tmp_path, {**_MINIMAL_CONFIG, "project": ["not", "a", "string"]})
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(tmp_path)
+
+    assert "`project`" in str(excinfo.value)
+    assert str(tmp_path / ".vaultshield.yml") in str(excinfo.value)
+
+
 # --- load_config: missing required fields -----------------------------------
 
 
@@ -492,3 +523,34 @@ class TestStrictTypeValidation:
         with pytest.raises(ConfigError) as excinfo:
             load_config(_config_dir(tmp_path, body))
         assert "routes[0]" in str(excinfo.value)
+
+
+# --- Batch 3 FR3: the `egress` key ------------------------------------------
+
+
+def test_egress_defaults_to_off(tmp_path):
+    config = load_config(_config_dir(tmp_path, VALID_BODY))
+    assert config.egress.mode == "off" and config.egress.allow == ()
+
+
+@pytest.mark.parametrize("mode_yaml, mode", [("off", "off"), ("'off'", "off"),
+                                             ("log-only", "log-only"), ("allowlist", "allowlist")])
+def test_egress_modes(tmp_path, mode_yaml, mode):
+    body = VALID_BODY + f"egress:\n  mode: {mode_yaml}\n  allow:\n    - API.Example.com.\n    - '*.example.org:8443'\n"
+    config = load_config(_config_dir(tmp_path, body))
+    assert config.egress.mode == mode
+    assert [str(e) for e in config.egress.allow] == ["api.example.com:443", "*.example.org:8443"]
+
+
+@pytest.mark.parametrize("egress_yaml", [
+    "egress: allowlist\n",
+    "egress:\n  mode: true\n",
+    "egress:\n  mode: strict\n",
+    "egress:\n  mode: allowlist\n  extra: 1\n",
+    "egress:\n  allow: api.example.com\n",
+    "egress:\n  allow:\n    - https://api.example.com\n",
+    "egress:\n  allow:\n    - 10.0.0.1\n",
+])
+def test_bad_egress_blocks_are_config_errors(tmp_path, egress_yaml):
+    with pytest.raises(ConfigError, match="egress"):
+        load_config(_config_dir(tmp_path, VALID_BODY + egress_yaml))

@@ -374,6 +374,7 @@ def start_and_capture(
     *,
     poll_interval_s: float = _POLL_INTERVAL_S,
     browser_session: BrowserSession | None = None,
+    published_by=None,
 ) -> list[Path]:
     """Starts `config.start_command` inside `sandbox`, bound to
     `config.port`, polls `config.ready_path` until a 200 response or
@@ -391,7 +392,9 @@ def start_and_capture(
     `poll_interval_s` and `browser_session` are keyword-only additions to
     design.md's reference signature, which stays valid for every positional
     caller; see `wait_until_ready` and `capture_route_screenshots` for what
-    each one feeds.
+    each one feeds. `published_by` (Batch 3 D4) is passed to
+    `resolve_base_url`: with egress enforced, the egress proxy, not the
+    Sandbox, publishes the app port.
 
     Raises `ReadinessTimeout` if the application never answers with a 200
     in time, `ScreenshotError` if it did but a route could not be captured,
@@ -416,7 +419,7 @@ def start_and_capture(
         # requirement that had no purpose.
         return []
 
-    base_url = resolve_base_url(sandbox, config.port)
+    base_url = resolve_base_url(sandbox, config.port, published_by=published_by)
     _start_app(sandbox, config)
     wait_until_ready(
         base_url,
@@ -471,7 +474,7 @@ def wait_until_ready(
         sleep(min(poll_interval_s, remaining))
 
 
-def resolve_base_url(sandbox: Sandbox, port: int) -> str:
+def resolve_base_url(sandbox: Sandbox, port: int, *, published_by=None) -> str:
     """Returns the `http://host:port` origin at which `sandbox`'s
     application is reachable *from the host*.
 
@@ -481,11 +484,17 @@ def resolve_base_url(sandbox: Sandbox, port: int) -> str:
     "Reaching the application from the host" section for why the fallback
     is Linux-only in practice and why this is still worth having.
 
+    `published_by` (keyword-only, Batch 3 D4) is the container that publishes
+    the port instead of the Sandbox: the egress proxy, which forwards it to an
+    internal-only Sandbox. When given, its published port is read and the
+    container-IP fallback is skipped, because an internal-only Sandbox's IP
+    is never host-reachable.
+
     Raises `SandboxError` if `sandbox` has no container (never created, or
     already torn down), if Docker cannot be asked about it, or if neither a
     published port nor a container IP could be found.
     """
-    container = sandbox.container
+    container = sandbox.container if published_by is None else published_by
     if container is None:
         raise SandboxError(
             f"Cannot resolve the application address for run {sandbox.run_id}: "
@@ -508,6 +517,12 @@ def resolve_base_url(sandbox: Sandbox, port: int) -> str:
     host_port = _published_host_port(network, port)
     if host_port is not None:
         return f"http://{_HOST_LOOPBACK}:{host_port}"
+
+    if published_by is not None:
+        raise SandboxError(
+            f"Cannot resolve the application address for run {sandbox.run_id}: "
+            f"the egress proxy does not publish port {port}/tcp"
+        )
 
     container_ip = _container_ip(network)
     if container_ip:

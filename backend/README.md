@@ -86,6 +86,53 @@ delete-then-insert. Atlas is always a replica set. A standalone `mongod` starts
 the stack fine and then fails those writes, so for local work start it with
 `--replSet rs0` and initiate the set.
 
+### Request size
+
+`DATA_UPLOAD_MAX_MEMORY_SIZE` is left at Django's 2.5 MiB default on purpose.
+The setting is process-wide, so raising it would also raise the in-memory body
+limit for every endpoint, including the unauthenticated `POST /api/auth/login/`.
+The CLI keeps its uploads under the default instead: event batches are sized to
+fit, and `diff.json` is capped at 2 MiB in total and 200 KiB per file patch (see
+`cli/README.md`). A body over the limit is rejected with a 400.
+
+Each `RunDiff.files` entry is `{"path", "additions", "deletions"}` plus, when the
+CLI sent them, `patch` (the file's `git diff -U0` text, which the security scan
+reads) and `patch_truncated` (true when the scan did not see the file's whole
+patch: cut at a size budget, omitted because the budget was spent, or not
+captured because the path is not valid UTF-8). Binary files have no `patch` and
+no flag.
+
+## Run lifecycle
+
+`vaultshield run` registers the Run (`POST /api/runs/`, status `running`) before
+it creates a Sandbox, and from then on the CLI drives the status:
+
+```
+running -> awaiting_review   CLI completion PATCH, after the last artifact upload
+running -> failed            CLI, best effort, on any error after registration
+awaiting_review -> approved | rejected   dashboard approve/reject
+```
+
+- `PATCH /api/runs/:id/` with `status=awaiting_review` or `status=failed` is
+  accepted only from `running` (`GATED_PATCH_TRANSITIONS` in `runs/views.py`),
+  as one conditional atomic update. From any other status it returns 409
+  `{"detail", "current_status"}` and changes nothing. Other `status` values are
+  still unrestricted on PATCH.
+- approve/reject are accepted only from `awaiting_review`, as before.
+- `failed` is terminal for the CLI: neither its completion PATCH nor a
+  re-upload can move a `failed` Run on to review. (Because the other `status`
+  values stay unrestricted, a hand-made `PATCH status=running` can still
+  revive one; tightening that is a follow-up.)
+- The backend never moves a Run on its own. Diff ingest does not complete a
+  Run, because screenshots are uploaded after the diff.
+- `run_id` must be one safe path component (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`).
+  A duplicate is a 400 `{"run_id": [...]}`, including when two creates race.
+
+Some Runs still stay `running` with nothing to mark them failed: a CLI killed
+with SIGKILL or a power loss, a `create_run` response lost after the server
+committed, and Ctrl-C during registration. A server-side reaper for those is a
+follow-up and not built.
+
 ## Running
 
 ```bash

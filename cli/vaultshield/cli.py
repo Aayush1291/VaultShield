@@ -22,8 +22,9 @@ agent in that table rather than for any particular one.
 ``login`` (Task 18.1) is `uploader.login` behind a Click command: it
 exchanges a dashboard username/password for the Dashboard_Auth_Token and
 stores it at ``~/.vaultshield/token``. It stays a separate command that a
-developer runs once — ``run``'s upload stage only ever *reads* that token
-(``uploader.load_token``) and never prompts for a credential mid-Run.
+developer runs once — ``run`` only ever *reads* that token
+(``uploader.load_token``, when it registers the Run before any Sandbox
+exists) and never prompts for a credential mid-Run.
 
 ``submit`` (Task 29.6) is `submit.submit` behind a Click command: it takes
 the ``<run-id>`` the dashboard prints for an approved Run and opens the
@@ -80,12 +81,19 @@ from vaultshield.browser_capture import (
     ScreenshotError,
     start_and_capture,
 )
-from vaultshield.config import ConfigError, detect_framework, load_config, write_config
+from vaultshield.config import (
+    ConfigError,
+    ProjectConfig,
+    detect_framework,
+    load_config,
+    write_config,
+)
 from vaultshield.credentials import build_sandbox_env
 from vaultshield.git_capture import (
     GitCaptureError,
     build_structured_diff,
     commit_run_branch,
+    resolve_diff_base,
 )
 from vaultshield.monitor import Monitor, OffLimitsViolation
 from vaultshield.sandbox_monitor import SandboxMonitorError, supervise_in_sandbox
@@ -100,6 +108,27 @@ from vaultshield.adapters.antigravity import (
     ANTIGRAVITY_OAUTH_SCOPES,
 )
 from vaultshield.sandbox import Sandbox, SandboxError, container_path_under_repo
+from vaultshield import egress
+from vaultshield.egress import EgressConfigError, EgressError, EgressGuard
+from vaultshield.git_capture import UnsafeGitConfig
+from vaultshield.monitor import _append_event_log
+from vaultshield import token_hygiene
+from vaultshield.token_hygiene import (
+    SecretSet,
+    TokenHygieneViolation,
+    check_run_outputs,
+    skipped_snapshot_event,
+)
+from vaultshield import trusted_capture
+from vaultshield.trusted_capture import (
+    TrustedCapture,
+    TrustedCaptureCaps,
+    archive_sandbox_repo,
+    kill_sandbox,
+    notices_to_events,
+    record_trusted_base,
+    sandbox_image_id,
+)
 
 # Substring of `agy`'s own prompt for the pasted code ("Or, paste the
 # authorization code here and press Enter:"), matched case-insensitively so the
@@ -376,8 +405,8 @@ def login(backend_url: str, username: str | None) -> None:
 #   either way (design.md's Error Handling section: on timeout "zero
 #   screenshots are written and the Run is marked failed rather than
 #   partially screenshotted" — marked failed here means a non-zero exit and
-#   a one-line message, since Run status is a backend concern the CLI does
-#   not reach until Task 18.5's Uploader).
+#   a one-line message, plus the best-effort `failed` mark on the backend
+#   that the outer handler makes; see "Registering the Run" below).
 #
 # What the screenshots actually show is limited by judgment call 2 below:
 # the application starts from the Sandbox's own clone, so with an adapter
@@ -396,19 +425,21 @@ def login(backend_url: str, username: str | None) -> None:
 # left it, and the capture commit does not change what is on disk.
 #
 # `build_structured_diff` needs a base ref, and design.md does not say which
-# one. This pipeline passes `<branch>~1`: `commit_run_branch` always adds
-# exactly one commit (`--allow-empty`, so even a no-change Run has one), so
-# the capture commit's first parent IS the commit the Sandbox's clone was
-# sitting on before the agent touched it — the pre-agent state, named
-# without having to know whether the repository's default branch is `main`,
-# `master`, or something else. The one shape this cannot describe is a clone
-# whose `HEAD` is its own root commit (a repository with a single commit):
-# that commit has no parent, so git reports an unknown revision and the Run
-# fails here with its Event_Log and screenshots already on disk. Left as-is
-# rather than papered over with a fallback, because the alternative —
-# resolving `HEAD` with a `git rev-parse` of our own before committing —
-# would put git commands in this module, and `git_capture.py` deliberately
-# owns every one of them.
+# one. This pipeline asks `git_capture.resolve_diff_base` for it, which
+# returns `<branch>~1` — the capture commit's first parent. `commit_run_branch`
+# always adds exactly one commit (`--allow-empty`, so even a no-change Run
+# has one), so that parent IS the commit the Sandbox's clone was sitting on
+# before the agent touched it — the pre-agent state, named without having to
+# know whether the repository's default branch is `main`, `master`, or
+# something else. The one shape `~1` cannot describe is a capture commit that
+# is itself a root commit, which happens when the Sandbox's clone has no
+# commits at all (an empty repository: `checkout -b` works on an unborn
+# branch, and the capture commit becomes the root). A one-commit clone is
+# fine — its Run branch has two commits. For the root case
+# `resolve_diff_base` returns git's empty tree instead, so every file the
+# agent wrote is reported as added (Requirement 10.2) rather than the Run
+# failing on an unknown revision. The `rev-parse`/`hash-object` calls live in
+# `git_capture.py`, which deliberately owns every git command.
 #
 # What the diff actually contains is bounded by judgment call 2 below, the
 # same way the screenshots are: the current adapters write on the host, so
@@ -417,10 +448,10 @@ def login(backend_url: str, username: str | None) -> None:
 # third place, not a new problem introduced here.
 #
 # The Uploader is wired in below as step 10 (Task 18.5, Requirements 14.2
-# and 14.3): once the local Run is complete, `uploader.load_token` reads the
-# Dashboard_Auth_Token `vaultshield login` stored and `uploader.upload_run`
-# POSTs the Run's Event_Log, diff, and screenshots to `--backend-url`.
-# Three things about where it sits:
+# and 14.3): once the local Run is complete, `uploader.upload_run` POSTs the
+# Run's Event_Log, diff, and screenshots to `--backend-url` with the
+# Dashboard_Auth_Token step 2b already read (`uploader.load_token`, from what
+# `vaultshield login` stored). Three things about where it sits:
 #
 # - AFTER the `finally` that tears the Sandbox down, exactly where
 #   design.md's flowchart puts it ("Sandbox_Module: teardown → Uploader:
@@ -428,9 +459,10 @@ def login(backend_url: str, username: str | None) -> None:
 #   `run_dir`, so it needs nothing from the container, and holding a
 #   container open across a network upload would leak one for as long as the
 #   backend is slow.
-# - Outside the `try`, so an upload failure cannot be mistaken for one of
-#   the Run's own failures and so `sandbox.teardown()` has already run and
-#   already printed by the time the upload is attempted.
+# - Outside the inner `try` (it is inside the outer one that marks the Run
+#   failed, see "Registering the Run" below), so an upload failure cannot be
+#   mistaken for one of the Run's own failures and so `sandbox.teardown()`
+#   has already run and already printed by the time the upload is attempted.
 # - In `run` itself rather than in any adapter path, so it happens for every
 #   entry in `_AGENT_ADAPTERS` — mock, codex, kiro, and antigravity —
 #   without any of those adapters' tasks having to remember to wire an
@@ -443,8 +475,8 @@ def login(backend_url: str, username: str | None) -> None:
 # can be re-uploaded. `upload_run` guarantees the "not mutated" half by
 # never writing under `run_dir` at all (uploader.py's own docstring); this
 # module's half is to report it and to not clean anything up on the way out
-# — which is why the upload is the last thing `run` does and nothing follows
-# it.
+# — which is why nothing follows the upload except step 11's completion
+# PATCH, which touches the backend's Run row and never the Run_Directory.
 #
 # Four judgment calls, none of them settled by design.md:
 #
@@ -496,18 +528,42 @@ def login(backend_url: str, username: str | None) -> None:
 #    has already been echoed by then, so a non-zero exit costs no
 #    information about what was produced.
 #
-# One gap this step inherits, named rather than papered over: the artifact
+# Registering the Run (step 2b) and closing it (step 11). The artifact
 # endpoints are nested under a Run the backend already knows
 # (`/api/runs/<run_id>/...`, addressed by `RunViewSet.lookup_field =
-# "run_id"`), and nothing creates that row. `Run.project` is a required
-# foreign key, and neither `.vaultshield.yml` nor `ProjectConfig` carries a
-# project — same shape as judgment call 1's `--repo-url`, except that a
-# `POST /api/runs/` would need a project id the CLI has no way to know. So
-# against a backend that has never seen this `run_id`, the upload fails with
-# the backend's own `404`, reported like any other upload failure with the
-# artifacts preserved. Creating (or resolving) the Run record is a real
-# piece of wiring that no task in the plan owns; inventing a project id here
-# would only move the failure.
+# "run_id"`). This used to be a named gap: nothing created that row, so
+# against a backend that had never seen the `run_id` the upload failed with a
+# `404`. It is closed in three places:
+#
+# - Step 1 resolves the project `Run.project` needs (`_resolve_project`:
+#   `--project` > `.vaultshield.yml`'s `project:` > a one-line error), so "no
+#   project" stops the Run before the Run_Directory exists, like a
+#   `ConfigError`.
+# - Step 2b, right after the Run_Directory exists and before any Docker call,
+#   loads the token and POSTs the Run (`uploader.create_run`). A missing
+#   token, an unreachable backend, a 401, or a refused project or `run_id`
+#   aborts with one line ending "(no Sandbox was created)". The empty
+#   Run_Directory step 2 made is left behind.
+# - Everything after 2b runs inside one outer `try`/`except BaseException`.
+#   On success, step 11 PATCHes `awaiting_review` after the last artifact
+#   (`_complete_run`). On any failure (a stage's ClickException, a failed
+#   upload or completion, `KeyboardInterrupt`, Click's `Abort` at the
+#   sign-in code prompt) the inner `finally` has already torn the Sandbox
+#   down; the handler then makes exactly one best-effort `failed` PATCH
+#   (`_mark_run_failed_best_effort`) and re-raises the original exception
+#   unchanged. The failed mark never raises and adds at most one `Warning:`
+#   line on stderr; the artifacts stay on disk exactly as before. Because
+#   registration comes before step 3, a local preflight failure after it
+#   (`--env-file not found`, Docker not running) also leaves a `failed` Run
+#   in the dashboard. `failed` is terminal for the CLI: the backend accepts
+#   `awaiting_review` only from `running`.
+#
+# Residual cases that still leave a Run `running`, from where the handler
+# sits rather than by oversight: a CLI that is SIGKILLed or loses power runs
+# no Python at all; and a `create_run` whose response was lost after the
+# backend committed (a timeout), or a Ctrl-C during step 2b, happens before
+# the outer handler is entered, so nothing marks that Run failed. A
+# server-side reaper for stale `running` Runs is a follow-up.
 #
 # One observed wrinkle of watching the repository root (judgment call 2):
 # the Run_Directory sits inside the watched tree, so VaultShield's own
@@ -524,8 +580,8 @@ def login(backend_url: str, username: str | None) -> None:
 # Failure reporting: `ConfigError`, `SandboxError`, an adapter's own
 # `AdapterError`, an `OffLimitsViolation` (Requirement 4.5's failed Run),
 # a `ReadinessTimeout`/`ScreenshotError` from browser capture, a
-# `GitCaptureError` from step 8, the `UploadError` step 10 raises for a
-# missing token or an unreachable backend, and the `OSError` the Monitor
+# `GitCaptureError` from step 8, the `UploadError` steps 2b, 10 and 11 raise
+# for a missing token or an unreachable backend, and the `OSError` the Monitor
 # raises when a file-change watch could not be established are each
 # surfaced as a `click.ClickException` — a one-line message rather than a
 # traceback.
@@ -599,6 +655,26 @@ def login(backend_url: str, username: str | None) -> None:
         "host login is never read."
     ),
 )
+@click.option(
+    "--project",
+    default=None,
+    help=(
+        "Backend Project id this Run belongs to  [default: `project` in "
+        ".vaultshield.yml]"
+    ),
+)
+@click.option(
+    "--egress",
+    "egress_mode",
+    type=click.Choice(["off", "log-only", "allowlist"]),
+    default=None,
+    help=(
+        "Egress policy for the Sandbox after clone and install: `off` (no "
+        "filtering), `log-only` (record unlisted hosts), `allowlist` (only the "
+        "agent's allowlisted hosts)  [default: `egress.mode` in .vaultshield.yml, "
+        "else off]"
+    ),
+)
 @_backend_url_option("VaultShield backend this Run's artifacts are uploaded to")
 def run(
     agent: str,
@@ -608,6 +684,8 @@ def run(
     env_file: Path | None,
     ready_timeout: int,
     interactive_auth: bool,
+    project: str | None,
+    egress_mode: str | None,
     backend_url: str,
 ) -> None:
     """Execute one sandboxed, monitored Run and write its Event_Log.
@@ -616,27 +694,41 @@ def run(
     artifacts into `.vaultshield/runs/<run_id>/`:
 
     \b
-      1. Config_Module      load the existing `.vaultshield.yml`
+      1. Config_Module      load the existing `.vaultshield.yml`, resolve
+                            the project (`--project` or `project:`)
       2. Run_Directory      generate a run_id, create its directory
+     2b. Backend            register the Run (POST /api/runs/); abort if
+                            unreachable, before any Sandbox exists
       3. Credentials_Module build `.env.sandbox` (dummy values only)
       4. Agent_Adapter      resolve `--agent` (before any Sandbox exists)
-      5. Sandbox_Module     create a Sandbox, mount the credential file
+     5a. Egress             with `--egress`/`egress.mode` not off: per-Run
+                            networks and the filtering proxy
+      5. Sandbox_Module     create a Sandbox, mount the credential file;
+                            then (egress on) switch it to the internal
+                            network
+ 5-base. Trusted base       record the pre-agent commit and objects
+                            (Docker API only)
+     5c. Token hygiene      snapshot the agent's credential (after sign-in)
       6. Monitor            run the agent under PTY + file-change capture,
                             write the merged Event_Log
       7. Browser_Capture    start the app in the Sandbox, poll `ready_path`,
                             screenshot each configured route
-      8. Git capture        commit the Sandbox's changes to
-                            `vaultshield/run-<run_id>`, write `diff.json`
+      8. Git capture        stop the Sandbox, rebuild its repo in a trusted
+                            capture helper, commit to
+                            `vaultshield/run-<run_id>`, write `diff.json`,
+                            scan outputs for the agent's credential
       9. Teardown           tear the Sandbox down, on success or failure
      10. Uploader           POST the Event_Log, diff, and screenshots to
                             `--backend-url` with the token from
                             `vaultshield login`
+     11. Backend            mark the Run awaiting_review; on any failure
+                            after 2b the Run is marked failed
 
-    Requires a running Docker daemon, and a `vaultshield login` for the
-    upload. Every failure is reported as a one-line error; when the
-    Event_Log has already been written, the message names the Run_Directory
-    it was preserved in. A failed upload leaves the Run_Directory exactly as
-    the Run wrote it, so it can be uploaded again from the same artifacts.
+    Requires a running Docker daemon, a reachable backend, and a
+    `vaultshield login` before anything runs. Every failure is reported as a
+    one-line error; when the Event_Log has already been written, the message
+    names the Run_Directory it was preserved in. A failed upload leaves the
+    Run_Directory exactly as the Run wrote it, so the artifacts stay on disk.
     """
     repo_root = Path.cwd()
 
@@ -647,6 +739,11 @@ def run(
         config = load_config(repo_root)
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
+    # Still step 1, so "no project" also stops the Run before anything exists
+    # on disk.
+    project_id = _resolve_project(project, config)
+    # Still step 1 (Batch 3 FR3): an invalid egress policy stops the Run here.
+    policy = _resolve_egress(agent, config, egress_mode)
 
     # 2. Run_Directory (Task 8.1). `generate_run_id`'s output is always a
     #    valid single path component, so `create_run_dir` cannot raise
@@ -655,173 +752,376 @@ def run(
     run_dir = create_run_dir(repo_root, run_id)
     click.echo(f"Run {run_id}: artifacts in {run_dir}")
 
-    # 3. Credentials_Module: dummy values only, never a real credential.
-    sandbox_env = _build_run_credential_file(repo_root, run_dir, env_file)
-
-    # 4. Agent_Adapter, instantiated before any Sandbox exists.
-    adapter = _AGENT_ADAPTERS[agent]()
-
-    # 5. Sandbox_Module.
+    # 2b. Backend: register the Run before any Sandbox exists, so the upload
+    #     at the end has a Run to address and a failure in between can be
+    #     recorded against it. Unreachable, unauthenticated, or refused: abort
+    #     here, with no container created (see "Registering the Run" above).
     try:
-        client = docker.from_env()
-    except docker.errors.DockerException as exc:
+        token = uploader.load_token()
+        uploader.create_run(
+            backend_url, token, project=project_id, run_id=run_id, agent=agent
+        )
+    except uploader.UploadError as exc:
+        # Parenthesised suffix: several UploadError texts end in an httpx message
+        # with no full stop ("…: All connection attempts failed").
         raise click.ClickException(
-            f"Cannot reach the Docker daemon: {exc}. `vaultshield run` needs "
-            "Docker running locally to create a Sandbox."
+            f"Cannot start run {run_id}: {exc} (no Sandbox was created)"
         ) from exc
-
-    sandbox = Sandbox(run_id, client)
-
+    click.echo(f"Run {run_id} registered with {backend_url}.")
+    # Everything from here on runs with a registered Run, so any failure,
+    # `KeyboardInterrupt` included, marks it `failed` exactly once, after the
+    # inner `finally` has torn the Sandbox down, and is then re-raised
+    # unchanged. Nothing between `create_run` returning and this `try` can
+    # raise except `click.echo`.
+    #
+    # The Run's credential needles (Batch 3 FR5), in host memory only.
+    secrets = SecretSet()
     try:
-        # `publish_port` is what makes step 7 reachable from the host: it
-        # publishes `config.port` on an ephemeral host port that
-        # `browser_capture.resolve_base_url` reads back off the container.
-        sandbox.create(
-            repo_url,
-            base_image,
-            sandbox_env,
-            publish_port=config.port,
-            # Only moves where dependencies are installed. The clone still
-            # lands at Sandbox.REPO_DIR, so git capture is unaffected.
-            project_dir=config.project_dir,
-        )
-        click.echo(f"Sandbox created for run {run_id} (cloned {repo_url}).")
+        # 3. Credentials_Module: dummy values only, never a real credential.
+        sandbox_env = _build_run_credential_file(repo_root, run_dir, env_file)
 
-        # 5b. Optional in-Sandbox sign-in (`--interactive-auth`). Between the
-        #     Sandbox existing and the agent starting, because the agent cannot
-        #     start unauthenticated and the session has to live in the container
-        #     that is about to run it. Skipped entirely without the flag, so the
-        #     default behaviour of every agent is unchanged.
-        if interactive_auth:
-            _authenticate_in_sandbox(sandbox, adapter, agent)
+        # 4. Agent_Adapter, instantiated before any Sandbox exists.
+        adapter = _AGENT_ADAPTERS[agent]()
 
-        # 6. Monitor, INSIDE the Sandbox. The agent runs as a real process in
-        #    the container, with the container's clone as its working
-        #    directory; both event producers observe that container (its pty
-        #    for terminal output, an in-container watcher for file changes)
-        #    and the merged Event_Log is written to the host Run_Directory.
-        #
-        #    Deliberately NOT `Monitor(repo_root, ...).supervise(...)`. That
-        #    ran the agent in this process against `repo_root` — the
-        #    developer's own checkout — which meant the agent could read the
-        #    real `.env` next to it, its writes landed on the host, and step 8
-        #    below diffed a container clone nothing had touched, producing an
-        #    empty `diff.json`. `repo_root` is now used only to locate the
-        #    config and the Run_Directory; it is never the agent's workdir.
-        log_path = supervise_in_sandbox(
-            sandbox,
-            adapter,
-            prompt,
-            run_dir,
-            off_limits_paths=config.off_limits_paths,
-            # The agent starts in the application root when the repository
-            # nests it. The file-change watcher stays rooted at the repository
-            # either way, so `off_limits_paths` keeps its repository-relative
-            # meaning and changes outside the app directory are still captured
-            # — see `supervise_in_sandbox`'s `agent_workdir`.
-            agent_workdir=container_path_under_repo(config.project_dir),
-        )
+        # 5. Sandbox_Module.
+        try:
+            client = docker.from_env()
+        except docker.errors.DockerException as exc:
+            raise click.ClickException(
+                f"Cannot reach the Docker daemon: {exc}. `vaultshield run` needs "
+                "Docker running locally to create a Sandbox."
+            ) from exc
 
-        # 7. Browser_Capture_Module (Requirement 9.1): agent execution has
-        #    completed — `supervise` returned — so the application is
-        #    started inside the still-running Sandbox from `start_command`
-        #    and `port`, `ready_path` is polled, and each configured route
-        #    is screenshotted into the Run_Directory.
-        screenshots = start_and_capture(sandbox, config, run_dir, ready_timeout)
-        _report_screenshots(screenshots, run_dir)
+        sandbox = Sandbox(run_id, client)
+        # Bound before the inner `try` and makes no Docker call, so its
+        # teardown in the `finally` is always safe (Batch 3 FR6).
+        guard = EgressGuard(run_id, client, policy, app_port=config.port)
+        base = None
+        caps = TrustedCaptureCaps()
 
-        # 8. Git branch + diff capture (Requirements 10.1, 10.2): agent
-        #    execution has completed, so everything the agent left in the
-        #    Sandbox's clone is committed to `vaultshield/run-<run_id>` and
-        #    the per-file addition/deletion counts between that commit's
-        #    parent and the branch are written to `<run_dir>/diff.json`.
-        #    Both run while the container is still up — see the comment
-        #    block above for why `<branch>~1` is the base ref.
-        branch = commit_run_branch(sandbox, run_id)
-        diff_file = build_structured_diff(
-            sandbox, f"{branch}~1", branch, run_dir
+        try:
+            # 5a. Egress (Batch 3 FR2): networks + proxy, before the Sandbox.
+            #     A no-op with egress off.
+            guard.start()
+
+            # `publish_port` is what makes step 7 reachable from the host: it
+            # publishes `config.port` on an ephemeral host port that
+            # `browser_capture.resolve_base_url` reads back off the container.
+            # With egress on, the proxy publishes it instead (D4).
+            sandbox.create(
+                repo_url,
+                base_image,
+                sandbox_env,
+                publish_port=None if guard.active else config.port,
+                # Only moves where dependencies are installed. The clone still
+                # lands at Sandbox.REPO_DIR, so git capture is unaffected.
+                project_dir=config.project_dir,
+                **guard.sandbox_create_kwargs(),
+            )
+            click.echo(f"Sandbox created for run {run_id} (cloned {repo_url}).")
+            # Still step 5: clone and install had network; from here on the
+            # Sandbox reaches only the proxy (D3). A no-op with egress off.
+            guard.isolate(sandbox)
+            if guard.active:
+                click.echo(
+                    f"Sandbox for run {run_id} isolated: egress {policy.mode} for "
+                    f"agent {agent}."
+                )
+
+            # 5-base (Batch 3 FR5, trusted capture): the pre-agent base commit
+            #     and objects, read through the Docker API before any agent
+            #     code — the sign-in included — runs.
+            base = record_trusted_base(sandbox, caps=caps)
+
+            # 5b. Optional in-Sandbox sign-in (`--interactive-auth`). Between the
+            #     Sandbox existing and the agent starting, because the agent cannot
+            #     start unauthenticated and the session has to live in the container
+            #     that is about to run it. Skipped entirely without the flag, so the
+            #     default behaviour of every agent is unchanged.
+            if interactive_auth:
+                _authenticate_in_sandbox(sandbox, adapter, agent)
+
+            # 5c. Credential snapshot #1 (Batch 3 FR5): after sign-in, before
+            #     the agent; it fixes the credential file set.
+            snap1 = _take_snapshot(sandbox, adapter, secrets, run_dir, None)
+
+            # 6. Monitor, INSIDE the Sandbox. The agent runs as a real process in
+            #    the container, with the container's clone as its working
+            #    directory; both event producers observe that container (its pty
+            #    for terminal output, an in-container watcher for file changes)
+            #    and the merged Event_Log is written to the host Run_Directory.
+            #
+            #    Deliberately NOT `Monitor(repo_root, ...).supervise(...)`. That
+            #    ran the agent in this process against `repo_root` — the
+            #    developer's own checkout — which meant the agent could read the
+            #    real `.env` next to it, its writes landed on the host, and step 8
+            #    below diffed a container clone nothing had touched, producing an
+            #    empty `diff.json`. `repo_root` is now used only to locate the
+            #    config and the Run_Directory; it is never the agent's workdir.
+            log_path = supervise_in_sandbox(
+                sandbox,
+                adapter,
+                prompt,
+                run_dir,
+                off_limits_paths=config.off_limits_paths,
+                # The agent starts in the application root when the repository
+                # nests it. The file-change watcher stays rooted at the repository
+                # either way, so `off_limits_paths` keeps its repository-relative
+                # meaning and changes outside the app directory are still captured
+                # — see `supervise_in_sandbox`'s `agent_workdir`.
+                agent_workdir=container_path_under_repo(config.project_dir),
+            )
+            # Credential snapshot #2a: a token the agent refreshed.
+            _take_snapshot(sandbox, adapter, secrets, run_dir, snap1.credential_files)
+
+            # 7. Browser_Capture_Module (Requirement 9.1): agent execution has
+            #    completed — `supervise` returned — so the application is
+            #    started inside the still-running Sandbox from `start_command`
+            #    and `port`, `ready_path` is polled, and each configured route
+            #    is screenshotted into the Run_Directory.
+            # With egress on, the proxy publishes the app port (D4); with it
+            # off the call is exactly as before.
+            capture_kwargs = (
+                {"published_by": guard.port_publisher}
+                if guard.port_publisher is not None
+                else {}
+            )
+            screenshots = start_and_capture(
+                sandbox, config, run_dir, ready_timeout, **capture_kwargs
+            )
+            _report_screenshots(screenshots, run_dir)
+
+            # 8. Git branch + diff capture (Requirements 10.1, 10.2): agent
+            #    execution has completed, so everything the agent left in the
+            #    Sandbox's clone is committed to `vaultshield/run-<run_id>` and
+            #    the per-file addition/deletion counts between that commit's
+            #    parent (or the empty tree, for a root capture commit) and the
+            #    branch are written to `<run_dir>/diff.json`.
+            #
+            #    Batch 3 FR5 (trusted capture): none of it runs in the Sandbox.
+            #    The Sandbox is killed first (Docker API), the authoritative
+            #    credential snapshot #2 is taken, and the branch is built by git
+            #    in a fresh capture helper from the 5-base objects plus a
+            #    filtered archive of the work tree. Then the outputs are scanned
+            #    for the agent's credential before anything is uploaded.
+            kill_sandbox(sandbox)
+            _take_snapshot(sandbox, adapter, secrets, run_dir, snap1.credential_files)
+            capture = TrustedCapture(run_id, client, image_id=sandbox_image_id(sandbox))
+            split = None
+            try:
+                capture.start()
+                split = archive_sandbox_repo(sandbox, caps=caps)
+                if split.notices:
+                    _append_event_log(
+                        event_log_path(run_dir), notices_to_events(split.notices)
+                    )
+                capture.load(split, base)
+                branch = commit_run_branch(capture, run_id)
+                base_ref = resolve_diff_base(capture, branch)
+                diff_file = build_structured_diff(capture, base_ref, branch, run_dir)
+                check_run_outputs(capture, secrets, run_dir, branch, base_ref)
+            finally:
+                capture.remove()
+                if split is not None:
+                    split.close()
+            click.echo(
+                f"Committed run {run_id} to branch {branch} in the capture helper; "
+                f"structured diff written to {diff_file}"
+            )
+        except EgressError as exc:
+            # Batch 3 FR2: the topology, the proxy or the isolation check
+            # failed. Includes `EgressConfigError`, which step 1 already turns
+            # into its own message, so this is the Docker-side half.
+            raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
+        except (TokenHygieneViolation, UnsafeGitConfig) as exc:
+            # Batch 3 FR5: credential material would have left the machine, or
+            # the repository's git setup could subvert capture. Before the
+            # `GitCaptureError` clause, because `UnsafeGitConfig` is one. The
+            # message never carries the matched bytes.
+            if isinstance(exc, UnsafeGitConfig):
+                _record_unsafe_git_config_best_effort(run_dir)
+            raise click.ClickException(
+                f"Run {run_id} failed: {exc} {_event_log_suffix(run_dir)}"
+            ) from exc
+        except AuthError as exc:
+            # The Sandbox exists and the repo is cloned, but the agent was never
+            # started, so unlike the `AdapterError` clause below there is no
+            # Event_Log to name. The `finally` still tears the Sandbox down, which
+            # destroys any partial session with it.
+            raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
+        except SandboxError as exc:
+            raise click.ClickException(str(exc)) from exc
+        except SandboxMonitorError as exc:
+            # The Sandbox and the agent were fine, but the Monitor could not
+            # establish or read its own in-container file-change watch. Reported
+            # separately from `SandboxError` because the fix is different: this
+            # usually means the Sandbox image has no `python` on PATH, so nothing
+            # could observe the agent's file changes. Failing is correct — an
+            # unobserved Run looks like a clean Run that changed nothing.
+            raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
+        except (AdapterError, OffLimitsViolation) as exc:
+            # `supervise` raises both of these only after the Event_Log has
+            # been written, so the Run failed but its evidence survives.
+            raise click.ClickException(
+                f"Run {run_id} failed: {exc} "
+                f"(Event_Log preserved at {event_log_path(run_dir)})"
+            ) from exc
+        except ReadinessTimeout as exc:
+            # Requirement 9.4: a startup timeout is reported as a failed Run
+            # with zero screenshots — `start_and_capture` raises before it
+            # touches `run_dir`, so there is no partial set to mention.
+            raise click.ClickException(
+                f"Run {run_id} failed: {exc}. No screenshots were captured "
+                f"(Event_Log preserved at {event_log_path(run_dir)})"
+            ) from exc
+        except ScreenshotError as exc:
+            # The application did come up (a 200 was observed); only the visual
+            # capture failed. Whatever was written before the failure is left in
+            # place and named, since partial visual evidence still helps a
+            # reviewer.
+            raise click.ClickException(
+                f"Run {run_id} failed: {exc} "
+                f"({len(exc.saved)} screenshot(s) kept, Event_Log preserved at "
+                f"{event_log_path(run_dir)})"
+            ) from exc
+        except GitCaptureError as exc:
+            # A git command that ran and failed: the branch already exists, the
+            # clone is not a git repository, git refused the commit, the base
+            # ref does not resolve (see the root-commit note above),
+            # `--numstat` output could not be parsed, or the diff's metadata
+            # alone is over the upload cap. The Event_Log and any
+            # screenshots are already on disk, so the message names where the
+            # Run's evidence survives even though its diff was never written.
+            # A trusted-capture failure at 5-base or 5c happens before the
+            # agent ran, so the suffix only names an Event_Log that exists.
+            raise click.ClickException(
+                f"Run {run_id} failed: {exc} {_event_log_suffix(run_dir)}"
+            ) from exc
+        except OSError as exc:
+            # Most likely the Monitor could not establish its file-change
+            # watch, in which case the adapter was never launched at all
+            # (Requirement 6.2); any other filesystem-level failure inside
+            # `supervise` (e.g. writing the Event_Log) or in step 8's
+            # `diff.json` write lands here too, so the message stays neutral
+            # about which one it was.
+            raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
+        finally:
+            # 9. Requirement 7.2: the Sandbox is torn down when `run`
+            #    completes — on the success path and on every failure path
+            #    alike, including a browser-capture or git-capture failure, so
+            #    neither a timed-out application nor a refused commit ever
+            #    leaves a container (or the dev server detached inside it)
+            #    behind.
+            try:
+                sandbox.teardown()
+                click.echo(f"Sandbox torn down for run {run_id}.")
+            finally:
+                # Batch 3 D10, each step best-effort and never raising: the
+                # capture helper backstop (a no-op if step 8 removed it), the
+                # 5-base object spool, then the egress proxy logs → violation
+                # events, the proxy and both networks.
+                _remove_capture_helper_best_effort(run_id, client)
+                if base is not None:
+                    base.close()
+                guard.teardown(run_dir)
+
+        click.echo(f"Run {run_id} complete. Event_Log written to {log_path}")
+
+        # 10. Uploader (Requirements 14.2, 14.3): the local Run is complete and
+        #     the Sandbox is gone, so the artifacts in the Run_Directory are
+        #     final — package them and submit them to the backend, which is what
+        #     makes this Run retrievable through `GET /api/runs/<run_id>/`.
+        _upload_run_artifacts(run_dir, run_id, backend_url, token, secrets)
+
+        # 11. Backend: every artifact is in, so the Run is ready for review.
+        #     After the screenshots, not after the diff: the diff is not the
+        #     last artifact, and a Run must not be approvable while its
+        #     screenshots are still arriving.
+        _complete_run(run_id, backend_url, token)
+    except BaseException:
+        # Batch 3 FR4 (D8): the failed Run's timeline — its off-limits, egress
+        # and token-hygiene violations included — is uploaded scrubbed and
+        # best-effort, after teardown and before the failed mark.
+        _upload_events_best_effort(run_id, backend_url, token, run_dir, secrets)
+        _mark_run_failed_best_effort(run_id, backend_url, token)
+        raise
+
+
+def _resolve_egress(agent: str, config: ProjectConfig, egress_mode: str | None):
+    """Step 1's egress half (Batch 3 FR3): the effective policy, or a
+    `ClickException` before anything exists on disk."""
+    try:
+        return egress.resolve_policy(
+            agent, config.egress, egress_mode, app_port=config.port
         )
-        click.echo(
-            f"Committed run {run_id} to branch {branch} in the Sandbox; "
-            f"structured diff written to {diff_file}"
-        )
-    except AuthError as exc:
-        # The Sandbox exists and the repo is cloned, but the agent was never
-        # started, so unlike the `AdapterError` clause below there is no
-        # Event_Log to name. The `finally` still tears the Sandbox down, which
-        # destroys any partial session with it.
-        raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
-    except SandboxError as exc:
+    except EgressConfigError as exc:
         raise click.ClickException(str(exc)) from exc
-    except SandboxMonitorError as exc:
-        # The Sandbox and the agent were fine, but the Monitor could not
-        # establish or read its own in-container file-change watch. Reported
-        # separately from `SandboxError` because the fix is different: this
-        # usually means the Sandbox image has no `python` on PATH, so nothing
-        # could observe the agent's file changes. Failing is correct — an
-        # unobserved Run looks like a clean Run that changed nothing.
-        raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
-    except (AdapterError, OffLimitsViolation) as exc:
-        # `supervise` raises both of these only after the Event_Log has
-        # been written, so the Run failed but its evidence survives.
-        raise click.ClickException(
-            f"Run {run_id} failed: {exc} "
-            f"(Event_Log preserved at {event_log_path(run_dir)})"
-        ) from exc
-    except ReadinessTimeout as exc:
-        # Requirement 9.4: a startup timeout is reported as a failed Run
-        # with zero screenshots — `start_and_capture` raises before it
-        # touches `run_dir`, so there is no partial set to mention.
-        raise click.ClickException(
-            f"Run {run_id} failed: {exc}. No screenshots were captured "
-            f"(Event_Log preserved at {event_log_path(run_dir)})"
-        ) from exc
-    except ScreenshotError as exc:
-        # The application did come up (a 200 was observed); only the visual
-        # capture failed. Whatever was written before the failure is left in
-        # place and named, since partial visual evidence still helps a
-        # reviewer.
-        raise click.ClickException(
-            f"Run {run_id} failed: {exc} "
-            f"({len(exc.saved)} screenshot(s) kept, Event_Log preserved at "
-            f"{event_log_path(run_dir)})"
-        ) from exc
-    except GitCaptureError as exc:
-        # A git command that ran and failed: the branch already exists, the
-        # clone is not a git repository, git refused the commit, the base
-        # ref does not resolve (see the root-commit note above), or
-        # `--numstat` output could not be parsed. The Event_Log and any
-        # screenshots are already on disk, so the message names where the
-        # Run's evidence survives even though its diff was never written.
-        raise click.ClickException(
-            f"Run {run_id} failed: {exc} "
-            f"(Event_Log preserved at {event_log_path(run_dir)})"
-        ) from exc
-    except OSError as exc:
-        # Most likely the Monitor could not establish its file-change
-        # watch, in which case the adapter was never launched at all
-        # (Requirement 6.2); any other filesystem-level failure inside
-        # `supervise` (e.g. writing the Event_Log) or in step 8's
-        # `diff.json` write lands here too, so the message stays neutral
-        # about which one it was.
-        raise click.ClickException(f"Run {run_id} failed: {exc}") from exc
-    finally:
-        # 9. Requirement 7.2: the Sandbox is torn down when `run`
-        #    completes — on the success path and on every failure path
-        #    alike, including a browser-capture or git-capture failure, so
-        #    neither a timed-out application nor a refused commit ever
-        #    leaves a container (or the dev server detached inside it)
-        #    behind.
-        sandbox.teardown()
-        click.echo(f"Sandbox torn down for run {run_id}.")
 
-    click.echo(f"Run {run_id} complete. Event_Log written to {log_path}")
 
-    # 10. Uploader (Requirements 14.2, 14.3): the local Run is complete and
-    #     the Sandbox is gone, so the artifacts in the Run_Directory are
-    #     final — package them and submit them to the backend, which is what
-    #     makes this Run retrievable through `GET /api/runs/<run_id>/`.
-    _upload_run_artifacts(run_dir, run_id, backend_url)
+def _take_snapshot(sandbox, adapter, secrets: SecretSet, run_dir: Path, credential_files):
+    """One credential snapshot (Batch 3 FR5, §5.5): needles merged into
+    `secrets`, and one non-failing event when files were too large to scan.
+    Errors propagate as `GitCaptureError`."""
+    snap = token_hygiene.snapshot(
+        sandbox, adapter.credential_paths(), credential_files=credential_files
+    )
+    secrets.add(snap.secrets)
+    if snap.skipped > 0:
+        _append_event_log(event_log_path(run_dir), [skipped_snapshot_event(snap.skipped)])
+    return snap
+
+
+def _event_log_suffix(run_dir: Path) -> str:
+    """`(Event_Log preserved at …)` only when the Event_Log exists, else
+    `(the agent never started)` (Batch 3, review round 4 finding 7)."""
+    path = event_log_path(run_dir)
+    if path.exists():
+        return f"(Event_Log preserved at {path})"
+    return "(the agent never started)"
+
+
+def _record_unsafe_git_config_best_effort(run_dir: Path) -> None:
+    """The `unsafe_git_config` violation event; never raises."""
+    try:
+        token_hygiene.record_unsafe_git_config(run_dir)
+    except Exception:  # noqa: BLE001 - must not replace the error in flight
+        pass
+
+
+def _remove_capture_helper_best_effort(run_id: str, client) -> None:
+    """The inner `finally`'s capture-helper backstop (Batch 3 D10). Never
+    raises; at most one warning, exception type only."""
+    try:
+        trusted_capture.remove_capture_helper(run_id, client)
+    except BaseException as exc:  # noqa: BLE001
+        click.echo(
+            f"Warning: could not remove the capture helper for run {run_id}: "
+            f"{type(exc).__name__}",
+            err=True,
+        )
+
+
+def _upload_events_best_effort(
+    run_id: str, backend_url: str, token: str, run_dir: Path, secrets: SecretSet
+) -> None:
+    """Uploads a failed Run's Event_Log, scrubbed (Batch 3 FR4, D8). Skipped
+    when there is no Event_Log; never raises; at most one warning line."""
+    try:
+        if not event_log_path(run_dir).exists():
+            return
+        warning = uploader.upload_events_best_effort(
+            backend_url, token, run_id, run_dir, scrub=secrets.scrub
+        )
+    except BaseException as exc:  # noqa: BLE001
+        warning = f"unexpected {type(exc).__name__}"
+    if warning:
+        try:
+            click.echo(
+                f"Warning: could not upload the timeline of run {run_id}: {warning}",
+                err=True,
+            )
+        except BaseException:  # noqa: BLE001
+            pass
 
 
 def _authenticate_in_sandbox(sandbox: Sandbox, adapter, agent: str) -> None:
@@ -975,20 +1275,90 @@ def _authenticate_in_sandbox(sandbox: Sandbox, adapter, agent: str) -> None:
     click.echo("")
 
 
-def _upload_run_artifacts(run_dir: Path, run_id: str, backend_url: str) -> None:
-    """Submits this Run's artifacts to `backend_url` with the stored
-    Dashboard_Auth_Token (Requirements 14.2, 14.3).
+def _resolve_project(project: str | None, config: ProjectConfig) -> str:
+    """The backend Project id this Run is registered under (Requirement
+    12.2's "associated with an existing Project", client half).
 
-    Two `UploadError` sources, one handler: `load_token` raises it when
-    `vaultshield login` has not been run (or its token file is unreadable or
-    empty), and `upload_run` raises it for an unreachable backend, a non-2xx
-    response, or an artifact that exists but cannot be read. Both mean the
+    `--project` wins over `.vaultshield.yml`'s `project:`; each is stripped,
+    and empty means absent. The id is not format-checked here: the backend
+    answers an unknown or malformed one with a 400 that step 2b surfaces.
+    Called in step 1, so a missing project stops the Run before the
+    Run_Directory exists. Name-based lookup is deliberately not offered,
+    because `Project.name` is not unique.
+
+    Raises:
+        click.ClickException: neither source names a project.
+    """
+    resolved = (project or "").strip() or config.project.strip()
+    if not resolved:
+        raise click.ClickException(
+            "No project for this Run: pass --project <project-id> or set "
+            "`project: <project-id>` in .vaultshield.yml (ids are listed by "
+            "the dashboard / GET /api/projects/)."
+        )
+    return resolved
+
+
+def _complete_run(run_id: str, backend_url: str, token: str) -> None:
+    """Step 11: moves the Run from `running` to `awaiting_review` once every
+    artifact is uploaded (Requirement 12.4's PATCH, client half).
+
+    Raises:
+        click.ClickException: `uploader.complete_run` raised `UploadError`.
+            `run`'s outer handler then marks the Run `failed`, which the
+            backend refuses with a 409 if the completion did land.
+    """
+    try:
+        uploader.complete_run(backend_url, token, run_id)
+    except uploader.UploadError as exc:
+        raise click.ClickException(
+            f"Run {run_id} was uploaded but could not be marked ready for "
+            f"review: {exc}"
+        ) from exc
+
+
+def _mark_run_failed_best_effort(run_id: str, backend_url: str, token: str) -> None:
+    """Marks the registered Run `failed` on the backend (Requirement 12.4's
+    PATCH with a Requirement 11.2 status, client half); never raises and
+    never replaces the error in flight.
+
+    Called only from `run`'s outer `except BaseException`, after the inner
+    `finally` has torn the Sandbox down, and immediately followed by a bare
+    `raise`. `uploader.mark_run_failed` is already specified never to raise;
+    this guard is a second layer, so a defect there (or a test stand-in that
+    raises) still cannot replace the original error. Swallowing a
+    `KeyboardInterrupt` that lands during the PATCH is deliberate: the
+    caller's bare `raise` then re-raises the original exception, which is the
+    one the developer needs to see. A failure is reported as one `Warning:`
+    line on stderr and nothing else.
+    """
+    try:
+        warning = uploader.mark_run_failed(backend_url, token, run_id)
+    except BaseException as exc:  # incl. KeyboardInterrupt during the PATCH
+        # No str(exc): keep it one line and token-free.
+        warning = f"unexpected {type(exc).__name__}"
+    if warning:
+        try:
+            click.echo(
+                f"Warning: could not mark run {run_id} as failed on the backend: {warning}",
+                err=True,
+            )
+        except Exception:
+            pass
+
+
+def _upload_run_artifacts(
+    run_dir: Path, run_id: str, backend_url: str, token: str, secrets: SecretSet
+) -> None:
+    """Submits this Run's artifacts to `backend_url` with the
+    Dashboard_Auth_Token step 2b loaded (Requirements 14.2, 14.3).
+
+    `upload_run` raises `UploadError` for an unreachable backend, a non-2xx
+    response, or an artifact that exists but cannot be read. Each means the
     same thing to the developer — the Run is on disk and is not in the
-    dashboard — and both are fixed the same way, by fixing the cause and
-    uploading these same artifacts again, so one message covers both rather
-    than splitting a distinction the developer cannot act on differently.
-    `load_token`'s own message already names `vaultshield login` when that is
-    the cause.
+    dashboard — so one message covers them. The token is no longer loaded
+    here: step 2b needs it to register the Run, so a missing `vaultshield
+    login` stops the Run before any Sandbox exists instead of at the end.
 
     Requirement 14.4's preservation half needs no code here, which is the
     point: nothing in this function (or in `upload_run`) creates, moves,
@@ -997,8 +1367,8 @@ def _upload_run_artifacts(run_dir: Path, run_id: str, backend_url: str) -> None:
     that survived are findable.
     """
     try:
-        token = uploader.load_token()
-        uploader.upload_run(run_dir, run_id, backend_url, token)
+        # Event payloads are scrubbed of credential needles (Batch 3 FR5).
+        uploader.upload_run(run_dir, run_id, backend_url, token, scrub=secrets.scrub)
     except uploader.UploadError as exc:
         raise click.ClickException(
             f"Run {run_id} was captured but could not be uploaded: {exc} "

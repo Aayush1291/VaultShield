@@ -53,8 +53,9 @@ function clientReturning(...responses) {
   return { client, calls };
 }
 
-// One Run per Run_Status in `Run.STATUS_CHOICES` (Requirement 11.2), newest
-// first as `Run.Meta.ordering` returns them.
+// One Run per Run_Status other than `failed`, which has its own test below,
+// in `Run.STATUS_CHOICES` (Requirement 11.2), newest first as
+// `Run.Meta.ordering` returns them.
 const RUNS = [
   { id: 5, run_id: 'run-20240507-aaaa', agent: 'codex', status: 'running', created_at: '2024-05-07T09:00:00Z' },
   { id: 4, run_id: 'run-20240506-bbbb', agent: 'kiro', status: 'awaiting_review', created_at: '2024-05-06T09:00:00Z' },
@@ -92,6 +93,30 @@ it("requests only the Project's Runs and renders one row per Run with its status
   expect(rows[4]).not.toHaveTextContent('Invalid');
 
   expect(screen.getByRole('heading', { name: /checkout-service/ })).toBeInTheDocument();
+});
+
+it('renders a failed Run with its own neutral badge rather than the unknown-status fallback', async () => {
+  const failedRun = {
+    id: 6,
+    run_id: 'run-20240508-ffff',
+    agent: 'codex',
+    status: 'failed',
+    created_at: '2024-05-08T09:00:00Z',
+  };
+  const { client } = clientReturning(runPage([failedRun]));
+
+  render(<RunHistoryView projectId={7} client={client} />);
+
+  const rows = await screen.findAllByTestId(RUN_ROW_TESTID);
+  expect(rows).toHaveLength(1);
+
+  const badge = screen.getByTestId(RUN_STATUS_TESTID);
+  expect(badge).toHaveTextContent('failed');
+  expect(badge).toHaveAttribute('data-status', 'failed');
+  // `gray` is the explicit `failed` entry; `slate` would mean the badge fell
+  // through to the unknown-status style.
+  expect(badge).toHaveClass('bg-gray-100');
+  expect(badge).not.toHaveClass('bg-slate-100');
 });
 
 it('renders an empty state when the Project has no Runs', async () => {

@@ -12,11 +12,30 @@ Implements both halves of the Config_Module described in design.md:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
+
+from vaultshield.egress_proxy import AllowEntry, AllowEntryError, parse_allow_entry
+
+# The three `egress.mode` values (Batch 3 FR3). `off` is the default.
+EGRESS_MODES = ("off", "log-only", "allowlist")
+
+
+@dataclass(frozen=True)
+class EgressConfig:
+    """The validated `egress:` block of `.vaultshield.yml` (Batch 3 FR3, D7).
+
+    `mode` is `off` (today's behaviour, the default), `log-only` or
+    `allowlist`. `allow` holds extra entries, already parsed by
+    `egress_proxy.parse_allow_entry`; `egress.resolve_policy` unions them with
+    the agent's built-in list. The CLI's `--egress` overrides `mode`.
+    """
+
+    mode: Literal["off", "log-only", "allowlist"] = "off"
+    allow: tuple[AllowEntry, ...] = ()
 
 # Fields written into every `.vaultshield.yml`, detected or not.
 _DETECTED_FIELDS = ("start_command", "port", "ready_path")
@@ -54,6 +73,15 @@ class ProjectConfig:
     # of this dataclass keeps working. See `_optional_project_dir` for what a
     # value may be and why it is validated so strictly.
     project_dir: str = ""
+    # Optional, and last with a default for the same reason. The backend
+    # Project id (the 24-hex ObjectId `GET /api/projects/` lists) that `run`
+    # registers its Run under. `run --project` wins over this value; `init`
+    # never writes it. Not format-checked here: the backend answers an
+    # unknown or malformed id with a 400 that `run` surfaces.
+    project: str = ""
+    # Optional, and last with a default for the same reason (Batch 3 FR3).
+    # Absent means `off`, so every existing config keeps today's behaviour.
+    egress: EgressConfig = field(default_factory=EgressConfig)
 
 
 class ConfigError(Exception):
@@ -172,7 +200,59 @@ def load_config(repo_root: Path) -> ProjectConfig:
         routes=_require_string_list(raw, "routes", path),
         off_limits_paths=_require_string_list(raw, "off_limits_paths", path),
         project_dir=_optional_project_dir(raw, "project_dir", path),
+        project=_optional_text(raw, "project", path),
+        egress=_optional_egress(raw, path),
     )
+
+
+def _optional_egress(raw: dict, path: Path) -> EgressConfig:
+    """The optional `egress:` mapping (Batch 3 FR3, D7), defaulting to `off`.
+
+    Shape: a mapping whose keys are a subset of `mode` and `allow`; unknown
+    keys raise. `mode` is one of `EGRESS_MODES`; YAML parses an unquoted `off`
+    as `False`, which is accepted as `"off"`, while `True` and any other value
+    raise. `allow` is a list of `host[:port]` strings in the grammar
+    `egress_proxy.parse_allow_entry` enforces, so a bad entry stops `run` at
+    step 1, before anything exists on disk.
+    """
+    field_name = "egress"
+    if field_name not in raw or raw[field_name] is None:
+        return EgressConfig()
+    value = raw[field_name]
+    if not isinstance(value, dict):
+        raise _type_error(path, field_name, value, "a mapping with `mode` and `allow`")
+    unknown = sorted(str(key) for key in value if key not in ("mode", "allow"))
+    if unknown:
+        raise ConfigError(
+            f"Invalid `egress` in {path}: unknown key(s) {', '.join(unknown)}; "
+            "expected only `mode` and `allow`"
+        )
+
+    mode = value.get("mode", "off")
+    if mode is None or mode is False:
+        mode = "off"
+    if not isinstance(mode, str) or mode not in EGRESS_MODES:
+        raise ConfigError(
+            f"Invalid `egress.mode` in {path}: expected one of "
+            f"{', '.join(EGRESS_MODES)}, got {mode!r}"
+        )
+
+    allow_raw = value.get("allow")
+    if allow_raw is None:
+        allow_raw = []
+    if isinstance(allow_raw, str) or not isinstance(allow_raw, (list, tuple)):
+        raise _type_error(
+            path, "egress.allow", allow_raw, "a list of `host[:port]` strings"
+        )
+    entries: list[AllowEntry] = []
+    for index, entry in enumerate(allow_raw):
+        try:
+            entries.append(parse_allow_entry(entry))
+        except AllowEntryError as exc:
+            raise ConfigError(
+                f"Invalid `egress.allow[{index}]` in {path}: {entry!r}: {exc}"
+            ) from exc
+    return EgressConfig(mode=mode, allow=tuple(entries))
 
 
 # --- typed field validation -------------------------------------------------

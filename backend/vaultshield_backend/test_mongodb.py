@@ -38,6 +38,9 @@ fails rather than the guarantee quietly disappearing.
 - 17.1, 17.2: security findings describe the diff currently stored
 - 18.1: the scan is triggered once the diff has landed
 - 21.1-21.3: approve/reject state machine, including concurrent decisions
+- 12.2, 12.4, 12.5: the Run lifecycle's gated PATCH transitions
+  (`awaiting_review`/`failed` only from `running`, including under
+  contention), and `run_id` format and duplicate handling on create
 - 25.1: the sandbox reaper and its idempotency
 - 27.3-27.5: every `/api/` path requires a Dashboard_Auth_Token
 """
@@ -61,6 +64,7 @@ from django_mongodb_backend import transaction as mongo_transaction
 from django.db import transaction as django_transaction
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
+from rest_framework.validators import UniqueValidator
 
 from projects.models import Project
 from runs.models import Approval, Run, RunDiff, RunEvent
@@ -69,7 +73,12 @@ from runs.sequences import (
     allocate_event_sequences,
     highest_stored_sequence,
 )
-from runs.serializers import RunEventIngestSerializer
+from runs.serializers import (
+    RUN_ID_UNIQUE_MESSAGE,
+    RunEventIngestSerializer,
+    RunSerializer,
+    RunUpdateSerializer,
+)
 from sandbox_tracking.models import SandboxRecord
 from security_scan.models import SecurityFinding
 from security_scan.tasks import run_security_scan
@@ -782,6 +791,50 @@ class TestConcurrentSequenceAllocation:
             assert Approval.objects.filter(run=run).count() == 1
 
 
+@pytest.mark.django_db(transaction=True)
+class TestConcurrentStatusTransitions:
+    """Run lifecycle: the CLI's completion and failure PATCHes racing on one
+    `running` Run.
+
+    Both are gated to `running`, so exactly one may win; the other must get
+    a clean `StateTransitionError` (the 409), never a write conflict leaking
+    out as a 500. Same worker shape as `TestConcurrentSequenceAllocation`:
+    threads released together by a barrier, each with its own connection.
+    """
+
+    ITERATIONS = 20
+    TARGETS = ("failed", "awaiting_review")
+
+    def test_failed_and_awaiting_review_race_has_exactly_one_winner(self):
+        from runs.views import StateTransitionError, apply_status_transition
+
+        project = _project()
+
+        for iteration in range(self.ITERATIONS):
+            run = _run(project, status="running")
+
+            def transition(index, target_run=run):
+                target = self.TARGETS[index]
+                try:
+                    apply_status_transition(Run.objects.get(pk=target_run.pk), target, {})
+                    return ("won", target)
+                except StateTransitionError:
+                    return ("refused", target)
+                except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+                    return (type(exc).__name__, target)
+                finally:
+                    connections.close_all()
+
+            outcomes = TestConcurrentSequenceAllocation._run_workers(
+                transition, len(self.TARGETS)
+            )
+
+            results = [result for result, _target in outcomes]
+            assert sorted(results) == ["refused", "won"], f"iteration {iteration}: {outcomes}"
+            winner = next(target for result, target in outcomes if result == "won")
+            assert Run.objects.get(pk=run.pk).status == winner
+
+
 @pytest.mark.django_db
 class TestDuplicateEventIngestAndRetry:
     """Retry safety: a replayed batch never reuses sequence numbers."""
@@ -936,6 +989,129 @@ class TestApprovalAtomicity:
 
 
 @pytest.mark.django_db
+class TestRunStatusTransitions:
+    """Run lifecycle through `PATCH /api/runs/:id/` (Requirement 12.4).
+
+    `awaiting_review` (the CLI's completion signal) and `failed` (its error
+    signal) are accepted only from `running`; from any other status the
+    PATCH is a 409 naming the stored status and the row is not touched.
+    approve/reject keep their own gate (`awaiting_review` only).
+    """
+
+    GATED_TARGETS = ("failed", "awaiting_review")
+    NON_RUNNING = ("awaiting_review", "approved", "rejected", "submitted", "failed")
+    ORIGINAL_PR_URL = "https://example.invalid/pr/original"
+
+    @staticmethod
+    def _aged(run: Run) -> Run:
+        """Push `updated_at` an hour back so a bump is observable."""
+        Run.objects.filter(pk=run.pk).update(
+            updated_at=to_mongo_precision(timezone.now() - timedelta(hours=1))
+        )
+        return Run.objects.get(pk=run.pk)
+
+    @pytest.mark.parametrize("target", GATED_TARGETS)
+    def test_a_gated_status_is_accepted_from_running(self, target):
+        client, _, _ = _authenticated_client()
+        run = self._aged(_run(status="running"))
+
+        response = client.patch(f"/api/runs/{run.run_id}/", {"status": target}, format="json")
+
+        assert response.status_code == 200, response.data
+        assert response.data["status"] == target
+        stored = Run.objects.get(pk=run.pk)
+        assert stored.status == target
+        assert stored.updated_at > run.updated_at, "updated_at was not bumped"
+        # Stored exactly as returned, as `TestApprovalAtomicity` checks for
+        # decisions: the response must not report microseconds MongoDB drops.
+        assert RunSerializer(stored).data["updated_at"] == response.data["updated_at"]
+
+    def test_a_gated_patch_writes_pr_url_in_the_same_update(self):
+        client, _, _ = _authenticated_client()
+        run = _run(status="running")
+
+        response = client.patch(
+            f"/api/runs/{run.run_id}/",
+            {"status": "failed", "pr_url": "https://example.invalid/pr/3"},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.data
+        stored = Run.objects.get(pk=run.pk)
+        assert (stored.status, stored.pr_url) == ("failed", "https://example.invalid/pr/3")
+        assert response.data["pr_url"] == "https://example.invalid/pr/3"
+
+    @pytest.mark.parametrize("source", NON_RUNNING)
+    @pytest.mark.parametrize("target", GATED_TARGETS)
+    def test_a_gated_status_is_refused_from_anything_but_running(self, target, source):
+        client, _, _ = _authenticated_client()
+        run = self._aged(_run(status=source, pr_url=self.ORIGINAL_PR_URL))
+
+        response = client.patch(
+            f"/api/runs/{run.run_id}/",
+            {"status": target, "pr_url": "https://example.invalid/pr/new"},
+            format="json",
+        )
+
+        assert response.status_code == 409, response.data
+        body = response.json()
+        stored = Run.objects.get(pk=run.pk)
+        assert body["current_status"] == stored.status == source
+        assert body["detail"] == (
+            f"A Run can only move to `{target}` from `running`; this Run is `{source}`."
+        )
+        assert (stored.status, stored.pr_url, stored.updated_at) == (
+            run.status,
+            run.pr_url,
+            run.updated_at,
+        ), "a refused transition changed the row"
+
+    @pytest.mark.parametrize("decision", ("approve", "reject"))
+    @pytest.mark.parametrize("source", ("running", "failed"))
+    def test_approve_and_reject_are_refused_outside_awaiting_review(self, decision, source):
+        client, _, _ = _authenticated_client()
+        run = _run(status=source)
+
+        response = client.post(f"/api/runs/{run.run_id}/{decision}/")
+
+        assert response.status_code == 409, response.data
+        assert response.json()["current_status"] == source
+        assert Run.objects.get(pk=run.pk).status == source
+        assert not Approval.objects.filter(run=run).exists()
+
+    @pytest.mark.parametrize(
+        ("decision", "decided"), (("approve", "approved"), ("reject", "rejected"))
+    )
+    def test_approve_and_reject_still_work_from_awaiting_review(self, decision, decided):
+        client, _, _ = _authenticated_client()
+        run = _run(status="awaiting_review")
+
+        response = client.post(f"/api/runs/{run.run_id}/{decision}/")
+
+        assert response.status_code == 200, response.data
+        assert response.data["status"] == decided
+        assert Run.objects.get(pk=run.pk).status == decided
+        assert Approval.objects.get(run=run).decision == decided
+
+    def test_a_pr_url_patch_does_not_write_back_a_stale_status(self):
+        """A non-gated PATCH saves only the fields it names, so the status
+        loaded with the instance cannot overwrite one stored since."""
+        run = _run(status="running")
+        instance = Run.objects.get(pk=run.pk)
+        Run.objects.filter(pk=run.pk).update(status="failed")
+
+        serializer = RunUpdateSerializer(
+            instance, data={"pr_url": "https://example.invalid/pr/7"}, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        stored = Run.objects.get(pk=run.pk)
+        assert stored.status == "failed"
+        assert stored.pr_url == "https://example.invalid/pr/7"
+
+
+@pytest.mark.django_db
 class TestSecurityScanAtomicity:
     """Requirement 10 for the scan boundary (Requirements 17.1, 17.2).
 
@@ -1056,6 +1232,54 @@ class TestSecurityScanOrdering:
         ]
 
         assert stored == expected
+
+
+@pytest.mark.django_db
+class TestDiffIngestProducesSecurityFindings:
+    """Requirements 13.2, 17.1, 17.2 and 18.1, end to end: a `patch` the CLI
+    posts to `/diff/` reaches the scanner, and its finding lands on the
+    post-change line its hunk header implies.
+
+    The real Celery task body runs synchronously in place of `.delay`, from
+    the backend's `on_commit`, so it sees the committed `RunDiff` exactly as a
+    worker would.
+    """
+
+    # The `-U0` shape `cli/vaultshield/git_capture.py` captures: the hunk
+    # starts at new line 10, the removed line does not advance the position,
+    # `DEBUG = False` sits at 10, so the key is at 11.
+    PATCH = (
+        "diff --git a/settings.py b/settings.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/settings.py\n"
+        "+++ b/settings.py\n"
+        "@@ -10 +10,2 @@\n"
+        "-DEBUG = True\n"
+        "+DEBUG = False\n"
+        '+API_KEY = "sk-abcdefghij123456"\n'
+    )
+
+    def test_a_posted_secret_becomes_a_secret_literal_finding_on_its_line(self):
+        client, _, _ = _authenticated_client()
+        run = _run()
+        files = [{"path": "settings.py", "additions": 2, "deletions": 1, "patch": self.PATCH}]
+
+        with patch("runs.views.run_security_scan.delay", side_effect=run_security_scan):
+            response = client.post(
+                f"/api/runs/{run.run_id}/diff/", {"files": files}, format="json"
+            )
+
+        assert response.status_code == 201
+        assert list(
+            SecurityFinding.objects.filter(run=run).values_list(
+                "rule_id", "file_path", "line_number"
+            )
+        ) == [("secret-literal", "settings.py", 11)]
+        findings = client.get(f"/api/runs/{run.run_id}/").data["security_findings"]
+        assert [
+            (finding["rule_id"], finding["file_path"], finding["line_number"])
+            for finding in findings
+        ] == [("secret-literal", "settings.py", 11)]
 
 
 # --- 7. sandbox cleanup (Requirement D / 25.1) ------------------------------
@@ -1313,6 +1537,79 @@ class TestRestApiAgainstMongoDB:
         assert response.status_code == 201
         assert Run.objects.get(run_id="20240101-000000-abc").project_id == project.pk
 
+    def test_a_sequential_duplicate_run_id_keeps_todays_400_body(self):
+        """Requirement 12.5: the explicit `UniqueValidator` answers exactly as
+        the column-derived one did."""
+        client, _, _ = _authenticated_client()
+        existing = _run()
+
+        response = client.post(
+            "/api/runs/",
+            {"project": str(existing.project_id), "run_id": existing.run_id, "agent": "mock"},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {"run_id": ["run with this run id already exists."]}
+        assert Run.objects.filter(run_id=existing.run_id).count() == 1
+
+    def test_a_lost_duplicate_run_id_race_is_a_400_not_a_500(self):
+        """The validator pre-check is bypassed, so the insert reaches the real
+        unique index and raises the real `IntegrityError`, which
+        `perform_create` maps to the validator's own body."""
+        client, _, _ = _authenticated_client()
+        existing = _run()
+
+        with patch.object(UniqueValidator, "__call__", return_value=None) as bypassed:
+            response = client.post(
+                "/api/runs/",
+                {
+                    "project": str(existing.project_id),
+                    "run_id": existing.run_id,
+                    "agent": "mock",
+                },
+                format="json",
+            )
+
+        # The stand-in ran in place of the real pre-check, so this 400 can
+        # only have come from the insert's `IntegrityError`.
+        assert bypassed.called
+        assert response.status_code == 400
+        assert response.json() == {"run_id": [RUN_ID_UNIQUE_MESSAGE]}
+        assert Run.objects.filter(run_id=existing.run_id).count() == 1
+
+    @pytest.mark.parametrize("run_id", ["a/b", "a.b", "-x", "", "a" * 65])
+    def test_an_unaddressable_run_id_is_rejected(self, run_id):
+        client, _, _ = _authenticated_client()
+        project = _project()
+
+        response = client.post(
+            "/api/runs/",
+            {"project": str(project.pk), "run_id": run_id, "agent": "mock"},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "run_id" in response.json()
+        assert not Run.objects.exists()
+
+    @pytest.mark.parametrize(
+        "run_id", ["20260903-195802-e503f16521bb1a9c", "20240101-000000-abc"]
+    )
+    def test_a_cli_shaped_run_id_is_accepted(self, run_id):
+        client, _, _ = _authenticated_client()
+        project = _project()
+
+        response = client.post(
+            "/api/runs/",
+            {"project": str(project.pk), "run_id": run_id, "agent": "mock"},
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+        assert response.data["run_id"] == run_id
+        assert Run.objects.get(run_id=run_id).status == "running"
+
     def test_a_run_is_addressed_by_run_id_not_by_primary_key(self):
         client, _, _ = _authenticated_client()
         run = _run()
@@ -1355,6 +1652,68 @@ class TestRestApiAgainstMongoDB:
         run = _run()
 
         assert client.get(f"/api/runs/{run.run_id}/").data["diff"] is None
+
+    def test_a_diff_with_a_patch_round_trips_through_run_detail(self):
+        """Requirements 13.2 and 17.1: `patch`/`patch_truncated` are stored
+        and rendered by `RunDetailSerializer` exactly as posted."""
+        client, _, _ = _authenticated_client()
+        run = _run()
+        files = [
+            {
+                "path": "src/app.py",
+                "additions": 1,
+                "deletions": 0,
+                "patch": "@@ -0,0 +1 @@\n+  value = 1 \n",
+                "patch_truncated": True,
+            },
+            # A binary entry, which the CLI sends without a patch.
+            {"path": "logo.png", "additions": 0, "deletions": 0},
+        ]
+
+        with patch("runs.views.run_security_scan.delay"):
+            posted = client.post(
+                f"/api/runs/{run.run_id}/diff/", {"files": files}, format="json"
+            )
+        detail = client.get(f"/api/runs/{run.run_id}/")
+
+        assert posted.status_code == 201
+        assert detail.data["diff"]["files"] == files
+
+    def test_a_diff_without_a_patch_still_round_trips(self):
+        """A stats-only upload is stored with no keys added."""
+        client, _, _ = _authenticated_client()
+        run = _run()
+        files = [{"path": "a.py", "additions": 1, "deletions": 0}]
+
+        with patch("runs.views.run_security_scan.delay"):
+            posted = client.post(
+                f"/api/runs/{run.run_id}/diff/", {"files": files}, format="json"
+            )
+        detail = client.get(f"/api/runs/{run.run_id}/")
+
+        assert posted.status_code == 201
+        assert detail.data["diff"]["files"] == files
+
+    def test_a_malformed_diff_is_rejected_with_400_and_nothing_stored(self):
+        """Requirement 13.2's rejection, unchanged by the optional patch keys."""
+        client, _, _ = _authenticated_client()
+        run = _run()
+        bodies = [
+            {"files": "nope"},
+            {"files": [{"path": "a.py", "additions": 1, "deletions": 0, "patch": ["x"]}]},
+            {"files": [{"path": "a.py"}]},
+        ]
+
+        for body in bodies:
+            with patch("runs.views.run_security_scan.delay") as delay:
+                response = client.post(
+                    f"/api/runs/{run.run_id}/diff/", body, format="json"
+                )
+
+            assert response.status_code == 400, body
+            assert "files" in response.data
+            assert not RunDiff.objects.filter(run=run).exists()
+            delay.assert_not_called()
 
     def test_the_status_and_submitted_filters_work(self):
         """Requirement 12.6, which `?submitted=` derives from `pr_url`."""

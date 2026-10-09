@@ -8,10 +8,13 @@ across several tasks:
     `status` + `submitted` query-param filtering       Task 16.10
     `apply_decision` plus the approve/reject actions   Task 28.1
     `run_security_scan.delay(...)` on diff ingest      Task 23.2
+    `apply_status_transition` for gated PATCH status   Batch 2 (CLI completion / `failed`)
+    duplicate `run_id` create race mapped to a 400     Batch 2 (CLI registers the Run)
 
 Serializers live alongside in `runs/serializers.py` (Tasks 16.2, 16.7).
 """
 
+from collections.abc import Iterable
 from functools import partial
 from typing import Literal
 
@@ -28,6 +31,7 @@ from typing import Literal
 # MongoDB Atlas and the compose `mongo` service both are. A standalone `mongod`
 # cannot run transactions at all.
 from django_mongodb_backend import transaction
+from django.db import IntegrityError
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -41,6 +45,7 @@ from vaultshield_backend.mongodb import (
     to_mongo_precision,
 )
 from runs.serializers import (
+    RUN_ID_UNIQUE_MESSAGE,
     RunDetailSerializer,
     RunDiffIngestSerializer,
     RunEventIngestSerializer,
@@ -73,7 +78,8 @@ Decision = Literal["approved", "rejected"]
 
 
 class StateTransitionError(APIException):
-    """Requirement 21.3: this Run is not in a state that accepts a decision.
+    """Requirement 21.3: this Run is not in a state that accepts this
+    decision or gated status transition.
 
     409, not 400, per design.md's Error Handling: "`StateTransitionError`
     (approve/reject on a non-`awaiting_review` Run ...) is surfaced as a
@@ -104,15 +110,39 @@ class StateTransitionError(APIException):
 
     status_code = status.HTTP_409_CONFLICT
 
-    def __init__(self, current_status: str, *, recorded_decision: str | None = None):
+    def __init__(
+        self,
+        current_status: str,
+        *,
+        recorded_decision: str | None = None,
+        target: str | None = None,
+        allowed: Iterable[str] = (),
+    ):
         """`current_status` is the Run's stored Run_Status.
 
         `recorded_decision` names an `Approval` that already exists for the
         Run, for the one case where the status alone does not explain the
         refusal — see `apply_decision` on how a decided Run can be back in
         `awaiting_review`.
+
+        `target` and `allowed` describe a refused gated PATCH transition
+        (`apply_status_transition`): the status the client asked for and
+        the statuses it may be reached from, passed in from
+        `GATED_PATCH_TRANSITIONS` so the message cannot drift from the
+        rule. `target` and `recorded_decision` describe different refusals
+        and are mutually exclusive; passing both is a programming error,
+        raised as `TypeError` so the check survives `python -O`.
         """
-        if recorded_decision is None:
+        if recorded_decision is not None and target is not None:
+            raise TypeError("StateTransitionError takes recorded_decision or target, not both")
+
+        if target is not None:
+            allowed_text = ", ".join(f"`{s}`" for s in sorted(allowed))
+            message = (
+                f"A Run can only move to `{target}` from {allowed_text}; "
+                f"this Run is `{current_status}`."
+            )
+        elif recorded_decision is None:
             message = (
                 "A decision can only be recorded for a Run in `awaiting_review` "
                 f"status; this Run is `{current_status}`."
@@ -169,10 +199,11 @@ def apply_decision(run: Run, decision: Decision) -> Run:
     ### An already-decided Run is refused before the row is touched
 
     The status gate alone would be enough if `status` could only ever move
-    forward, but `PATCH /api/runs/:id/` accepts any value from
-    Requirement 11.2's choice set (see `RunUpdateSerializer` on why no
-    transition rule is invented there), so a decided Run can be put back
-    into `awaiting_review`. `Approval.run` is a `OneToOneField` — the
+    forward, but `PATCH /api/runs/:id/` still accepts `running` from any
+    status (only `awaiting_review` and `failed` are gated, see
+    `GATED_PATCH_TRANSITIONS` and `RunUpdateSerializer`), so a decided Run
+    can be put back into `awaiting_review` in two steps: PATCH `running`,
+    then PATCH `awaiting_review`. `Approval.run` is a `OneToOneField` — the
     schema's own statement that a Run is decided at most once — so a second
     decision on that Run would raise `IntegrityError` from `create` below.
     Checking for the existing `Approval` first turns that 500 into a 409
@@ -272,6 +303,73 @@ def _stored_status_of(run: Run) -> str:
     return stored_status or run.status
 
 
+# Run_Status values PATCH may only move a Run to from `running`. The two the
+# CLI itself writes: completion and failure. Any other `status` value keeps
+# today's unrestricted PATCH behaviour (see RunUpdateSerializer).
+GATED_PATCH_TRANSITIONS = {
+    "awaiting_review": frozenset({"running"}),
+    "failed": frozenset({"running"}),
+}
+
+
+def apply_status_transition(run: Run, target: str, other_fields: dict) -> Run:
+    """Move `run` to a gated `target` status, or refuse with a 409.
+
+    The Run lifecycle's two CLI-written transitions through
+    `PATCH /api/runs/:id/` (Requirement 12.4): `running -> awaiting_review`
+    once the CLI's upload completes, and `running -> failed` when a
+    registered Run errors. `target` must be a key of
+    `GATED_PATCH_TRANSITIONS`; a Run whose stored status is not in that
+    entry is refused with `StateTransitionError` (409, `detail` +
+    `current_status`), the same response `apply_decision` gives, and its
+    row is left exactly as it was.
+
+    `other_fields` are the PATCH's other validated fields (in practice only
+    `pr_url`). They are written in the same conditional update, so a
+    refused transition writes nothing at all.
+
+    Returns the same instance, with `status`, `updated_at` and
+    `other_fields` updated in memory to match the row.
+
+    ### The gate is the write, as in `apply_decision`
+
+    One conditional `filter(pk=..., status__in=allowed).update(...)` inside
+    `django_mongodb_backend`'s `transaction.atomic()`, retried only on
+    MongoDB's `TransientTransactionError`. Of two concurrent writers from
+    the same source state (completion vs failure, or either vs a decision,
+    which needs `awaiting_review`) exactly one matches; the other finds zero
+    rows updated, re-reads the stored status, and gets the 409. That is why
+    `submitted`, `approved`, `rejected`, `awaiting_review` and `failed` can
+    never become `failed`: the filter excludes them.
+
+    `updated_at` is passed explicitly (a queryset `update` skips
+    `auto_now`) and truncated to MongoDB's millisecond precision, so the
+    response reports the value every later `GET` will read.
+    """
+    updated_at = to_mongo_precision(timezone.now())
+    allowed = GATED_PATCH_TRANSITIONS[target]
+
+    def transition() -> None:
+        """One attempt at the transition. Re-reads on every retry."""
+        with transaction.atomic():
+            moved = Run.objects.filter(pk=run.pk, status__in=allowed).update(
+                status=target, updated_at=updated_at, **other_fields
+            )
+            if not moved:
+                raise StateTransitionError(
+                    _stored_status_of(run), target=target, allowed=allowed
+                )
+
+    retry_on_transient_transaction_error(transition)
+
+    run.status = target
+    run.updated_at = updated_at
+    for name, value in other_fields.items():
+        setattr(run, name, value)
+
+    return run
+
+
 class RunViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
@@ -298,9 +396,10 @@ class RunViewSet(
 
     The generated `run_id` format (`<YYYYmmdd>-<HHMMSS>-<16 hex>`) contains
     no `/` and no `.`, so it fits Django's default detail-lookup pattern
-    without a custom `lookup_value_regex` — see the note in
-    `runs/serializers.py` on why the backend does not re-derive the CLI's
-    `run_id` grammar.
+    without a custom `lookup_value_regex`. Create now enforces that for
+    every client-supplied id: `RunSerializer` validates the CLI's safe
+    path-component grammar — see "`run_id` format" in
+    `runs/serializers.py` for why, and why that grammar.
 
     ### Which operations are routed, and which are not
 
@@ -535,6 +634,56 @@ class RunViewSet(
         if self.action in self.INGEST_SERIALIZERS:
             return self.INGEST_SERIALIZERS[self.action]
         return RunSerializer
+
+    def perform_create(self, serializer):
+        """Save a new Run; a lost duplicate-`run_id` race is a 400, not a 500.
+
+        Requirements 12.2 and 12.5. `RunSerializer`'s `UniqueValidator`
+        answers a sequential duplicate with a 400 before any write, but two
+        concurrent creates for one `run_id` can both pass it, and the second
+        `INSERT` then hits the column's unique index as an `IntegrityError`.
+        That is mapped to the validator's own body
+        (`{"run_id": [RUN_ID_UNIQUE_MESSAGE]}`), so a client cannot tell the
+        two paths apart.
+
+        Only when a Run with that `run_id` now exists: any other integrity
+        failure is re-raised unchanged and stays a loud 500. The re-check is
+        a plain read outside any transaction (create runs in none), and
+        `CreateModelMixin.create` still builds the 201 response.
+        """
+        try:
+            serializer.save()
+        except IntegrityError:
+            if Run.objects.filter(run_id=serializer.validated_data["run_id"]).exists():
+                raise ValidationError({"run_id": [RUN_ID_UNIQUE_MESSAGE]})
+            raise
+
+    def partial_update(self, request, *args, **kwargs):
+        """`PATCH /api/runs/:id/`, with `awaiting_review`/`failed` gated.
+
+        Requirement 12.4. The payload is validated by `RunUpdateSerializer`
+        first, so an unknown Run is a 404 and a bad value a 400 exactly as
+        before. A `status` in `GATED_PATCH_TRANSITIONS` (the CLI's completion
+        and failure signals) goes through `apply_status_transition`, which
+        accepts it only from `running` and otherwise answers 409 with the
+        stored status, writing nothing. Every other PATCH — `pr_url` alone,
+        or an ungated `status` — takes the unchanged update path.
+
+        That path is `UpdateModelMixin.update`'s tail copied rather than
+        `super().partial_update(...)`, because calling super would resolve
+        the Run and validate the payload a second time; the observable
+        behaviour is the same.
+        """
+        run = self.get_object()
+        serializer = self.get_serializer(run, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        target = serializer.validated_data.get("status")
+        if target not in GATED_PATCH_TRANSITIONS:
+            self.perform_update(serializer)
+            return Response(serializer.data)
+        other_fields = {k: v for k, v in serializer.validated_data.items() if k != "status"}
+        apply_status_transition(run, target, other_fields)
+        return Response(self.get_serializer(run).data)
 
     @action(detail=True, methods=["post"], url_path="events")
     def events(self, request, run_id=None):

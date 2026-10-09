@@ -149,6 +149,10 @@ class _FakeDockerClient:
             container_name(run_id): _FakeContainer() for run_id in run_ids
         }
         self.containers = _FakeContainerCollection(self._containers)
+        # Batch 3 FR6: `teardown_sandbox` also looks up the Run's egress
+        # networks by name. None exist unless a test adds them.
+        self._networks: dict[str, _FakeContainer] = {}
+        self.networks = _FakeContainerCollection(self._networks)
 
     def container_for(self, run_id: str) -> _FakeContainer:
         return self._containers[container_name(run_id)]
@@ -262,7 +266,17 @@ def test_removes_the_sandbox_and_deletes_a_rejected_runs_branch(
 
     # Requirement 23.1: the Run's container was looked up by the name
     # `Sandbox.create` gives it, and force-removed with its volumes.
-    assert client.containers.lookups == [container_name(_RUN_ID)]
+    # Batch 3 FR6: then the capture helper and the egress proxy, by their
+    # derived names (both absent here, so nothing else is removed).
+    assert client.containers.lookups == [
+        container_name(_RUN_ID),
+        f"vaultshield-capture-{_RUN_ID}",
+        f"vaultshield-egress-{_RUN_ID}",
+    ]
+    assert client.networks.lookups == [
+        f"vaultshield-int-{_RUN_ID}",
+        f"vaultshield-open-{_RUN_ID}",
+    ]
     assert client.container_for(_RUN_ID).removals == [{"v": True, "force": True}]
 
     # Requirement 23.2: this Run's branch is gone from the remote, and the
@@ -409,3 +423,52 @@ def test_rejects_an_invalid_run_id_before_touching_docker() -> None:
 
     assert "../../etc" in str(excinfo.value)
     assert client.containers.lookups == []
+
+
+# --- Batch 3 FR6: capture helper, egress proxy, networks, staging dirs ------
+
+
+def test_teardown_removes_the_run_s_side_objects_in_order(tmp_path, monkeypatch):
+    import tempfile as _tempfile
+
+    monkeypatch.setattr(_tempfile, "gettempdir", lambda: str(tmp_path))
+    mine = tmp_path / f"vaultshield-egress-{_RUN_ID}-abc123"
+    other = tmp_path / f"vaultshield-egress-{_OTHER_RUN_ID}-x"
+    mine.mkdir()
+    other.mkdir()
+    client = _FakeDockerClient(_RUN_ID)
+    order: list[str] = []
+    for name in (f"vaultshield-capture-{_RUN_ID}", f"vaultshield-egress-{_RUN_ID}"):
+        obj = _FakeContainer()
+        obj.remove = lambda n=name, **kw: order.append(n)  # type: ignore[method-assign]
+        client._containers[name] = obj
+    for name in (f"vaultshield-int-{_RUN_ID}", f"vaultshield-open-{_RUN_ID}"):
+        obj = _FakeContainer()
+        obj.remove = lambda n=name, **kw: order.append(n)  # type: ignore[method-assign]
+        client._networks[name] = obj
+
+    assert teardown_sandbox(_RUN_ID, client=client) is True
+    assert order == [
+        f"vaultshield-capture-{_RUN_ID}",
+        f"vaultshield-egress-{_RUN_ID}",
+        f"vaultshield-int-{_RUN_ID}",
+        f"vaultshield-open-{_RUN_ID}",
+    ]
+    assert not mine.exists() and other.exists()
+    # Repeatable: everything is already gone.
+    client._containers.clear()
+    client._networks.clear()
+    assert teardown_sandbox(_RUN_ID, client=client) is False
+
+
+def test_a_docker_refusal_on_a_side_object_is_a_teardown_error():
+    client = _FakeDockerClient()
+    obj = _FakeContainer()
+
+    def _refuse(**kw):
+        raise docker.errors.APIError("active endpoints")
+
+    obj.remove = _refuse  # type: ignore[method-assign]
+    client._networks[f"vaultshield-int-{_RUN_ID}"] = obj
+    with pytest.raises(TeardownError, match=f"vaultshield-int-{_RUN_ID}"):
+        teardown_sandbox(_RUN_ID, client=client)

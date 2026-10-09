@@ -65,7 +65,7 @@ import { useEffect, useRef, useState } from 'react';
 import api from './api.js';
 import { describeLoadFailure, formatDate, formatTimestamp } from './format.js';
 // A Run's status looks the same wherever it is shown, and `RunStatusBadge` is
-// exported for exactly that. Re-styling the five Run_Status values here would
+// exported for exactly that. Re-styling the six Run_Status values here would
 // give one Run two appearances across two views — the thing that component's
 // own docstring argues against.
 import { RunStatusBadge } from './RunHistoryView.jsx';
@@ -153,7 +153,7 @@ export function formatSubmitCommand(runId) {
  * One function so the substitution happens for `approved` and only for
  * `approved`. Every other status renders as the backend stores it, matching the
  * badge in the run history list — see `RunStatusBadge` on why the dashboard
- * does not invent a second vocabulary for the other four.
+ * does not invent a second vocabulary for the other five.
  *
  * @param {unknown} status
  * @returns {unknown} the copy for `approved`, otherwise `status` unchanged

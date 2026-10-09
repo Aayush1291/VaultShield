@@ -663,3 +663,31 @@ def test_sandbox_capabilities_refuse_to_run_without_a_container():
 
     with pytest.raises(SandboxError, match="no container has been created"):
         resolve_base_url(sandbox, 3000)
+
+
+# --- Batch 3 D4: the egress proxy publishes the port ------------------------
+
+
+class _PortContainer:
+    def __init__(self, network):
+        self.attrs = {"NetworkSettings": network}
+
+    def reload(self):
+        pass
+
+
+def test_resolve_base_url_reads_the_publisher_s_port():
+    sandbox = Sandbox("20250614-091530-deadbeefdeadbeef", client=None)
+    sandbox.container = _PortContainer({"IPAddress": "172.17.0.9", "Ports": {}})
+    proxy = _PortContainer({"Ports": {"3000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "55001"}]}})
+    assert resolve_base_url(sandbox, 3000, published_by=proxy) == "http://127.0.0.1:55001"
+
+
+def test_with_a_publisher_there_is_no_container_ip_fallback():
+    sandbox = Sandbox("20250614-091530-deadbeefdeadbeef", client=None)
+    sandbox.container = _PortContainer({"IPAddress": "172.17.0.9", "Ports": {}})
+    proxy = _PortContainer({"IPAddress": "172.18.0.2", "Ports": {}})
+    with pytest.raises(SandboxError, match="egress proxy does not publish"):
+        resolve_base_url(sandbox, 3000, published_by=proxy)
+    # Without one, today's fallback is unchanged.
+    assert resolve_base_url(sandbox, 3000) == "http://172.17.0.9:3000"

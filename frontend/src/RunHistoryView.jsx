@@ -58,10 +58,13 @@ export const NO_PROJECT_SELECTED_MESSAGE = 'Select a project to see its run hist
 /**
  * Badge styling per Run_Status.
  *
- * Keyed by the five literal values in `Run.STATUS_CHOICES` (Requirement
- * 11.2). A status outside that set — which only a backend that grew a sixth
- * value could produce — still renders, in the neutral style, because dropping
- * or blanking it would hide a Run's real state.
+ * Keyed by the six literal values in `Run.STATUS_CHOICES` (Requirement
+ * 11.2). `failed` is neutral grey rather than a warning colour because
+ * nothing is pending on a reviewer: the Run ended before it could be
+ * reviewed. It uses Tailwind's `gray` so it stays distinct from the `slate`
+ * unknown-status fallback. A status outside that set — which only a backend
+ * that grew a seventh value could produce — still renders, in the neutral
+ * style, because dropping or blanking it would hide a Run's real state.
  */
 const STATUS_STYLES = {
   running: 'border-sky-200 bg-sky-50 text-sky-700',
@@ -69,6 +72,7 @@ const STATUS_STYLES = {
   approved: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   rejected: 'border-red-200 bg-red-50 text-red-700',
   submitted: 'border-violet-200 bg-violet-50 text-violet-700',
+  failed: 'border-gray-300 bg-gray-100 text-gray-600',
 };
 
 const UNKNOWN_STATUS_STYLE = 'border-slate-300 bg-slate-100 text-slate-700';
