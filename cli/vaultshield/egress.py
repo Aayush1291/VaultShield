@@ -94,9 +94,18 @@ BUILTIN_ALLOWLISTS: dict[str, tuple[str, ...]] = {
     # `daily-cloudcode-pa.googleapis.com` (11 connections). The production
     # `cloudcode-pa.googleapis.com` was not contacted by this build but is in
     # the binary's strings [inv §6] as the same API's prod endpoint, so it is
-    # kept for other release channels. Seen and deliberately NOT listed:
-    # `www.googleapis.com` and `storage.googleapis.com` (Cloud Storage upload
-    # exfil paths), `play.googleapis.com`, `antigravity-unleash.goog` and the
+    # kept for other release channels.
+    #
+    # `www.googleapis.com` is listed by the developer's decision (design §9.1,
+    # option A) after the allowlist probe: agy's post-sign-in eligibility check
+    # calls `/oauth2/v2/userinfo` there and fails the sign-in without it. The
+    # proxy filters by host only, so this also opens that host's other REST
+    # APIs, including the Cloud Storage JSON upload API: an agent holding the
+    # `cloud-platform` token can upload to a bucket in the developer's own
+    # project without a `violation` event (accepted residual risk).
+    #
+    # Seen and deliberately NOT listed: `storage.googleapis.com` (Cloud Storage
+    # upload), `play.googleapis.com`, `antigravity-unleash.goog` and the
     # `*.run.app` auto-updater (telemetry, feature flags, updates),
     # `lh3.googleusercontent.com` (avatars) and the `playwright*.azureedge.net`
     # CDNs (browser downloads).
@@ -104,6 +113,7 @@ BUILTIN_ALLOWLISTS: dict[str, tuple[str, ...]] = {
         "oauth2.googleapis.com",
         "daily-cloudcode-pa.googleapis.com",
         "cloudcode-pa.googleapis.com",
+        "www.googleapis.com",
     ),
     # Unverified (API-key mode).
     "codex": ("api.openai.com",),

@@ -249,13 +249,20 @@ An app `port` of 443 or 3128 is refused in these modes (the proxy's own ports).
 
 | Agent | Built-in list | Status |
 |---|---|---|
-| antigravity | `oauth2.googleapis.com` (sign-in), `daily-cloudcode-pa.googleapis.com` (model API), `cloudcode-pa.googleapis.com` (production endpoint; not contacted by the probe, kept from the binary's strings) | enforced; hosts from the real log-only probe |
+| antigravity | `oauth2.googleapis.com` (sign-in), `daily-cloudcode-pa.googleapis.com` (model API), `cloudcode-pa.googleapis.com` (production endpoint; not contacted by the probe, kept from the binary's strings), `www.googleapis.com` (post-sign-in eligibility check, `/oauth2/v2/userinfo`; see the risk below) | enforced; hosts from the real log-only and allowlist probes |
 | codex | `api.openai.com` | unverified |
 | kiro | `runtime.us-east-1.kiro.dev`, `management.us-east-1.kiro.dev` | unverified |
 | mock | none (deny-all) | verified |
 
-Seen in the log-only probe but deliberately not listed: `www.googleapis.com`
-and `storage.googleapis.com` (Cloud Storage upload paths), `play.googleapis.com`,
+**Risk of `www.googleapis.com`:** without it `agy`'s sign-in fails
+(`Eligibility check failed: … userinfo: Forbidden`). The proxy filters by host,
+not URL path, so listing it also allows that host's other Google REST APIs,
+including the Cloud Storage JSON upload API. An agent holding the
+`cloud-platform` token could upload repository data to a bucket in your own
+Google project, and no `violation` event would be recorded.
+
+Seen in the probes but deliberately not listed: `storage.googleapis.com`
+(Cloud Storage upload), `play.googleapis.com`,
 `antigravity-unleash.goog` and the `*.run.app` auto-updater (telemetry, flags,
 updates), `lh3.googleusercontent.com` (avatars), and the
 `playwright*.azureedge.net` CDNs (browser downloads). Their denials show up as

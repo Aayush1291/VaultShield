@@ -386,7 +386,7 @@ def test_resolve_policy_precedence_and_union():
     assert policy.mode == "allowlist"
     assert [e.host for e in policy.entries] == [
         "oauth2.googleapis.com", "daily-cloudcode-pa.googleapis.com",
-        "cloudcode-pa.googleapis.com", "api.example.com"]
+        "cloudcode-pa.googleapis.com", "www.googleapis.com", "api.example.com"]
 
 
 def test_resolve_policy_errors():
@@ -707,8 +707,8 @@ def test_the_real_log_only_probe_log_maps_to_would_deny_events():
 def test_the_antigravity_list_matches_the_probe_decision():
     hosts = egress.BUILTIN_ALLOWLISTS["antigravity"]
     assert hosts == ("oauth2.googleapis.com", "daily-cloudcode-pa.googleapis.com",
-                     "cloudcode-pa.googleapis.com")
-    for denied in ("www.googleapis.com", "storage.googleapis.com", "play.googleapis.com",
+                     "cloudcode-pa.googleapis.com", "www.googleapis.com")
+    for denied in ("storage.googleapis.com", "play.googleapis.com",
                    "antigravity-unleash.goog", "lh3.googleusercontent.com",
                    "antigravity-cli-auto-updater-974169037036.us-central1.run.app",
                    "playwright.azureedge.net", "playwright-akamai.azureedge.net",

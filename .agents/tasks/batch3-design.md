@@ -861,14 +861,16 @@ These tests reuse `requires_docker`, `requires_sandbox_image`, `served_repo` and
 
 Source: `~/.vaultshield/probes/20261009T083128Z-egress-log-only{.json,-proxy.jsonl}` (hostnames, decisions and an `lstat` listing only; no file contents were read from them).
 
-**Item 9 — Antigravity allowlist, host by host.** Built-in list is now `oauth2.googleapis.com`, `daily-cloudcode-pa.googleapis.com`, `cloudcode-pa.googleapis.com`.
+**Item 9 — Antigravity allowlist, host by host.** Built-in list is now `oauth2.googleapis.com`, `daily-cloudcode-pa.googleapis.com`, `cloudcode-pa.googleapis.com`, `www.googleapis.com`.
+
+**Item 9 decision (developer, option A, after the allowlist probe run 20261009-094445):** with the three-host list, agy's sign-in failed: `Eligibility check failed: Get "https://www.googleapis.com/oauth2/v2/userinfo": Forbidden` (www.googleapis.com denied ×6). The developer chose to **add `www.googleapis.com`** with this risk stated: the proxy filters by host only (no TLS interception), so the whole host is opened, including the Cloud Storage JSON upload API (`/upload/storage/v1`). An agent holding the `cloud-platform` token can exfiltrate to a bucket in the developer's own project without a `violation` event. This is added to item 10's accepted residual risks. The `www.googleapis.com` row below is superseded.
 
 | Host seen | Decision | Reason |
 |---|---|---|
 | `oauth2.googleapis.com` | **allow** (kept) | OAuth sign-in / token refresh (3 allowed CONNECTs) |
 | `daily-cloudcode-pa.googleapis.com` | **allow** (added) | the model API this `agy` build actually uses (11 CONNECTs) |
 | `cloudcode-pa.googleapis.com` | **allow** (kept; not seen) | not contacted by this build; kept only on binary-strings evidence [inv §6] as the same API's production endpoint for other release channels. Weak evidence: flagged to the developer at the allowlist-probe pause; drop it if they prefer least privilege |
-| `www.googleapis.com` | deny | userinfo, but also Cloud Storage JSON upload API (exfil path) |
+| `www.googleapis.com` | ~~deny~~ **allow (option A)** | required by agy's post-sign-in userinfo eligibility check; also opens the Cloud Storage JSON upload API (accepted exfil risk) |
 | `storage.googleapis.com` | deny | Cloud Storage upload (exfil path) |
 | `play.googleapis.com` | deny | Play logging/telemetry |
 | `antigravity-unleash.goog` | deny | feature-flag service |

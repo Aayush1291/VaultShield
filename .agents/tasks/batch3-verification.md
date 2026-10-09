@@ -169,7 +169,19 @@ Command: `isolation_probe.py --agent antigravity --interactive-auth --egress all
 - Allowed: oauth2.googleapis.com ×1, daily-cloudcode-pa.googleapis.com ×5.
 - Denied (`not_in_allowlist`): www.googleapis.com ×6, play.googleapis.com ×13, antigravity-unleash.goog ×2, the three playwright CDNs ×1 each, the auto-updater ×1.
 - Cause: agy's post-sign-in eligibility check calls `www.googleapis.com/oauth2/v2/userinfo`, and that host is not on the list. A CONNECT/SNI proxy sees only the host, not the path (no TLS interception, per Out of scope). It therefore cannot allow `/oauth2/v2/userinfo` while blocking `/upload/storage/v1/…` on the same host.
-- Per design §9 item 9 this is the developer's decision: add `www.googleapis.com` (risk stated) or leave Antigravity unusable in allowlist mode. **Paused for that decision; no code change made.** The after-sign-in reachability rows for allowlist mode are NOT RUN, because the sign-in did not complete.
+- Per design §9 item 9 this was the developer's decision. **The developer chose option A: add `www.googleapis.com`.** Accepted risk: host-only filtering also opens the Cloud Storage JSON upload API, so exfiltration to a bucket in the developer's own project with the `cloud-platform` token is undetected.
+- Applied: `BUILTIN_ALLOWLISTS["antigravity"]` = `oauth2.googleapis.com`, `daily-cloudcode-pa.googleapis.com`, `cloudcode-pa.googleapis.com` (kept; the developer did not ask to drop it), `www.googleapis.com`. The comment in `egress.py`, the README table and risk paragraph, and design §9.1 are updated. `test_resolve_policy_precedence_and_union` and `test_the_antigravity_list_matches_the_probe_decision` assert the new exact list, with storage/play/unleash/updater/lh3/playwright still absent.
+- Suites after the option-A change: full CLI **1 failed (pre-existing `test_exec_interactive_really_delivers_stdin_to_a_container_process`), 962 passed, 1 deselected**. `test_egress_docker.py` **15 passed**. Nothing is staged, rules.py is untouched, and no labelled containers remain.
+- After-sign-in allowlist reachability: NOT RUN yet.
+
+### 7. Allowlist re-run with `www.googleapis.com` (developer-run, run id 20261009-101830-886910f1d4ca5591)
+
+Proxy log `~/.vaultshield/probes/20261009T101830Z-egress-allowlist-proxy.jsonl` (decisions only). No results JSON was written because the probe aborted at sign-in. Teardown completed.
+
+- **Outcome: FAILED at sign-in again.** agy printed `Error: Eligibility check failed: failed to get profile picture: Get "https://lh3.googleusercontent.com/a/<avatar id>=s96-c": Forbidden`. The probe raised `AuthError`, and the agent run never started.
+- Allowed: www.googleapis.com ×2 (the userinfo check now passes), oauth2.googleapis.com ×1, daily-cloudcode-pa.googleapis.com ×5.
+- Denied: lh3.googleusercontent.com ×3 (the cause), play.googleapis.com ×12, antigravity-unleash.goog ×2, the auto-updater ×1, and the three playwright CDNs ×1 each.
+- **Paused before adding `lh3.googleusercontent.com`**, as instructed (the developer is asked about any further host). No code change was made. A re-run of the allowlist probe with the new list has been requested from the developer.
 
 ## Not run
 
