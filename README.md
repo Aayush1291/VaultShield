@@ -993,3 +993,4 @@ What was checked while writing this document:
 *VaultShield makes AI-agent execution isolated, observable, and reviewable. It is a
 control point and an evidence trail, not a guarantee of containment — use it with
 that understanding.*
+# VaultShield2
