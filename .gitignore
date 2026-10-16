@@ -16,3 +16,14 @@
 # (`build_sandbox_env` mirrors key names and shapes, never real values), but it
 # is a build artifact either way.
 .env.sandbox
+
+# Accidental shell-quoting artifacts: running `eval "$(ssh-agent -s)"` with the
+# wrong quoting creates literal files by these names, one of which can contain a
+# private SSH key. Ignore them so they can never be committed again.
+eval "$(ssh-agent -s)"
+eval "$(ssh-agent -s)".pub
+
+# Any stray key material.
+*.pem
+id_rsa
+id_ed25519
