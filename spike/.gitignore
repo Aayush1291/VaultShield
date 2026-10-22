@@ -1,0 +1,15 @@
+# Config backups created by apply.sh / run_cli_spike.sh hold a verbatim copy of the
+# user's real ~/.gemini/config/config.json (which contains live credentials in its
+# command grants). Never commit them.
+.backups/
+**/.backups/
+
+# Pasted GUI agent answers (fake values, but keep them local).
+ide_test/answers/*.txt
+
+# Raw run artifacts.
+results/*.raw.jsonl
+results/*.err.txt
+
+# Raw live Gemini reply bodies captured while debugging (synthetic prompts only, but keep them local).
+live_responses/
