@@ -53,7 +53,7 @@ def test_each_model_call_is_one_json_line_with_the_agreed_fields(project, monkey
     assert len(records) == 2
     for record in records:
         assert set(record) == {"timestamp", "provider", "model", "request_bytes", "outcome"}
-        assert record["provider"] == "gemini" and record["model"] == "gemini-3.8-flash"
+        assert record["provider"] == "gemini" and record["model"] == "gemini-2.5-flash"
         assert record["outcome"] == "ok"
         assert datetime.fromisoformat(record["timestamp"]).tzinfo is not None
     assert [r["request_bytes"] for r in records] == [len(r.content) for r in server.requests]

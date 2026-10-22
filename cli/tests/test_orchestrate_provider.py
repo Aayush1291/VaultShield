@@ -73,6 +73,20 @@ def test_the_request_follows_the_documented_format():
     assert request.headers["content-type"] == "application/json"
     body = json.loads(request.content)
     assert body == {
+        "model": "gemini-2.5-flash",
+        "system_instruction": "SYSTEM TEXT",
+        "input": "USER TEXT",
+        "store": False,
+        "response_format": {"type": "text", "mime_type": "application/json", "schema": SCHEMA},
+    }
+
+
+def test_a_gemini_3_model_is_sent_the_same_request_plus_a_low_thinking_level():
+    server = Server(reply({"a": "x"}))
+
+    server.provider(model="gemini-3.8-flash").generate_json("SYSTEM TEXT", "USER TEXT", SCHEMA)
+
+    assert json.loads(server.requests[0].content) == {
         "model": "gemini-3.8-flash",
         "system_instruction": "SYSTEM TEXT",
         "input": "USER TEXT",
@@ -82,8 +96,10 @@ def test_the_request_follows_the_documented_format():
     }
 
 
-def test_the_default_model_is_the_documented_stable_fast_one():
-    assert DEFAULT_MODEL == "gemini-3.8-flash"
+def test_the_default_model_is_the_fastest_one_that_answered_in_the_live_check():
+    # 2026-10-22, same request: gemini-2.5-flash 4.9 s, gemini-3.5-flash 14.3 s,
+    # gemini-3.8-flash no answer within 25 s. See the README, "The model".
+    assert DEFAULT_MODEL == "gemini-2.5-flash"
     assert ENDPOINT == "https://generativelanguage.googleapis.com/v1beta/interactions"
 
 
@@ -195,6 +211,13 @@ def parse(body):
 def test_the_reply_captured_live_from_gemini_2_5_flash_parses():
     # signature-only thought step, then the JSON in a ```json fence, no top-level id
     assert parse(gemini_2_5_flash_reply(fenced(PAYLOAD))) == PAYLOAD
+
+
+def test_the_reply_captured_live_from_gemini_3_5_flash_parses():
+    # same structure, but the JSON came bare (no fence), and the service named a
+    # different model (gemini-3.6-flash) from the one asked for
+    body = {**gemini_2_5_flash_reply(DUMPED), "model": "gemini-3.6-flash"}
+    assert Server(body).provider(model="gemini-3.5-flash").generate_json("s", "u") == PAYLOAD
 
 
 @pytest.mark.parametrize(
@@ -489,7 +512,7 @@ def write_config(home, text):
 
 
 def test_without_a_config_file_the_default_model_is_used(tmp_path):
-    assert prov.load_model(tmp_path) == "gemini-3.8-flash"
+    assert prov.load_model(tmp_path) == "gemini-2.5-flash"
 
 
 def test_the_model_setting_is_read_from_the_config_file(tmp_path):

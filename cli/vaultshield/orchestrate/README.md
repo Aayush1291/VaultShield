@@ -49,8 +49,11 @@ characters are ever shown, and only for keys of 8 or more characters.
 
 ### The model
 
-Default `gemini-3.8-flash`, the model Google's docs list as Stable and use in all their
-current examples. Change it in `~/.vaultshield/config.yml`:
+Default `gemini-2.5-flash`. On 2026-10-22 three models got the same request, one call each:
+`gemini-2.5-flash` answered in 4.9 s, `gemini-3.5-flash` in 14.3 s, and `gemini-3.8-flash`
+had not answered after 25 s. One call each is a small sample, so treat the times as a hint.
+`gemini-2.5-flash` puts its JSON inside a markdown code fence; the tool accepts that. Change
+the model in `~/.vaultshield/config.yml`:
 
 ```yaml
 orchestrator:
@@ -146,10 +149,14 @@ stores requests (55 days on the paid tier, 1 day on the free tier, per its docs)
   not been tested here.
 
 **What has not been checked against the real service.** Every test uses a mocked HTTP
-transport and an in-memory Keychain. The request and response format, the model id and the
-`store: false` setting come from Google's documentation (read 2026-10-22), not from a live call.
-In particular: that the service accepts a structured-output `schema`, that `thinking_level`
-`low` is accepted for the model, and what Google does with the request after receiving it, have
-not been confirmed. Run `spike/orchestrator_smoke.sh` once with a real key to find out.
+transport and an in-memory Keychain. The request and response format and the `store: false`
+setting come from Google's documentation (read 2026-10-22). Three live calls (the questions
+request only) showed that the service accepts that request and that the reply has the
+documented structure. They also showed that `gemini-2.5-flash` returned 2 questions although
+the schema asks for at least 3, so the schema is not reliably enforced there; the tool then
+asks once more and falls back. Not confirmed: the second call (the suggested approach), a
+whole `vaultshield ask` run, `thinking_level` `low` on `gemini-3.8-flash`, and what Google does
+with the request after receiving it. Run `spike/orchestrator_smoke.sh` once with a real key to
+find out.
 
 **Scope.** Gemini only. macOS only (`--copy` needs `pbcopy`). No agent is started.

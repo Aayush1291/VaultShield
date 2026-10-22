@@ -35,9 +35,10 @@ import yaml
 
 from vaultshield.orchestrate import keys
 
-# The current Stable fast model in the docs. Override with `orchestrator.model`
-# in ~/.vaultshield/config.yml.
-DEFAULT_MODEL = "gemini-3.8-flash"
+# The fastest model that gave a usable reply in a live check on 2026-10-22, same
+# request each: gemini-2.5-flash 4.9 s, gemini-3.5-flash 14.3 s, gemini-3.8-flash no
+# answer within 25 s. Override with `orchestrator.model` in ~/.vaultshield/config.yml.
+DEFAULT_MODEL = "gemini-2.5-flash"
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
 TIMEOUT_S = 30.0
 MAX_RETRIES = 1  # one retry, on 429 or 5xx only
