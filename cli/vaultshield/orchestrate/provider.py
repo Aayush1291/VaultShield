@@ -272,11 +272,12 @@ def default_transport() -> httpx.BaseTransport | None:
 
 def build_provider(
     *,
+    key: keys.ResolvedKey | None = None,
     home: Path | None = None,
     recorder: Callable[[CallRecord], None] | None = None,
 ) -> GeminiProvider:
-    """A Gemini provider with the key from `keys.require_key` and the configured model.
+    """A Gemini provider with the configured model and `key` (default: `keys.require_key`).
 
     Raises keys.ModelKeyError if there is no key and ConfigFileError for a bad config file."""
-    key = keys.require_key(keys.PROVIDER_GEMINI)
+    key = key or keys.require_key(keys.PROVIDER_GEMINI)
     return GeminiProvider(key.value, load_model(home), transport=default_transport(), recorder=recorder)
