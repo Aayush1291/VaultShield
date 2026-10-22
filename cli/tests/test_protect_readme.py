@@ -19,10 +19,20 @@ def test_the_readme_says_the_real_keychain_was_not_tested():
     assert "in-memory fake" in text
 
 
-def test_the_readme_says_nothing_is_installed_into_antigravity():
+def test_the_readme_separates_printing_from_installing_into_antigravity():
     text = README.read_text()
-    assert "**only prints**" in text
-    assert "not done by this tool" in text
+    assert "`vaultshield agents render antigravity` **only prints**" in text
+    assert "merge-only" in text.lower()
+    assert "byte for byte" in text
+    assert ".vaultshield.bak" in text
+
+
+def test_the_readme_says_what_is_not_proven_about_the_app_hook_and_install():
+    text = README.read_text()
+    assert "Not proven yet: that the App calls the hook" in text
+    assert "spike/hook_proof.sh" in text
+    assert "Deny rules alone are not enough" in text
+    assert "has not been run against a real `~/.gemini`" in " ".join(text.split())
 
 
 def test_the_readme_documents_every_command():
@@ -34,6 +44,9 @@ def test_the_readme_documents_every_command():
         "vaultshield exec",
         "vaultshield unprotect",
         "vaultshield agents render antigravity",
+        "vaultshield agents install antigravity",
+        "vaultshield agents uninstall antigravity",
+        "vaultshield agents doctor antigravity",
         "vaultshield hook antigravity",
     ):
         assert command in text, command

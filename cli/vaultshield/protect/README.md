@@ -21,6 +21,9 @@ vaultshield status               protected files and variable NAMES (never value
 vaultshield exec -- npm start    run a command with the real values in its environment
 vaultshield unprotect            put the real values back
 vaultshield agents render antigravity   PRINT deny rules and hook config (installs nothing)
+vaultshield agents install antigravity [--home PATH]   write them into the CLI and App settings
+vaultshield agents uninstall antigravity [--home PATH] put every touched file back exactly
+vaultshield agents doctor antigravity   is each backstop active, per CLI and App
 vaultshield hook antigravity     the hook Antigravity calls; not for typing by hand
 ```
 
@@ -109,11 +112,51 @@ vaultshield exec [--dir .] -- <command> [args...]
    does not match anything (measured in the spike).
 2. The `PreToolUse` hook config for `run_command`.
 
-Installing them into your real Antigravity settings is **not done by this tool
-yet**; it waits for the IDE test results. The CLI keeps its grants in
-`~/.gemini/antigravity-cli/settings.json` and the App/IDE in
-`~/.gemini/config/config.json`, so the same rules would have to go in both. The
-App/IDE half is not verified.
+#### `agents install` / `uninstall` / `doctor`
+
+What the App test measured, and what these commands are built on: placeholders
+were safe; deny rules **alone leaked** (the agent's `read_file` was blocked, then it
+ran `cat` in the terminal with `BypassSandbox:true`); and the sandbox rejected our
+rules as "non-absolute file path". So the rules are exact **absolute** paths, and the
+hook is there to catch the terminal route.
+
+`vaultshield agents install antigravity [--home PATH]` writes, for every file in the
+manifest (protected and detected-not-moved):
+
+- `read_file(<absolute path>)` deny rules into the CLI's
+  `~/.gemini/antigravity-cli/settings.json` (`permissions.deny`) **and** the App's
+  `~/.gemini/config/config.json` (`userSettings.globalPermissionGrants.deny`);
+- one `PreToolUse` hook on `run_command` into the global `~/.gemini/config/hooks.json`.
+
+It is merge-only. Files are edited by inserting text, never by re-writing the JSON,
+so every other key and every existing grant stays **byte for byte** identical (checked
+by tests across many layouts). It is idempotent. Before a file is first changed, a copy
+is kept next to it as `<file>.vaultshield.bak` (or `<file>.vaultshield.absent` if the
+file did not exist). Quit Antigravity first: a running App can overwrite `config.json`.
+
+- A missing `config.json` is **not invented** (the App owns it) and is skipped. A missing
+  CLI `settings.json` or `hooks.json` is created if the folder around it exists.
+- The hook command is `<python> -m vaultshield.cli hook antigravity`, with the absolute
+  path of the Python that ran `install`. Not the bare name `vaultshield` (hooks may not
+  get your shell's PATH), and not the `vaultshield` script (it can name a different
+  Python; a hook that cannot start gives Antigravity no decision, and it then denies
+  every command in every project). If you move or delete that Python, run `install`
+  again; `doctor` notices.
+- The rules hold absolute paths of the project at the time you run `install`. Run it again
+  after `protect` adds files.
+
+`vaultshield agents uninstall antigravity [--home PATH]` puts each touched file back
+exactly from its copy, then removes the copy. It restores the file **as it was at the
+first install**. If Antigravity changed the file since (for example it added a grant
+when you approved a command), that later version is first saved next to the file as
+`<file>.vaultshield.before-uninstall` so nothing is lost for good.
+
+`vaultshield agents doctor antigravity` prints, for the CLI and for the App, whether
+the placeholders, the deny rules and the hook are active, and exits 1 if any is not. It
+also warns when command grants in `config.json` **look like they contain credentials**,
+and says only how many and at which positions (0-based, in
+`userSettings.globalPermissionGrants.allow`), never what they contain. That check is a
+heuristic: it can miss some and flag some that are not.
 
 The hook reads the tool call on stdin (`toolCall.args.CommandLine`,
 `toolCall.args.Cwd`, `workspacePaths`) and answers `{"decision": "allow"}` or
@@ -184,10 +227,24 @@ prompts on first use, as unverified until you try it.
   or a script that reads the file for the agent. `ps -ef` is denied even though it
   may not show the environment.
 - `read_file` rules are exact paths: a new `.env.something` is not covered until
-  you run `protect` again and re-render. The absolute-path form of the rule is
-  per the docs; only the relative form was observed working in the spike.
-- Nothing here is installed for you.
+  you run `protect` and then `agents install` again.
+- **Deny rules alone are not enough.** In the App test they blocked `read_file` and the
+  agent read the file through the terminal anyway. That is why the placeholders are the
+  real protection and the hook is added.
+- **Not proven yet: that the App calls the hook.** Hooks fire in the CLI (checked in the
+  spike). For the App, the docs say so, but it has not been shown on this machine. Run
+  `spike/hook_proof.sh` once to find out. Until then, treat the hook as unproven in the
+  App. Whether an absolute deny rule is enforced end to end in the App is also not
+  confirmed; the App only showed that it accepts absolute paths and rejects relative ones.
+- `install` was tested only against invented files in a temporary home. It has not been
+  run against a real `~/.gemini`.
+- The `.vaultshield.bak` copy of `config.json` is a full copy, so it holds whatever the
+  original holds, including any credentials in your command grants. It has the same file
+  permissions as the original. Delete it after `uninstall` if you keep it (uninstall
+  removes it).
+- If the App rewrites `config.json` while it is running, it can drop the rules. `doctor`
+  will show them as missing; run `install` again with the App closed.
 
 **Scope.** macOS and Antigravity only. Claude Code, Kiro and Codex have no
-renderer yet. On Linux `keyring` uses whatever backend it finds; that was not
+renderer or installer yet. On Linux `keyring` uses whatever backend it finds; that was not
 tested.
