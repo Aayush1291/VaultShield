@@ -25,6 +25,9 @@ vaultshield agents install antigravity [--home PATH]   write them into the CLI a
 vaultshield agents uninstall antigravity [--home PATH] put every touched file back exactly
 vaultshield agents doctor antigravity   is each backstop active, per CLI and App
 vaultshield hook antigravity     the hook Antigravity calls; not for typing by hand
+vaultshield agents render|install|uninstall|doctor claude-code|kiro|codex   same, for the other agents
+vaultshield agents doctor all    every agent's layers in one report
+vaultshield hook claude-code|kiro|codex   the hook that agent calls; not for typing by hand
 ```
 
 Run these from the project folder (subfolders work too; the project is the
@@ -176,6 +179,68 @@ folder with no manifest it allows everything, so a global hook does not get in
 the way of other projects. A payload it cannot read, or a manifest it cannot
 read, is denied (fail closed). It never reads the Keychain.
 
+## Other agents: Claude Code, Kiro, Codex
+
+Same idea as Antigravity: the placeholders are the real protection; deny rules and
+a `PreToolUse` hook are backstops. The commands take the agent name, and `doctor`
+also takes `all`:
+
+```
+vaultshield agents render|install|uninstall|doctor claude-code|kiro|codex
+vaultshield agents doctor all
+vaultshield hook claude-code|kiro|codex    the hook that agent calls; not for typing
+```
+
+`install` is **merge-only and byte for byte** for every key it does not own, with
+the same `.vaultshield.bak` backups, idempotency, and `--home` (for tests) as
+Antigravity. Each agent's hook reuses the **exact same decision logic** as the
+Antigravity hook (it denies a command that names a protected file, dumps the
+environment, or reads the Keychain) and **fails closed**.
+
+What each agent offers, from its current docs (see `agents/FINDINGS.md` for every
+fact with its URL). CONFIRMED means the docs state it; UNCONFIRMED means they do
+not and the code does not depend on it.
+
+| Agent | Placeholders | Deny rules | Pre-tool hook | Where |
+|---|---|---|---|---|
+| Claude Code | yes | CONFIRMED | CONFIRMED (Bash, `onFailure:block`) | `~/.claude/settings.json` |
+| Kiro | yes | CONFIRMED (abs match format UNCONFIRMED) | CONFIRMED (CLI V3; IDE hook N/A) | `~/.kiro/settings/permissions.yaml`, `~/.kiro/hooks/` |
+| Codex | yes | CONFIRMED (profile, macOS sandbox) | CONFIRMED (no fail-closed flag) | `~/.codex/config.toml`, `~/.codex/hooks.json` |
+
+- **Claude Code** writes one file, `~/.claude/settings.json`, read by the CLI, the
+  VS Code extension and the desktop app. A `Read(//<abs>)` deny also blocks
+  Edit/Write and the file-read commands `cat/head/tail/sed/tee` and redirections,
+  but not a script that opens the file; the hook catches the terminal route.
+  `onFailure:block` makes a hook crash or timeout block the call, which needs
+  Claude Code v2.1.295 or later (older versions fail open: UNCONFIRMED).
+- **Kiro** writes `~/.kiro/settings/permissions.yaml` (`fs_read` deny rules) and
+  `~/.kiro/hooks/vaultshield-protect.json` (the hook, read by Kiro CLI V3). The
+  IDE reads hooks from a project's `.kiro/hooks` only, so the IDE hook is **not**
+  installed and `doctor` reports that surface as not available at the user level.
+  Installing is opt-in and tested only against a temp `--home`. Whether deny rules
+  or the hook constrain shell commands holds only with the local command sandbox,
+  which is off by default (UNCONFIRMED otherwise), and the `execute_bash` payload
+  field is undocumented, so the hook scans every string it is given.
+- **Codex** writes a permission profile `[permissions.vaultshield]` into
+  `~/.codex/config.toml` and a hook into `~/.codex/hooks.json`. The profile is
+  **defined, not selected**: it does nothing until you add
+  `default_permissions = "vaultshield"` to `config.toml`, and it is ignored while
+  `sandbox_mode` is set anywhere; `doctor` reports both. Codex trusts a new hook
+  only after you review it with `/hooks`, and it has no fail-closed flag.
+
+**Leak checks (not run here).** `spike/leak_claude_code.sh`, `spike/leak_kiro.sh`
+and `spike/leak_codex.sh` isolate each agent via its own config-dir override
+(`CLAUDE_CONFIG_DIR`, `KIRO_HOME`, `CODEX_HOME`) and a temp plaintext keyring, run
+an adversarial "read .env and print FAKE_KEY" prompt against a throwaway project
+with a FAKE `.env`, and print LEAKED or SAFE. If an agent cannot be isolated or
+signed in, the script prints the exact manual steps and touches nothing.
+
+**Not tested live.** None of these three was run against a real agent: every fact
+comes from documentation, and all tests use the in-memory Keychain fake and a
+temporary home, so the real Keychain and the real agent configs were never
+touched. Whether each layer actually blocks a shell read is unverified until you
+run the leak script.
+
 ## Honest limits
 
 These were checked by tests unless marked otherwise.
@@ -245,6 +310,8 @@ prompts on first use, as unverified until you try it.
 - If the App rewrites `config.json` while it is running, it can drop the rules. `doctor`
   will show them as missing; run `install` again with the App closed.
 
-**Scope.** macOS and Antigravity only. Claude Code, Kiro and Codex have no
-renderer or installer yet. On Linux `keyring` uses whatever backend it finds; that was not
-tested.
+**Scope.** macOS. Antigravity, Claude Code, Kiro and Codex each have a renderer,
+installer and hook; Antigravity's was measured on this machine (the spike), while
+Claude Code, Kiro and Codex are built from their documentation and have not been
+run against a real agent (see "Other agents" above). On Linux `keyring` uses
+whatever backend it finds; that was not tested.
