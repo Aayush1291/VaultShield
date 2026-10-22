@@ -475,3 +475,17 @@ def scan_project(root: Path, secrets: Secrets | None = None) -> ProjectContext:
         commits=[clean(s)[:COMMIT_SUBJECT_MAX_CHARS] for s in _commit_subjects(root)],
         protected={path: [clean(n) for n in names] for path, names in (manifest.protected.items() if manifest else [])},
     )
+
+
+# --- the one way to call the model -------------------------------------------------
+
+
+def guarded_generate(provider, secrets: Secrets, system: str, user: str, schema: dict | None = None) -> dict:
+    """Every model request in the orchestrator goes through here. The user text is
+    sanitized, then BOTH texts are checked with `assert_clean` before the provider is
+    called. If the check fails (it should not, after sanitizing), `LeakError` is raised
+    and nothing is sent."""
+    user = sanitize(user, secrets)
+    assert_clean(system, secrets)
+    assert_clean(user, secrets)
+    return provider.generate_json(system, user, schema)
