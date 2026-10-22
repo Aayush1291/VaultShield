@@ -14,6 +14,7 @@ import click
 
 from vaultshield.protect import execute
 from vaultshield.protect.agents import antigravity
+from vaultshield.protect.agents import agentinstall, claude_code
 from vaultshield.protect.agents import doctor as agent_doctor
 from vaultshield.protect.agents import install as agent_install
 from vaultshield.protect import manifest as manifest_mod
@@ -162,25 +163,24 @@ def status_command() -> None:
             click.echo(f"  {path}")
 
 
+# The agents added on Day 3, keyed by name. Antigravity keeps its own install/doctor
+# modules (install.py, doctor.py); these three share agentinstall.py and agentdoctor.py.
+NEW_AGENTS = {claude_code.AGENT: claude_code}
+_AGENT_CHOICE = click.Choice(["antigravity", *NEW_AGENTS])
+
+
 @click.group("agents")
 def agents_group() -> None:
     """Agent-specific configuration."""
 
 
 @agents_group.command("render")
-@click.argument("agent", type=click.Choice(["antigravity"]))
+@click.argument("agent", type=_AGENT_CHOICE)
 def render_command(agent: str) -> None:
     """Print the deny rules and hook for AGENT. Prints only; installs nothing."""
-    root = manifest_mod.find_root(Path.cwd())
-    if root is None:
-        raise click.ClickException("no protected files found; run `vaultshield protect` first")
-    try:
-        manifest = manifest_mod.load(root)
-    except ManifestError as exc:
-        raise click.ClickException(str(exc))
-    if manifest is None or not manifest.all_paths():
-        raise click.ClickException("no protected files found; run `vaultshield protect` first")
-    click.echo(antigravity.render(root, manifest))
+    root, manifest = _require_project()
+    module = antigravity if agent == "antigravity" else NEW_AGENTS[agent]
+    click.echo(module.render(root, manifest))
 
 
 def _require_project() -> tuple[Path, Manifest]:
@@ -215,13 +215,57 @@ _home_option = click.option(
 )
 
 
+def _install_new(module, home: Path) -> None:
+    """Install the backstops for one of the Day 3 agents (claude-code, kiro, codex)."""
+    root, manifest = _require_project()
+    try:
+        actions = agentinstall.install(module.install_edits(home, root, manifest))
+    except agentinstall.InstallError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"{module.AGENT_LABEL} backstops for {root} ({len(manifest.all_paths())} files, exact absolute paths)")
+    for note in module.INSTALL_NOTES:
+        click.echo(note)
+    for action in actions:
+        if action.status == "skipped":
+            click.echo(f"  {action.label}: skipped, {action.detail}")
+            continue
+        extra = f" ({action.detail})" if action.detail else ""
+        click.echo(f"  {action.label} {_shown(action.path, home)}: {action.status}{extra}")
+    if all(a.status == "skipped" for a in actions):
+        raise click.ClickException(f"nothing was installed: {module.AGENT_LABEL} is not set up under this home")
+    click.echo(f"Check it with: vaultshield agents doctor {module.AGENT}")
+
+
+def _uninstall_new(module, home: Path) -> None:
+    try:
+        actions = agentinstall.uninstall(module.uninstall_edits(home))
+    except agentinstall.InstallError as exc:
+        raise click.ClickException(str(exc))
+    for action in actions:
+        detail = f" ({action.detail})" if action.detail else ""
+        click.echo(f"  {action.label} {_shown(action.path, home)}: {action.status}{detail}")
+    if all(a.status == "nothing" for a in actions):
+        click.echo("Nothing to uninstall.")
+
+
+def _emit_hook(output) -> None:
+    if output.stdout:
+        click.echo(output.stdout)
+    if output.stderr:
+        click.echo(output.stderr, err=True)
+    click.get_current_context().exit(output.exit_code)
+
+
 @agents_group.command("install")
-@click.argument("agent", type=click.Choice(["antigravity"]))
+@click.argument("agent", type=_AGENT_CHOICE)
 @_home_option
 def install_command(agent: str, home: Path | None) -> None:
     """Install deny rules and the hook for AGENT. Merge-only; `uninstall` undoes it."""
-    root, manifest = _require_project()
     home = _home_or_default(home)
+    if agent != "antigravity":
+        _install_new(NEW_AGENTS[agent], home)
+        return
+    root, manifest = _require_project()
     try:
         actions = agent_install.install(home, root, manifest)
     except agent_install.InstallError as exc:
@@ -242,11 +286,14 @@ def install_command(agent: str, home: Path | None) -> None:
 
 
 @agents_group.command("uninstall")
-@click.argument("agent", type=click.Choice(["antigravity"]))
+@click.argument("agent", type=_AGENT_CHOICE)
 @_home_option
 def uninstall_command(agent: str, home: Path | None) -> None:
     """Put every file `install` touched back exactly as it was."""
     home = _home_or_default(home)
+    if agent != "antigravity":
+        _uninstall_new(NEW_AGENTS[agent], home)
+        return
     try:
         actions = agent_install.uninstall(home)
     except agent_install.InstallError as exc:
@@ -312,6 +359,12 @@ def hook_group() -> None:
 def hook_antigravity_command() -> None:
     """Antigravity PreToolUse hook: reads the tool call on stdin, prints a decision."""
     click.echo(antigravity.handle_hook(sys.stdin.read()))
+
+
+@hook_group.command("claude-code")
+def hook_claude_code_command() -> None:
+    """Claude Code PreToolUse hook: reads the tool call on stdin, decides, exits 2 to block."""
+    _emit_hook(claude_code.handle_hook(sys.stdin.read()))
 
 
 @click.command("unprotect")

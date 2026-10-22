@@ -315,3 +315,55 @@ def set_member(text: str, parent_path: list[str], key: str, value: object) -> st
     member_indent = gap.rsplit("\n", 1)[-1]
     unit = member_indent[len(base) :] if member_indent.startswith(base) and member_indent != base else _unit(text)
     return text[: existing.value.start] + _dump(value, gap, unit) + text[existing.value.end :]
+
+
+# --- appending objects to an array (used by the Claude Code and Codex hooks) --
+
+
+def _json_values(text: str, array: _Node) -> list[object]:
+    return [json.loads(text[item.start : item.end]) for item in array.items]
+
+
+def _append_values(text: str, array: _Node, values: list[object]) -> str:
+    """Append each JSON value in `values` to `array`, skipping any that is
+    already there (compared by parsed value). Mirrors `_append_items`, but the
+    values may be objects, so each is laid out with `_dump`."""
+    present = _json_values(text, array)
+    new: list[object] = []
+    for value in values:
+        if value not in present and value not in new:
+            new.append(value)
+    if not new:
+        return text
+    unit = _unit(text)
+    if array.items:
+        last = array.items[-1]
+        gap = _gap_before(text, last.start)
+        added = "".join("," + gap + _dump(value, gap, unit) for value in new)
+        return text[: last.end] + added + text[last.end :]
+    # an empty array
+    if "\n" not in text:
+        return text[: array.start] + json.dumps(new, ensure_ascii=False, separators=(",", ":")) + text[array.end :]
+    nl, base = _newline(text), _line_indent(text, array.start)
+    gap = nl + base + unit
+    body = ("," + gap).join(_dump(value, gap, unit) for value in new)
+    return text[: array.start] + "[" + gap + body + nl + base + "]" + text[array.end :]
+
+
+def add_object_to_array(text: str, path: list[str], value: object) -> str:
+    """Appends `value` (any JSON value, typically an object) to the array at
+    `path`, unless an equal value is already there. Creates the array, and any
+    object on the way to it, if they are missing. An empty `text` gives a new
+    document."""
+    if not text.strip():
+        return _fresh(path, [value])
+    root = _parse(text)
+    node, depth = _locate(root, path)
+    if depth == len(path):
+        if node.kind != "array":
+            raise JsonEditError(f"{'.'.join(path)} exists but is not a list")
+        return _append_values(text, node, [value])
+    nested: object = [value]
+    for key in reversed(path[depth + 1 :]):
+        nested = {key: nested}
+    return _insert_member(text, node, path[depth], nested)
