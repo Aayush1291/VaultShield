@@ -7,11 +7,13 @@ printed."""
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import click
 
 from vaultshield.protect import execute
+from vaultshield.protect.agents import antigravity
 from vaultshield.protect import manifest as manifest_mod
 from vaultshield.protect import protector
 from vaultshield.protect.discovery import KIND_ENV, KIND_SECRET, discover
@@ -131,6 +133,38 @@ def exec_command(directory: Path, command: tuple[str, ...]) -> None:
     click.get_current_context().exit(code)
 
 
+@click.group("agents")
+def agents_group() -> None:
+    """Agent-specific configuration."""
+
+
+@agents_group.command("render")
+@click.argument("agent", type=click.Choice(["antigravity"]))
+def render_command(agent: str) -> None:
+    """Print the deny rules and hook for AGENT. Prints only; installs nothing."""
+    root = manifest_mod.find_root(Path.cwd())
+    if root is None:
+        raise click.ClickException("no protected files found; run `vaultshield protect` first")
+    try:
+        manifest = manifest_mod.load(root)
+    except ManifestError as exc:
+        raise click.ClickException(str(exc))
+    if manifest is None or not manifest.all_paths():
+        raise click.ClickException("no protected files found; run `vaultshield protect` first")
+    click.echo(antigravity.render(root, manifest))
+
+
+@click.group("hook")
+def hook_group() -> None:
+    """Hooks that an agent calls. Not for typing by hand."""
+
+
+@hook_group.command("antigravity")
+def hook_antigravity_command() -> None:
+    """Antigravity PreToolUse hook: reads the tool call on stdin, prints a decision."""
+    click.echo(antigravity.handle_hook(sys.stdin.read()))
+
+
 @click.command("unprotect")
 def unprotect_command() -> None:
     """Put the real values back into this project's files and forget them in the Keychain."""
@@ -159,3 +193,5 @@ def register_protect_commands(group: click.Group) -> None:
     group.add_command(protect_command)
     group.add_command(unprotect_command)
     group.add_command(exec_command)
+    group.add_command(agents_group)
+    group.add_command(hook_group)
