@@ -29,6 +29,13 @@ def fake_keyring(monkeypatch):
 
 
 @pytest.fixture
+def no_real_model_key(monkeypatch):
+    """A developer's shell may have a real GEMINI_API_KEY exported. No Orchestrate
+    test may see it: remove it before anything runs."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+
+@pytest.fixture
 def protect_project(tmp_path, monkeypatch, fake_keyring):
     """A fresh, empty project directory for the Protect tests.
 

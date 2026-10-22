@@ -1722,6 +1722,11 @@ from vaultshield.protect.commands import register_protect_commands  # noqa: E402
 
 register_protect_commands(cli)
 
+# VaultShield Orchestrate: its commands live in vaultshield/orchestrate/ and attach here.
+from vaultshield.orchestrate.commands import register_orchestrate_commands  # noqa: E402
+
+register_orchestrate_commands(cli)
+
 
 if __name__ == "__main__":
     cli()
