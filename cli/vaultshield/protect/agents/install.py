@@ -8,6 +8,11 @@ is first changed, a copy is kept next to it:
     <file>.vaultshield.bak      the original bytes
     <file>.vaultshield.absent   marker: the file did not exist (uninstall removes it)
 
+`uninstall` puts each file back exactly from that copy and removes the copy. If
+the file changed after the install (Antigravity rewrites config.json whenever you
+approve a command), the version from just before is first kept as
+`<file>.vaultshield.before-uninstall`, so restoring never destroys it for good.
+
 Nothing here reads or writes outside `home`. Callers pass the home directory, and
 the tests always pass a temporary one.
 """
@@ -18,6 +23,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +41,7 @@ APP_DENY_PATH = ["userSettings", "globalPermissionGrants", "deny"]
 
 BACKUP_SUFFIX = ".vaultshield.bak"
 ABSENT_SUFFIX = ".vaultshield.absent"
+SAVED_SUFFIX = ".vaultshield.before-uninstall"
 
 KIND_CLI, KIND_APP, KIND_HOOK = "cli", "app", "hook"
 
@@ -222,4 +229,69 @@ def install(home: Path, root: Path, manifest: Manifest) -> list[Action]:
             if clean
             else "writing failed and some files could not be put back; the .vaultshield.bak copies next to them hold the originals"
         ) from None
+    return actions
+
+
+# --- uninstall ---------------------------------------------------------------
+
+
+def _changed_since_install(target: Target, current: bytes, original: str) -> bool:
+    """Whether `current` holds anything beyond what `install` put into
+    `original` (the text before the first install, "" if the file did not exist)."""
+    try:
+        text = current.decode("utf-8")
+        if target.kind == KIND_HOOK:
+            entry = json.loads(text).get(antigravity.HOOK_NAME)
+            if entry is None:
+                return True
+            return text != jsonedit.set_member(original, [], antigravity.HOOK_NAME, entry)
+        before = set(existing_rules(original, target.kind))
+        ours = [r for r in existing_rules(text, target.kind) if r not in before]
+        return text != jsonedit.add_to_string_array(original, _deny_path(target.kind), ours)
+    except (ValueError, AttributeError, jsonedit.JsonEditError):
+        return True
+
+
+def _keep_before_uninstall(path: Path, current: bytes) -> Path:
+    saved = path.with_name(path.name + SAVED_SUFFIX)
+    number = 1
+    while saved.exists():
+        saved = path.with_name(f"{path.name}{SAVED_SUFFIX}.{number}")
+        number += 1
+    saved.write_bytes(current)
+    return saved
+
+
+def uninstall(home: Path) -> list[Action]:
+    """Puts every touched file back exactly as it was before the first install,
+    then removes the copies."""
+    actions: list[Action] = []
+    for target in targets(home):
+        backup, marker = backup_path(target.path), absent_marker(target.path)
+        if not backup.is_file() and not marker.is_file():
+            actions.append(Action(target, "nothing", "no VaultShield install found"))
+            continue
+
+        original_bytes = backup.read_bytes() if backup.is_file() else b""
+        note = ""
+        if target.path.is_file():
+            current = target.path.read_bytes()
+            try:
+                original_text = original_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                original_text = ""
+            if _changed_since_install(target, current, original_text):
+                saved = _keep_before_uninstall(target.path, current)
+                note = f"it had changed since the install; that version is kept as {saved.name}"
+
+        if backup.is_file():
+            atomic_write_bytes(target.path, original_bytes, mode=stat.S_IMODE(backup.stat().st_mode))
+            if target.path.read_bytes() != original_bytes:
+                raise InstallError(f"{target.path.name} did not read back correctly; the copy was kept")
+            backup.unlink()
+            actions.append(Action(target, "restored", note))
+        else:
+            target.path.unlink(missing_ok=True)
+            marker.unlink()
+            actions.append(Action(target, "removed", note or "it did not exist before the install"))
     return actions

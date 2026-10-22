@@ -400,3 +400,192 @@ def test_install_never_prints_or_stores_a_secret_value(project, fake_home):
     )
     for secret in (KEY_VALUE, DB_VALUE, "fake-token-9999"):
         assert secret not in blob
+
+
+# --- uninstall (step 2) --------------------------------------------------------
+
+
+def uninstall(home, *extra):
+    return run("agents", "uninstall", "antigravity", "--home", str(home["home"]), *extra)
+
+
+def leftovers(home):
+    folders = {home["cli"].parent, home["app"].parent}
+    return sorted(p.name for f in folders for p in f.glob("*.vaultshield.*"))
+
+
+def test_uninstall_restores_every_file_byte_for_byte_and_removes_the_copies(project, fake_home):
+    originals = fakes.snapshot(fake_home)
+    install(fake_home)
+    assert fakes.snapshot(fake_home) != originals
+
+    result = uninstall(fake_home)
+
+    assert result.exit_code == 0, result.output
+    assert fakes.snapshot(fake_home) == originals
+    assert leftovers(fake_home) == []
+    assert result.output.count("restored") == 3
+
+
+def test_uninstall_removes_files_that_install_created(project, tmp_path):
+    home = fakes.make_home(tmp_path, cli=False, hooks=False)
+    originals = fakes.snapshot(home)
+    install(home)
+    assert home["cli"].exists() and home["hooks"].exists()
+
+    result = uninstall(home)
+
+    assert result.exit_code == 0, result.output
+    assert not home["cli"].exists() and not home["hooks"].exists()
+    assert fakes.snapshot(home) == originals
+    assert leftovers(home) == []
+    assert "removed (it did not exist before the install)" in result.output
+
+
+def test_uninstall_twice_has_nothing_left_to_do(project, fake_home):
+    originals = fakes.snapshot(fake_home)
+    install(fake_home)
+    uninstall(fake_home)
+
+    result = uninstall(fake_home)
+
+    assert result.exit_code == 0
+    assert "Nothing to uninstall." in result.output
+    assert fakes.snapshot(fake_home) == originals
+
+
+def test_uninstall_without_an_install_changes_nothing(project, fake_home):
+    originals = fakes.snapshot(fake_home)
+
+    result = uninstall(fake_home)
+
+    assert result.exit_code == 0
+    assert "Nothing to uninstall." in result.output
+    assert fakes.snapshot(fake_home) == originals
+
+
+def test_uninstall_undoes_several_installs_back_to_the_very_first_state(project, fake_home):
+    originals = fakes.snapshot(fake_home)
+    install(fake_home)
+    (project / ".env.production").write_text("PROD_KEY=fake-prod-key-1234\n")
+    run("protect")
+    install(fake_home)
+
+    uninstall(fake_home)
+
+    assert fakes.snapshot(fake_home) == originals
+    assert leftovers(fake_home) == []
+
+
+def test_normally_no_extra_copy_is_made(project, fake_home):
+    install(fake_home)
+    (project / ".env.production").write_text("PROD_KEY=fake-prod-key-1234\n")
+    run("protect")
+    install(fake_home)
+
+    result = uninstall(fake_home)
+
+    assert "before-uninstall" not in result.output
+    assert leftovers(fake_home) == []
+
+
+def test_a_file_that_changed_since_install_is_restored_but_its_latest_version_is_kept(project, fake_home):
+    originals = fakes.snapshot(fake_home)
+    install(fake_home)
+    # Antigravity adds a grant after the user approves a command.
+    config = json.loads(fake_home["app"].read_text())
+    config["userSettings"]["globalPermissionGrants"]["allow"].append("command(echo approved-later)")
+    changed = fakes.dump(config)
+    fake_home["app"].write_text(changed)
+
+    result = uninstall(fake_home)
+
+    assert result.exit_code == 0, result.output
+    assert fake_home["app"].read_bytes() == originals["app"]  # restored as specified
+    kept = fake_home["app"].with_name("config.json.vaultshield.before-uninstall")
+    assert kept.read_text() == changed  # ...and nothing is lost for good
+    assert "it had changed since the install; that version is kept as config.json.vaultshield.before-uninstall" in result.output
+    # the files that did not change get no extra copy
+    assert not fake_home["cli"].with_name("settings.json.vaultshield.before-uninstall").exists()
+    assert not fake_home["hooks"].with_name("hooks.json.vaultshield.before-uninstall").exists()
+
+
+def test_extra_copies_are_never_overwritten(project, fake_home):
+    for round_number in (1, 2):
+        install(fake_home)
+        config = json.loads(fake_home["app"].read_text())
+        config["userSettings"]["globalPermissionGrants"]["allow"].append(f"command(echo round-{round_number})")
+        fake_home["app"].write_text(fakes.dump(config))
+        uninstall(fake_home)
+
+    kept = sorted(p.name for p in fake_home["app"].parent.glob("config.json.vaultshield.before-uninstall*"))
+    assert kept == ["config.json.vaultshield.before-uninstall", "config.json.vaultshield.before-uninstall.1"]
+    assert "round-1" in fake_home["app"].with_name(kept[0]).read_text()
+
+
+def test_a_file_the_user_deleted_after_install_comes_back(project, fake_home):
+    originals = fakes.snapshot(fake_home)
+    install(fake_home)
+    fake_home["app"].unlink()
+
+    uninstall(fake_home)
+
+    assert fakes.snapshot(fake_home) == originals
+
+
+def test_the_restored_file_has_the_permissions_of_the_original(project, fake_home):
+    fake_home["app"].chmod(0o600)
+    install(fake_home)
+    fake_home["app"].chmod(0o644)  # something loosened it in between
+
+    uninstall(fake_home)
+
+    assert stat.S_IMODE(fake_home["app"].stat().st_mode) == 0o600
+
+
+def test_a_restore_that_does_not_read_back_correctly_keeps_the_copy(project, fake_home, monkeypatch):
+    originals = fakes.snapshot(fake_home)
+    install(fake_home)
+    real_write = agent_install.atomic_write_bytes
+
+    def corrupting(path, data, mode=None):
+        real_write(path, data + b" ", mode)
+
+    monkeypatch.setattr(agent_install, "atomic_write_bytes", corrupting)
+    result = uninstall(fake_home)
+    monkeypatch.setattr(agent_install, "atomic_write_bytes", real_write)
+
+    assert result.exit_code == 1
+    assert "did not read back correctly" in result.output
+    assert fake_home["cli"].with_name("settings.json.vaultshield.bak").read_bytes() == originals["cli"]
+
+
+def test_uninstall_touches_nothing_outside_the_given_home(project, fake_home, tmp_path):
+    install(fake_home)
+    other_home = tmp_path / "home"
+    before = sorted(p.name for p in other_home.iterdir())
+
+    uninstall(fake_home)
+
+    assert sorted(p.name for p in other_home.iterdir()) == before
+
+
+def test_without_home_uninstall_uses_the_home_directory_of_the_process(project, tmp_path, monkeypatch):
+    home = fakes.make_home(tmp_path)
+    originals = fakes.snapshot(home)
+    monkeypatch.setenv("HOME", str(home["home"]))
+    run("agents", "install", "antigravity")
+
+    result = run("agents", "uninstall", "antigravity")
+
+    assert result.exit_code == 0, result.output
+    assert fakes.snapshot(home) == originals
+
+
+def test_uninstall_does_not_need_a_project(protect_project, fake_home):
+    # uninstall is about the home directory only
+    assert uninstall(fake_home).exit_code == 0
+
+
+def test_uninstall_only_knows_antigravity(fake_home):
+    assert run("agents", "uninstall", "claude", "--home", str(fake_home["home"])).exit_code == 2

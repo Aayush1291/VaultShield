@@ -240,6 +240,26 @@ def install_command(agent: str, home: Path | None) -> None:
     click.echo("Check it with: vaultshield agents doctor antigravity")
 
 
+@agents_group.command("uninstall")
+@click.argument("agent", type=click.Choice(["antigravity"]))
+@_home_option
+def uninstall_command(agent: str, home: Path | None) -> None:
+    """Put every file `install` touched back exactly as it was."""
+    home = _home_or_default(home)
+    try:
+        actions = agent_install.uninstall(home)
+    except agent_install.InstallError as exc:
+        raise click.ClickException(str(exc))
+
+    click.echo("Quit Antigravity before uninstalling: a running App can overwrite config.json.")
+    for action in actions:
+        where = _shown(action.target.path, home)
+        detail = f" ({action.detail})" if action.detail else ""
+        click.echo(f"  {action.target.label} {where}: {action.status}{detail}")
+    if all(a.status == "nothing" for a in actions):
+        click.echo("Nothing to uninstall.")
+
+
 @click.group("hook")
 def hook_group() -> None:
     """Hooks that an agent calls. Not for typing by hand."""
