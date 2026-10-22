@@ -6,10 +6,12 @@ printed."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import click
 
+from vaultshield.protect import execute
 from vaultshield.protect import manifest as manifest_mod
 from vaultshield.protect import protector
 from vaultshield.protect.discovery import KIND_ENV, KIND_SECRET, discover
@@ -101,6 +103,34 @@ def protect_command(dry_run: bool) -> None:
         click.get_current_context().exit(1)
 
 
+@click.command("exec", context_settings={"ignore_unknown_options": True})
+@click.option(
+    "--dir",
+    "directory",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Load the protected files in this directory, and run the command there.",
+)
+@click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
+def exec_command(directory: Path, command: tuple[str, ...]) -> None:
+    """Run COMMAND with the real values in its environment.
+
+    Put `--` before the command:  vaultshield exec -- npm start
+
+    The command's output is scrubbed: the values show as ***. A variable that
+    is already set in your environment is not overridden.
+    """
+    try:
+        prepared = execute.prepare(directory, dict(os.environ))
+    except (execute.ExecError, ManifestError) as exc:
+        raise click.ClickException(str(exc))
+    for missing in prepared.missing:
+        click.echo(f"vaultshield exec: no value in the Keychain for {missing}; it is not set", err=True)
+    code = execute.run_command(prepared, list(command))
+    click.get_current_context().exit(code)
+
+
 @click.command("unprotect")
 def unprotect_command() -> None:
     """Put the real values back into this project's files and forget them in the Keychain."""
@@ -128,3 +158,4 @@ def register_protect_commands(group: click.Group) -> None:
     """Adds every Protect command to `group`."""
     group.add_command(protect_command)
     group.add_command(unprotect_command)
+    group.add_command(exec_command)
