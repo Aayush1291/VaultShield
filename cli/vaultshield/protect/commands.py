@@ -133,6 +133,33 @@ def exec_command(directory: Path, command: tuple[str, ...]) -> None:
     click.get_current_context().exit(code)
 
 
+@click.command("status")
+def status_command() -> None:
+    """Show the protected files and their variable NAMES. Never shows values."""
+    root = manifest_mod.find_root(Path.cwd())
+    try:
+        manifest = manifest_mod.load(root) if root is not None else None
+    except ManifestError as exc:
+        raise click.ClickException(f"{manifest_mod.MANIFEST_DIR}/{manifest_mod.MANIFEST_NAME}: {exc}")
+    if manifest is None or not manifest.all_paths():
+        click.echo("Nothing is protected here.")
+        return
+
+    click.echo(f"Project: {root}")
+    if manifest.protected:
+        click.echo("Protected (values are in the Keychain):")
+        for path, names in sorted(manifest.protected.items()):
+            click.echo(f"  {path}")
+            for name in names:
+                click.echo(f"    {name}")
+    else:
+        click.echo("Protected: none")
+    if manifest.detected:
+        click.echo("Detected, not moved (their real contents are still on disk):")
+        for path in sorted(manifest.detected):
+            click.echo(f"  {path}")
+
+
 @click.group("agents")
 def agents_group() -> None:
     """Agent-specific configuration."""
@@ -193,5 +220,6 @@ def register_protect_commands(group: click.Group) -> None:
     group.add_command(protect_command)
     group.add_command(unprotect_command)
     group.add_command(exec_command)
+    group.add_command(status_command)
     group.add_command(agents_group)
     group.add_command(hook_group)
