@@ -21,6 +21,9 @@ dependencies = [
     # `browser_capture.py` reports its absence as a `ScreenshotError` naming
     # that command rather than failing obscurely.
     "playwright>=1.44,<2.0",
+    # VaultShield Protect: secret values live in the macOS Keychain, reached
+    # through keyring (vaultshield/protect/vault.py).
+    "keyring>=25.0,<26.0",
 ]
 
 [project.optional-dependencies]

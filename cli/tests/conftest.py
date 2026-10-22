@@ -15,13 +15,27 @@ settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "default"))
 
 
 @pytest.fixture
-def protect_project(tmp_path, monkeypatch):
+def fake_keyring(monkeypatch):
+    """Replaces the Keychain with an in-memory fake, so no Protect test can
+    read or write the real macOS Keychain. Returns the fake."""
+    import keyring
+    import keyring.core
+
+    from vaultshield.protect.vault import InMemoryKeyring
+
+    fake = InMemoryKeyring()
+    monkeypatch.setattr(keyring.core, "_keyring_backend", fake)
+    return fake
+
+
+@pytest.fixture
+def protect_project(tmp_path, monkeypatch, fake_keyring):
     """A fresh, empty project directory for the Protect tests.
 
-    HOME points at an empty temporary directory and the working directory is
-    the project, so nothing a Protect test does can reach the real home
-    directory, `~/.gemini`, or a real project. Values used in these tests are
-    fake.
+    HOME points at an empty temporary directory, the Keychain is the in-memory
+    fake, and the working directory is the project, so nothing a Protect test
+    does can reach the real home directory, `~/.gemini`, the real Keychain, or
+    a real project. Values used in these tests are fake.
     """
     home = tmp_path / "home"
     home.mkdir()
