@@ -24,6 +24,7 @@ from vaultshield.protect import PLACEHOLDER, manifest as manifest_mod
 from vaultshield.protect.discovery import KIND_ENV, KIND_SECRET, discover
 from vaultshield.protect.envfile import (
     Line,
+    decode_record,
     encode_record,
     is_empty,
     join_lines,
@@ -36,6 +37,7 @@ from vaultshield.protect.vault import Vault, VaultError
 STATUS_PROTECTED = "protected"
 STATUS_UNCHANGED = "unchanged"
 STATUS_REFUSED = "refused"
+STATUS_RESTORED = "restored"
 
 
 @dataclass
@@ -211,3 +213,87 @@ def protect_project(root: Path) -> ProtectReport:
     if changed and worth_saving:
         manifest_mod.save(root, manifest)
     return report
+
+
+def _restore_env_file(root: Path, rel: str, names: list[str], vault: Vault, manifest: Manifest) -> FileResult:
+    """Puts one protected file back exactly as it was. Changes nothing unless
+    every variable can be restored."""
+
+    def refuse(reason: str) -> FileResult:
+        return FileResult(rel, STATUS_REFUSED, reason=f"{reason}; the file was not changed")
+
+    path = root / rel
+    try:
+        original = path.read_bytes()
+        lines = split_lines(original.decode("utf-8"))
+    except FileNotFoundError:
+        return refuse("the file no longer exists")
+    except (OSError, UnicodeDecodeError):
+        return refuse("the file could not be read as UTF-8")
+
+    # Every stored original must be found, and every placeholder must be there.
+    raws: dict[str, list[str]] = {}
+    for name in names:
+        try:
+            stored = vault.fetch(rel, name)
+        except VaultError as exc:
+            return refuse(str(exc))
+        if stored is None:
+            return refuse(f"the Keychain item for {name} is missing")
+        try:
+            raws[name] = decode_record(stored)
+        except ValueError:
+            return refuse(f"the Keychain item for {name} is unreadable")
+
+    slots: dict[str, list[int]] = {name: [] for name in names}
+    for index, line in enumerate(lines):
+        if line.key in slots and line.value == PLACEHOLDER:
+            slots[line.key].append(index)
+    for name in names:
+        if len(slots[name]) != len(raws[name]):
+            return refuse(
+                f"{name} has {len(slots[name])} placeholder line(s) in the file "
+                f"but {len(raws[name])} original line(s) were stored"
+            )
+
+    restored = list(lines)
+    for name in names:
+        for position, index in enumerate(slots[name]):
+            restored[index] = Line(raws[name][position], lines[index].ending)
+    new_bytes = join_lines(restored).encode("utf-8")
+
+    try:
+        atomic_write_bytes(path, new_bytes)
+        written = path.read_bytes()
+    except OSError:
+        return refuse("writing the file failed")
+    if written != new_bytes:
+        try:
+            atomic_write_bytes(path, original)
+        except OSError:
+            pass
+        return refuse("the restored file did not read back correctly")
+
+    # Only now forget the values: the file is back and verified.
+    after = copy.deepcopy(manifest)
+    del after.protected[rel]
+    manifest_mod.save(root, after)
+    del manifest.protected[rel]
+    for name in names:
+        try:
+            vault.remove(rel, name)
+        except VaultError:
+            pass  # an orphaned item is harmless; the file is already restored
+    return FileResult(rel, STATUS_RESTORED, names=names)
+
+
+def unprotect_project(root: Path) -> list[FileResult]:
+    """Restores every protected file under `root`."""
+    manifest = manifest_mod.load(root)
+    if manifest is None or not manifest.protected:
+        return []
+    vault = Vault(manifest.project_id)
+    return [
+        _restore_env_file(root, rel, list(names), vault, manifest)
+        for rel, names in sorted(manifest.protected.items())
+    ]

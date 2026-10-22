@@ -101,6 +101,30 @@ def protect_command(dry_run: bool) -> None:
         click.get_current_context().exit(1)
 
 
+@click.command("unprotect")
+def unprotect_command() -> None:
+    """Put the real values back into this project's files and forget them in the Keychain."""
+    root = Path.cwd()
+    try:
+        results = protector.unprotect_project(root)
+    except ManifestError as exc:
+        raise click.ClickException(f"{manifest_mod.MANIFEST_DIR}/{manifest_mod.MANIFEST_NAME}: {exc}")
+
+    if not results:
+        click.echo("Nothing is protected here.")
+        return
+    refused = False
+    for result in results:
+        if result.status == protector.STATUS_RESTORED:
+            click.echo(f"Restored {result.path}: {', '.join(result.names)}")
+        else:
+            refused = True
+            click.echo(f"Refused {result.path}: {result.reason}.")
+    if refused:
+        click.get_current_context().exit(1)
+
+
 def register_protect_commands(group: click.Group) -> None:
     """Adds every Protect command to `group`."""
     group.add_command(protect_command)
+    group.add_command(unprotect_command)
