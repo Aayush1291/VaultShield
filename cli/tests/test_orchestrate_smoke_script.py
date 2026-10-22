@@ -6,16 +6,18 @@ files), and the real `vaultshield ask` flow is run on it over a MOCKED service, 
 same stdin the script uses and the same conditions the script then checks.
 """
 
+import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import httpx
 import pytest
 from click.testing import CliRunner
 
-from orchestrate_fakes import FAKE_KEY, FakeGemini
+from orchestrate_fakes import FAKE_KEY, FakeGemini, gemini_2_5_flash_reply
 from vaultshield.cli import cli
 from vaultshield.orchestrate import provider as prov
 
@@ -155,3 +157,127 @@ def test_the_fixture_is_not_protected_so_the_keychain_is_not_written(protect_pro
     run_like_the_script(folder, monkeypatch, FakeGemini().questions)
     assert fake_keyring.items == before
     assert not (folder / ".vaultshield" / "protect.json").exists()
+
+
+# --- the failure explanation: which of the outcomes happened, never any content -------------
+
+
+def classify(ledger: Path) -> str:
+    """Run ONLY the script's classify function (it reads one local file and prints)."""
+    block = script_text().split("# --- classify begins ---")[1].split("# --- classify ends ---")[0]
+    result = subprocess.run(
+        ["bash", "-c", block + '\nclassify_ledger "$1"', "bash", str(ledger)],
+        env={**os.environ, "PY": sys.executable},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    return result.stdout
+
+
+def write_ledger(path: Path, *outcomes, **extra) -> Path:
+    lines = [
+        json.dumps(
+            {"timestamp": "2026-10-22T10:00:00+00:00", "provider": "gemini", "model": "gemini-2.5-flash",
+             "request_bytes": 100, "outcome": outcome, **extra}
+        )
+        for outcome in outcomes
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+@pytest.mark.parametrize(
+    "outcome, said",
+    [
+        ("http_400", "call 1 of 1: api rejected (HTTP 400)"),
+        ("http_403", "call 1 of 1: api rejected (HTTP 403)"),
+        ("http_429", "call 1 of 1: api rejected (HTTP 429)"),
+        ("http_503", "call 1 of 1: api rejected (HTTP 503)"),
+        ("invalid_reply", "call 1 of 1: reply not understood"),
+        ("timeout", "call 1 of 1: timeout"),
+        ("network_error", "call 1 of 1: could not reach the service"),
+    ],
+)
+def test_each_way_a_call_can_end_is_named(tmp_path, outcome, said):
+    assert classify(write_ledger(tmp_path / "l.jsonl", outcome)) == said + "\n"
+
+
+def test_only_the_failed_calls_are_listed_with_their_place(tmp_path):
+    ledger = write_ledger(tmp_path / "l.jsonl", "invalid_reply", "invalid_reply", "ok", "timeout")
+    assert classify(ledger).splitlines() == [
+        "call 1 of 4: reply not understood",
+        "call 2 of 4: reply not understood",
+        "call 4 of 4: timeout",
+    ]
+
+
+def test_when_every_call_ended_ok_it_says_so(tmp_path):
+    assert classify(write_ledger(tmp_path / "l.jsonl", "ok", "ok")) == "all 2 recorded calls ended ok\n"
+
+
+def test_a_missing_or_empty_call_log_is_reported_as_no_calls(tmp_path):
+    assert classify(tmp_path / "missing.jsonl") == "no calls were recorded\n"
+    (tmp_path / "empty.jsonl").write_text("")
+    assert classify(tmp_path / "empty.jsonl") == "no calls were recorded\n"
+
+
+def test_lines_that_are_not_call_records_are_skipped(tmp_path):
+    path = tmp_path / "l.jsonl"
+    path.write_text('not json\n[1, 2]\n{"outcome": 7}\n{"no": "outcome"}\n{"outcome": "timeout"}\n')
+    assert classify(path) == "call 1 of 1: timeout\n"
+
+
+def test_nothing_from_the_log_but_the_outcome_class_is_ever_printed(tmp_path):
+    secret = "LEDGER-CONTENT-MARKER"
+    path = write_ledger(tmp_path / "l.jsonl", "invalid_reply", text=secret, error=secret, input=secret)
+    with path.open("a") as handle:
+        handle.write(json.dumps({"outcome": f"http_400 {secret}"}) + "\n")
+        handle.write(json.dumps({"outcome": f"surprise; echo {secret}"}) + "\n")
+    out = classify(path)
+    assert secret not in out and "echo" not in out
+    assert out.splitlines() == [
+        "call 1 of 3: reply not understood",
+        "call 2 of 3: unknown outcome",
+        "call 3 of 3: unknown outcome",
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer, said",
+    [
+        (lambda: httpx.Response(400, json={"error": {"code": "invalid_argument", "message": "SERVICE-FREE-TEXT"}}),
+         "api rejected (HTTP 400)"),
+        (lambda: httpx.Response(200, json=gemini_2_5_flash_reply("I cannot do that. SERVICE-FREE-TEXT")),
+         "reply not understood"),
+        (lambda: httpx.ReadTimeout("SERVICE-FREE-TEXT"), "timeout"),
+        (lambda: httpx.ConnectError("SERVICE-FREE-TEXT"), "could not reach the service"),
+    ],
+    ids=["400", "invalid reply", "timeout", "unreachable"],
+)
+def test_the_names_match_what_the_real_tool_writes_for_a_failing_service(
+    protect_project, tmp_path, monkeypatch, answer, said
+):
+    folder = build_fixture(tmp_path)
+    run_like_the_script(folder, monkeypatch, answer())
+
+    ledger = folder / ".vaultshield" / "orchestrator.jsonl"
+    out = classify(ledger)
+
+    total = len(ledger.read_text().splitlines())
+    assert out.splitlines()[0] == f"call 1 of {total}: {said}"
+    assert "SERVICE-FREE-TEXT" not in out
+
+
+def test_the_explanation_is_printed_only_when_a_check_failed_and_before_the_result():
+    text = script_text()
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    call = 'classify_ledger "$DIR/.vaultshield/orchestrator.jsonl"'
+    assert code.count(call) == 1
+    assert code.index("== 5. checks ==") < code.index(call) < code.index("RESULT:")
+    guard = code[: code.index(call)].rsplit("\nif ", 1)[1]
+    assert guard.startswith('[ "$FAILED" != 0 ]')
+    for label in ("api rejected", "reply not understood", "timeout"):
+        assert label in text

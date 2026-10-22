@@ -23,9 +23,10 @@
 # it removes at the end (KEEP=1 keeps it). The macOS Keychain may ask once to let Python read
 # your Gemini key; that is expected.
 #
-# If a check fails, the message after it says what to look at. The call log line shows the
-# HTTP status; a 400 on the first call usually means the live API did not accept something in
-# the request format, which is exactly what this script exists to find out.
+# If a check fails, the message after it says what to look at, and the script then says how
+# each model call ended: "api rejected" (an HTTP error; a 400 on the first call usually means
+# the live API did not accept something in the request format), "reply not understood" (the
+# service answered but the tool could not use the reply) or "timeout". No content is printed.
 #
 # Needs: a Python with VaultShield's dependencies (default: cli/.venv/bin/python;
 #        override with  VS_PYTHON=/path/to/python spike/orchestrator_smoke.sh)
@@ -54,6 +55,56 @@ if [ ! -x "$PY" ] || ! "$PY" -c 'import keyring, httpx, click, yaml' >/dev/null 
   say "Set VS_PYTHON to one that has them, for example:  VS_PYTHON=/path/to/python $0"
   exit 1
 fi
+
+# --- classify begins ---
+# Reads the call log ($1) and prints one line per failed call, saying how it failed, or one line
+# saying nothing failed. It prints the outcome class only: never the model's text, the request
+# or anything else found in the log.
+classify_ledger() {
+  "$PY" - "$1" <<'PYEOF'
+import json
+import re
+import sys
+
+LABELS = {
+    "invalid_reply": "reply not understood",
+    "timeout": "timeout",
+    "network_error": "could not reach the service",
+}
+
+
+def label(outcome):
+    if outcome in LABELS:
+        return LABELS[outcome]
+    if re.fullmatch(r"http_[0-9]{3}", outcome):
+        return "api rejected (HTTP " + outcome[5:] + ")"
+    return "unknown outcome"
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+except OSError:
+    lines = []
+outcomes = []
+for line in lines:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    outcome = record.get("outcome") if isinstance(record, dict) else None
+    if isinstance(outcome, str):
+        outcomes.append(outcome)
+failed = [(number, outcome) for number, outcome in enumerate(outcomes, 1) if outcome != "ok"]
+if not outcomes:
+    print("no calls were recorded")
+elif not failed:
+    print("all %d recorded calls ended ok" % len(outcomes))
+for number, outcome in failed:
+    print("call %d of %d: %s" % (number, len(outcomes), label(outcome)))
+PYEOF
+}
+# --- classify ends ---
 
 say "== 1. key =="
 if ! vs config show-key gemini; then
@@ -138,14 +189,14 @@ if [ "$STATUS" -ne 0 ]; then
   fail "vaultshield ask did not finish. Read the lines above."
 fi
 if grep -q "the model was unavailable" "$DIR/questions.txt"; then
-  fail "the questions are the generic fallback, so the model call failed. The reason is in the 'Note:' line above."
+  fail "the questions are the generic fallback, so the model call failed. How it failed is listed below the checks."
 else
   grep -q '\[1/' "$DIR/questions.txt" && pass "the questions came from the model" || fail "no questions were shown"
 fi
 if grep -q '^## Suggested approach' "$DIR/prompt.txt" 2>/dev/null; then
   pass "a suggested approach was produced (second call)"
 else
-  fail "no suggested approach. See the call log below, and the 'left out' note above."
+  fail "no suggested approach. How each call ended is listed below the checks."
 fi
 LEAK=0
 for secret in "$FAKE_ENV_KEY" "$FAKE_ENV_DB" "$FAKE_ENV_PLAIN" "$FAKE_README_TOKEN"; do
@@ -153,6 +204,16 @@ for secret in "$FAKE_ENV_KEY" "$FAKE_ENV_DB" "$FAKE_ENV_PLAIN" "$FAKE_README_TOK
 done
 [ "$LEAK" = 0 ] && pass "none of the invented secrets is in the prompt or the questions" || fail "an invented secret reached the prompt. Tell Kiro."
 grep -q 'demo-shop\|Express' "$DIR/prompt.txt" 2>/dev/null && pass "the project context is in the prompt (README, package names)" || fail "the project context is missing from the prompt"
+
+if [ "$FAILED" != 0 ]; then
+  say ""
+  say "  How each model call ended (from the call log; no content is shown):"
+  classify_ledger "$DIR/.vaultshield/orchestrator.jsonl" | sed 's/^/    /'
+  say "    api rejected = the service answered with an error status (400 request, 403 key, 429 quota)"
+  say "    reply not understood = the service answered, but not with a JSON object the tool could use"
+  say "    timeout = no answer within 30 seconds"
+  say "    could not reach the service = no connection was made (network, DNS, proxy)"
+fi
 
 say ""
 say "== 6. the call log (.vaultshield/orchestrator.jsonl; no content, only how each call ended) =="
