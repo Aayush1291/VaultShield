@@ -14,7 +14,7 @@ import click
 
 from vaultshield.protect import execute
 from vaultshield.protect.agents import antigravity
-from vaultshield.protect.agents import agentinstall, claude_code, codex, kiro
+from vaultshield.protect.agents import agentdoctor, agentinstall, claude_code, codex, kiro
 from vaultshield.protect.agents import doctor as agent_doctor
 from vaultshield.protect.agents import install as agent_install
 from vaultshield.protect import manifest as manifest_mod
@@ -308,14 +308,8 @@ def uninstall_command(agent: str, home: Path | None) -> None:
         click.echo("Nothing to uninstall.")
 
 
-@agents_group.command("doctor")
-@click.argument("agent", type=click.Choice(["antigravity"]))
-def doctor_command(agent: str) -> None:
-    """Show, for the CLI and the App, whether placeholders, deny rules and the hook are active."""
-    root, manifest = _require_project()
-    home = Path.home()
+def _doctor_antigravity(root: Path, manifest: Manifest, home: Path) -> bool:
     report = agent_doctor.diagnose(home, root, manifest)
-
     click.echo(f"Antigravity protection for {root}")
     for surface in report.surfaces:
         click.echo("")
@@ -346,7 +340,44 @@ def doctor_command(agent: str) -> None:
         )
     click.echo("")
     click.echo("Everything is active." if report.ok else "Not everything is active.")
-    if not report.ok:
+    return report.ok
+
+
+def _doctor_new(module, root: Path, manifest: Manifest, home: Path) -> bool:
+    report = module.diagnose(home, root, manifest)
+    click.echo(f"{module.AGENT_LABEL} protection for {root}")
+    for line in agentdoctor.render(report):
+        click.echo(line)
+    click.echo("")
+    click.echo("Everything is active." if report.ok else "Not everything is active.")
+    return report.ok
+
+
+def _doctor_one(agent: str, root: Path, manifest: Manifest, home: Path) -> bool:
+    if agent == "antigravity":
+        return _doctor_antigravity(root, manifest, home)
+    return _doctor_new(NEW_AGENTS[agent], root, manifest, home)
+
+
+@agents_group.command("doctor")
+@click.argument("agent", type=click.Choice(["antigravity", *NEW_AGENTS, "all"]))
+def doctor_command(agent: str) -> None:
+    """Show, per surface, whether placeholders, deny rules and the hook are active. AGENT may be `all`."""
+    root, manifest = _require_project()
+    home = Path.home()
+    if agent != "all":
+        if not _doctor_one(agent, root, manifest, home):
+            click.get_current_context().exit(1)
+        return
+    all_ok = True
+    for index, name in enumerate(["antigravity", *NEW_AGENTS]):
+        if index:
+            click.echo("")
+            click.echo("-" * 70)
+        all_ok = _doctor_one(name, root, manifest, home) and all_ok
+    click.echo("")
+    click.echo("All agents: everything is active." if all_ok else "All agents: at least one layer is not active.")
+    if not all_ok:
         click.get_current_context().exit(1)
 
 
