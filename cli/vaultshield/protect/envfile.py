@@ -87,7 +87,7 @@ def encode_record(raw_lines: list[str]) -> str:
 
 def decode_record(text: str) -> list[str]:
     data = json.loads(text)
-    raw = data["raw"] if isinstance(data, dict) and data.get("v") == 1 else None
+    raw = data.get("raw") if isinstance(data, dict) and data.get("v") == 1 else None
     if not isinstance(raw, list) or not raw or not all(isinstance(r, str) for r in raw):
         raise ValueError("unrecognised Keychain record")
     return raw
