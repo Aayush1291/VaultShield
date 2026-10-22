@@ -1717,5 +1717,11 @@ def sandbox_smoke(repo_url: str, base_image: str, env_file: Path) -> None:
         click.echo(f"Sandbox torn down for run '{run_id}'.")
 
 
+# VaultShield Protect: its commands live in vaultshield/protect/ and attach here.
+from vaultshield.protect.commands import register_protect_commands  # noqa: E402
+
+register_protect_commands(cli)
+
+
 if __name__ == "__main__":
     cli()
