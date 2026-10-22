@@ -26,6 +26,31 @@ def completed(payload) -> dict:
     return {"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": json.dumps(payload)}]}]}
 
 
+def gemini_2_5_flash_reply(text: str) -> dict:
+    """The reply shape captured live from gemini-2.5-flash (October 2026), with the
+    text replaced by `text`: a thought step holding only a signature, then one
+    model_output step. The service sends no top-level `id`. The signature is a short
+    invented stand-in for the long opaque one."""
+    return {
+        "status": "completed",
+        "usage": {"total_tokens": 850, "total_input_tokens": 180, "total_output_tokens": 141, "total_thought_tokens": 529},
+        "created": "2026-10-22T19:52:47Z",
+        "updated": "2026-10-22T19:52:47Z",
+        "service_tier": "standard",
+        "steps": [
+            {"signature": "c2lnbmF0dXJlLXN0YW5kLWlu", "type": "thought"},
+            {"type": "model_output", "content": [{"type": "text", "text": text}]},
+        ],
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+    }
+
+
+def fenced(payload, tag: str = "json") -> str:
+    """JSON wrapped the way gemini-2.5-flash wrapped it: a markdown code fence."""
+    return f"```{tag}\n{json.dumps(payload, indent=2)}\n```"
+
+
 class FakeGemini:
     """A mocked service. It tells the two calls apart by the JSON shape the system
     prompt asks for, and keeps every request it receives."""

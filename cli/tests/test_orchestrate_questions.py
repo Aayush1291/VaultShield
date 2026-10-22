@@ -17,6 +17,8 @@ from vaultshield.orchestrate.questions import (
     validate_questions,
 )
 
+from orchestrate_fakes import fenced, gemini_2_5_flash_reply
+
 PLAIN_VALUE = "plainvalue-without-any-known-shape"
 FAKE_KEY = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKE12345wxyz"
 
@@ -259,6 +261,45 @@ def test_questions_through_the_gemini_provider_and_a_mocked_service():
     assert body["store"] is False and body["system_instruction"] == SYSTEM_PROMPT
     assert "Add a login page" in body["input"]
     assert FAKE_KEY not in json.dumps(body)
+
+
+def _served(*texts):
+    """A mocked service answering, in the shape gemini-2.5-flash replied in, with one text per request."""
+    seen, queue = [], list(texts)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        text = queue.pop(0) if len(queue) > 1 else queue[0]
+        return httpx.Response(200, json=gemini_2_5_flash_reply(text))
+
+    return GeminiProvider(FAKE_KEY, "gemini-2.5-flash", transport=httpx.MockTransport(handler)), seen
+
+
+def test_questions_in_a_code_fence_are_used_after_one_call():
+    provider, seen = _served(fenced(good(3)))
+
+    result = ask(provider)
+
+    assert not result.used_fallback and len(seen) == 1
+    assert [x.id for x in result.questions] == ["q1", "q2", "q3"]
+
+
+def test_questions_in_a_code_fence_with_a_sentence_around_them_are_used():
+    provider, seen = _served(f"Here are some questions:\n{fenced(good(4))}\nLet me know.")
+
+    result = ask(provider)
+
+    assert not result.used_fallback and len(result.questions) == 4 and len(seen) == 1
+
+
+def test_fenced_questions_are_still_checked_strictly():
+    # the live gemini-2.5-flash ignored the schema's minItems and sent two questions:
+    # the fence is accepted, the content is not, so the existing retry and fallback apply
+    provider, seen = _served(fenced(good(2)))
+
+    result = ask(provider)
+
+    assert result.used_fallback and len(seen) == 2
 
 
 def test_an_unreachable_service_gives_the_fallback_through_the_real_provider():

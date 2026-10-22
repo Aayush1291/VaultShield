@@ -17,6 +17,8 @@ from vaultshield.orchestrate.provider import (
     ProviderError,
 )
 
+from orchestrate_fakes import fenced, gemini_2_5_flash_reply
+
 FAKE_KEY = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKE12345wxyz"
 SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
 
@@ -176,6 +178,154 @@ def test_a_200_that_is_not_json_at_all_is_an_invalid_reply():
     server = Server(httpx.Response(200, text="<html>oops</html>"))
     with pytest.raises(InvalidReplyError):
         server.provider().generate_json("s", "u")
+
+
+# --- the reply shapes seen live ---------------------------------------------------
+# gemini-2.5-flash answered with the documented structure, but its text block held
+# the JSON inside a markdown code fence. These pin that and its neighbours.
+
+PAYLOAD = {"questions": [{"id": "auth", "text": "Which login method?", "why": "It changes the screens."}]}
+DUMPED = json.dumps(PAYLOAD, indent=2)
+
+
+def parse(body):
+    return Server(body).provider().generate_json("s", "u")
+
+
+def test_the_reply_captured_live_from_gemini_2_5_flash_parses():
+    # signature-only thought step, then the JSON in a ```json fence, no top-level id
+    assert parse(gemini_2_5_flash_reply(fenced(PAYLOAD))) == PAYLOAD
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(f"```json\n{DUMPED}\n```", id="json-fence"),
+        pytest.param(f"```\n{DUMPED}\n```", id="bare-fence"),
+        pytest.param(f"```JSON\n{DUMPED}\n```", id="upper-case-tag"),
+        pytest.param(f"```json\n{DUMPED}```", id="no-newline-before-closing-fence"),
+        pytest.param(f"```json\r\n{DUMPED}\r\n```", id="windows-line-ends"),
+        pytest.param(f"  \n```json\n{DUMPED}\n```\n\n", id="blank-space-around-the-fence"),
+        pytest.param(f"```json\n{json.dumps(PAYLOAD)}\n```", id="one-line-json"),
+        pytest.param(DUMPED, id="bare-object-as-before"),
+        pytest.param(f"Here are the questions:\n```json\n{DUMPED}\n```", id="sentence-before-the-fence"),
+        pytest.param(f"```json\n{DUMPED}\n```\nHope this helps.", id="sentence-after-the-fence"),
+        pytest.param(f"Here you go: {DUMPED} Anything else?", id="object-inside-prose-without-a-fence"),
+        pytest.param(f"Use {{name}} as the key.\n```json\n{DUMPED}\n```", id="braces-in-the-prose-before"),
+        pytest.param(f"Use {{name}} as the key.\n{DUMPED}", id="braces-in-the-prose-before-no-fence"),
+    ],
+)
+def test_the_object_is_found_in_the_text_the_way_the_models_wrap_it(text):
+    assert parse(gemini_2_5_flash_reply(text)) == PAYLOAD
+
+
+def test_a_fence_inside_a_string_value_does_not_end_the_object():
+    payload = {"a": "text with ``` three backticks and a { brace"}
+    assert parse(gemini_2_5_flash_reply(fenced(payload))) == payload
+    assert parse(gemini_2_5_flash_reply(json.dumps(payload))) == payload
+
+
+def test_the_outer_object_wins_over_the_objects_inside_it():
+    payload = {"outer": {"inner": {"deep": 1}}, "list": [{"k": "v"}]}
+    assert parse(gemini_2_5_flash_reply(fenced(payload))) == payload
+
+
+def test_a_fence_split_over_several_text_blocks_is_joined():
+    body = {
+        "status": "completed",
+        "steps": [
+            {"type": "thought", "signature": "c2ln"},
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": '```json\n{"a": '}, {"type": "text", "text": '"x"}\n```'}],
+            },
+        ],
+    }
+    assert parse(body) == {"a": "x"}
+
+
+def test_a_sentence_in_one_text_block_and_the_json_in_the_next():
+    body = {
+        "status": "completed",
+        "steps": [
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": "Sure, here it is:\n"}, {"type": "text", "text": fenced({"a": "x"})}],
+            }
+        ],
+    }
+    assert parse(body) == {"a": "x"}
+
+
+def _output(text):
+    return {"type": "model_output", "content": [{"type": "text", "text": text}]}
+
+
+def test_with_several_output_steps_the_last_one_with_an_object_wins():
+    body = {"status": "completed", "steps": [_output(fenced({"a": "first"})), _output(fenced({"a": "last"}))]}
+    assert parse(body) == {"a": "last"}
+
+
+def test_an_earlier_output_step_is_used_when_the_last_has_no_object():
+    body = {"status": "completed", "steps": [_output(fenced({"a": "first"})), _output("All done.")]}
+    assert parse(body) == {"a": "first"}
+
+
+def test_text_in_a_thought_step_is_never_taken_as_the_answer():
+    thought = {"type": "thought", "summary": [{"type": "text", "text": '{"a": "from the thoughts"}'}]}
+    body = {"status": "completed", "steps": [thought, {"type": "thought", "signature": "c2ln"}]}
+    with pytest.raises(InvalidReplyError, match="no text"):
+        parse(body)
+    assert parse(gemini_2_5_flash_reply('{"a": "from the answer"}')) == {"a": "from the answer"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("```json\n[1, 2, 3]\n```", id="fenced-array"),
+        pytest.param('```json\n"just a string"\n```', id="fenced-string"),
+        pytest.param("```json\n42\n```", id="fenced-number"),
+        pytest.param('[{"a": "x"}]', id="array-of-objects"),
+        pytest.param('```json\n[{"a": "x"}]\n```', id="fenced-array-of-objects"),
+    ],
+)
+def test_json_that_is_not_an_object_is_still_refused(text):
+    with pytest.raises(InvalidReplyError, match="not a JSON object"):
+        parse(gemini_2_5_flash_reply(text))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("I could not do that.", id="prose-only"),
+        pytest.param("```json\n```", id="empty-fence"),
+        pytest.param("```json\nnot json at all\n```", id="fenced-prose"),
+        pytest.param('```json\n{"a": "x"', id="cut-off-object-and-fence"),
+        pytest.param('{"a": "x", "b": ', id="cut-off-object"),
+        pytest.param("Use {name} and {other} as keys.", id="braces-that-are-not-json"),
+        pytest.param("{" * 100_000, id="very-deep-nesting"),
+    ],
+)
+def test_text_with_no_json_object_in_it_is_an_invalid_reply(text):
+    with pytest.raises(InvalidReplyError, match="not valid JSON"):
+        parse(gemini_2_5_flash_reply(text))
+
+
+def test_an_invalid_reply_message_never_repeats_what_the_model_said():
+    said = "MODEL-SAID-THIS-PRIVATE-TEXT"
+    for text in (said, f"```json\n[\"{said}\"]\n```", f'{{"a": "{said}"'):
+        with pytest.raises(InvalidReplyError) as info:
+            parse(gemini_2_5_flash_reply(text))
+        assert said not in str(info.value)
+
+
+def test_a_reply_with_no_object_is_recorded_as_invalid_reply_and_not_retried():
+    records = []
+    server = Server(gemini_2_5_flash_reply("I could not do that."))
+    with pytest.raises(InvalidReplyError):
+        server.provider(recorder=records.append).generate_json("s", "u")
+    assert len(server.requests) == 1
+    assert [r.outcome for r in records] == ["invalid_reply"]
 
 
 # --- errors and retries -------------------------------------------------------
