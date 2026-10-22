@@ -264,22 +264,61 @@ class GeminiProvider:
             status = data.get("status") if isinstance(data, dict) else None
             shown = status if isinstance(status, str) and _ERROR_CODE.match(status) else "unknown"
             raise InvalidReplyError(f"The model did not finish its answer (status: {shown}).")
-        parts: list[str] = []
+        # One text per `model_output` step (its text blocks joined). Thought steps and
+        # every other step type carry no answer and are skipped.
+        texts: list[str] = []
         for step in data.get("steps") or []:
             if isinstance(step, dict) and step.get("type") == "model_output":
-                for piece in step.get("content") or []:
-                    if isinstance(piece, dict) and piece.get("type") == "text" and isinstance(piece.get("text"), str):
-                        parts.append(piece["text"])
-        text = "".join(parts).strip()
-        if not text:
+                parts = [
+                    piece["text"]
+                    for piece in step.get("content") or []
+                    if isinstance(piece, dict) and piece.get("type") == "text" and isinstance(piece.get("text"), str)
+                ]
+                text = "".join(parts).strip()
+                if text:
+                    texts.append(text)
+        if not texts:
             raise InvalidReplyError("The model answered with no text.")
+        failure: InvalidReplyError | None = None
+        for text in reversed(texts):  # the last output step is the final answer
+            try:
+                return _json_object(text)
+            except InvalidReplyError as exc:
+                failure = failure or exc
+        raise failure or InvalidReplyError("The model's answer is not valid JSON.")  # pragma: no cover
+
+
+_FENCE = re.compile(r"\A```[\w+-]*[ \t]*\r?\n(.*?)\r?\n?[ \t]*```\Z", re.DOTALL)
+
+
+def _json_object(text: str) -> dict:
+    """The JSON object in a model's text. gemini-2.5-flash wraps it in a markdown
+    code fence (verified live), and any model may add a sentence around it, so a
+    bare object, a fenced object and an object inside prose are all accepted. A
+    reply whose JSON is not an object (an array, a string, a number) is refused."""
+    fenced = _FENCE.match(text)
+    candidate = fenced.group(1).strip() if fenced else text
+    try:
+        whole = json.loads(candidate)
+    except (ValueError, RecursionError):
+        pass
+    else:
+        if isinstance(whole, dict):
+            return whole
+        raise InvalidReplyError("The model's answer is not a JSON object.")
+    # Not JSON as a whole: look for the first object that decodes, skipping any
+    # braces in surrounding prose.
+    decoder = json.JSONDecoder()
+    start = candidate.find("{")
+    while start != -1:
         try:
-            answer = json.loads(text)
-        except ValueError:
-            raise InvalidReplyError("The model's answer is not valid JSON.") from None
-        if not isinstance(answer, dict):
-            raise InvalidReplyError("The model's answer is not a JSON object.")
-        return answer
+            found, _ = decoder.raw_decode(candidate, start)
+        except (ValueError, RecursionError):
+            found = None
+        if isinstance(found, dict):
+            return found
+        start = candidate.find("{", start + 1)
+    raise InvalidReplyError("The model's answer is not valid JSON.")
 
 
 def _http_message(response: httpx.Response) -> str:
