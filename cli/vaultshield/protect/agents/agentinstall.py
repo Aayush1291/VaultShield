@@ -94,6 +94,7 @@ def install(edits: list[Edit]) -> list[Action]:
     try:
         for edit, old, new in plan:
             made: list[Path] = []
+            edit.path.parent.mkdir(parents=True, exist_ok=True)  # the file's folder may be a level below create_in
             backup, marker = backup_path(edit.path), absent_marker(edit.path)
             if not backup.exists() and not marker.exists():
                 if old is not None:

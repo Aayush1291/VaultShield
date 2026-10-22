@@ -14,7 +14,7 @@ import click
 
 from vaultshield.protect import execute
 from vaultshield.protect.agents import antigravity
-from vaultshield.protect.agents import agentinstall, claude_code
+from vaultshield.protect.agents import agentinstall, claude_code, codex, kiro
 from vaultshield.protect.agents import doctor as agent_doctor
 from vaultshield.protect.agents import install as agent_install
 from vaultshield.protect import manifest as manifest_mod
@@ -165,7 +165,7 @@ def status_command() -> None:
 
 # The agents added on Day 3, keyed by name. Antigravity keeps its own install/doctor
 # modules (install.py, doctor.py); these three share agentinstall.py and agentdoctor.py.
-NEW_AGENTS = {claude_code.AGENT: claude_code}
+NEW_AGENTS = {claude_code.AGENT: claude_code, kiro.AGENT: kiro, codex.AGENT: codex}
 _AGENT_CHOICE = click.Choice(["antigravity", *NEW_AGENTS])
 
 
@@ -365,6 +365,18 @@ def hook_antigravity_command() -> None:
 def hook_claude_code_command() -> None:
     """Claude Code PreToolUse hook: reads the tool call on stdin, decides, exits 2 to block."""
     _emit_hook(claude_code.handle_hook(sys.stdin.read()))
+
+
+@hook_group.command("kiro")
+def hook_kiro_command() -> None:
+    """Kiro PreToolUse hook: reads the tool call on stdin, decides, exits 2 to block."""
+    _emit_hook(kiro.handle_hook(sys.stdin.read()))
+
+
+@hook_group.command("codex")
+def hook_codex_command() -> None:
+    """Codex PreToolUse hook: reads the tool call on stdin, decides, exits 2 to block."""
+    _emit_hook(codex.handle_hook(sys.stdin.read()))
 
 
 @click.command("unprotect")
