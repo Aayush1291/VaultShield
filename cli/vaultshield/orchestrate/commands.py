@@ -234,7 +234,7 @@ def _begin() -> _Run:
     root = manifest_mod.find_root(Path.cwd()) or Path.cwd().resolve()
     try:
         key = keys.require_key(keys.PROVIDER_GEMINI)
-        provider = model_provider.build_provider(key=key)
+        provider = model_provider.build_provider(key=key, recorder=model_provider.ledger_recorder(root))
         secrets = project_context.load_secrets(root, always=[key.value])
     except (keys.ModelKeyError, model_provider.ConfigFileError, ContextError) as exc:
         raise click.ClickException(str(exc)) from None

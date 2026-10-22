@@ -26,6 +26,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
@@ -44,6 +45,7 @@ BACKOFF_S = 1.0
 MAX_RETRY_AFTER_S = 10.0
 PROVIDER_NAME = "gemini"
 
+LEDGER_NAME = "orchestrator.jsonl"
 USER_CONFIG = Path(".vaultshield") / "config.yml"
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
@@ -96,6 +98,38 @@ class CallRecord:
     model: str
     request_bytes: int
     outcome: str
+
+
+# --- the call ledger ------------------------------------------------------------
+
+
+def ledger_path(root: Path) -> Path:
+    return root / ".vaultshield" / LEDGER_NAME
+
+
+def ledger_recorder(root: Path) -> Callable[[CallRecord], None]:
+    """A recorder that appends one JSON line per model call to
+    `<root>/.vaultshield/orchestrator.jsonl`: when, which provider and model, how many
+    bytes were sent, and how it ended. Never what was sent or received. Best effort: a
+    ledger that cannot be written never stops the work."""
+    path = ledger_path(root)
+
+    def record(call: CallRecord) -> None:
+        line = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "provider": call.provider,
+            "model": call.model,
+            "request_bytes": call.request_bytes,
+            "outcome": call.outcome,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    return record
 
 
 # --- the user's config file ---------------------------------------------------
