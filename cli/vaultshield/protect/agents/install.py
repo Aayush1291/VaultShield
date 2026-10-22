@@ -20,7 +20,6 @@ the tests always pass a temporary one.
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import shutil
 import stat
@@ -97,14 +96,15 @@ def absent_marker(path: Path) -> Path:
 
 
 def vaultshield_command() -> list[str]:
-    """How to run VaultShield from a hook: an absolute path, because the process
-    that runs hooks may not have the shell's PATH."""
-    sibling = Path(sys.executable).parent / "vaultshield"
-    if sibling.is_file() and os.access(sibling, os.X_OK):
-        return [str(sibling)]
-    found = shutil.which("vaultshield")
-    if found:
-        return [os.path.abspath(found)]
+    """How to run VaultShield from a hook: the interpreter that is running this
+    install, by absolute path, with `-m vaultshield.cli`.
+
+    Not the bare name `vaultshield`: the process that runs hooks may not have the
+    shell's PATH. And not the `vaultshield` console script: its first line names an
+    interpreter of its own, which can differ from this one (in the development
+    venv it does, and that one lacks `keyring`). A hook that cannot start gives
+    Antigravity no decision, and Antigravity then denies every command. The
+    interpreter running this install has, by definition, everything it needs."""
     return [sys.executable, "-m", "vaultshield.cli"]
 
 

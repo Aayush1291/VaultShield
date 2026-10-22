@@ -291,6 +291,11 @@ def handle_hook(stdin_text: str) -> str:
         call = payload["toolCall"]
         if call.get("name") != "run_command":
             return json.dumps({"decision": "allow"})
+        # Only the command text decides. Other arguments of the call, such as
+        # BypassSandbox (the agent asking to run outside the sandbox), SafeToAutoRun
+        # or WaitMsBeforeAsync, are never consulted: a command that names a protected
+        # file is denied however the call asks to be run. (Measured: after its file
+        # read was blocked, the agent ran `cat` with BypassSandbox:true.)
         command = call["args"]["CommandLine"]
         if not isinstance(command, str):
             raise TypeError("CommandLine is not text")
