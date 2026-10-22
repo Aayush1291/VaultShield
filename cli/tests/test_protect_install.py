@@ -589,3 +589,277 @@ def test_uninstall_does_not_need_a_project(protect_project, fake_home):
 
 def test_uninstall_only_knows_antigravity(fake_home):
     assert run("agents", "uninstall", "claude", "--home", str(fake_home["home"])).exit_code == 2
+
+
+# --- doctor (step 3) -----------------------------------------------------------
+
+from vaultshield.protect.agents import doctor as agent_doctor  # noqa: E402
+
+
+@pytest.fixture
+def at_home(fake_home, monkeypatch):
+    """`doctor` has no --home option: it reads the home directory of the process.
+    Point that at the fake home."""
+    monkeypatch.setenv("HOME", str(fake_home["home"]))
+    return fake_home
+
+
+def doctor():
+    return run("agents", "doctor", "antigravity")
+
+
+def line(output: str, *needles: str) -> str:
+    for text in output.splitlines():
+        if all(n in text for n in needles):
+            return text
+    raise AssertionError(f"no line with {needles} in:\n{output}")
+
+
+def test_before_install_the_placeholders_hold_but_nothing_else_is_active(project, at_home):
+    result = doctor()
+
+    assert result.exit_code == 1
+    assert "ACTIVE" in line(result.output, "placeholders")
+    assert "NOT ACTIVE" not in line(result.output, "placeholders")
+    assert "NOT ACTIVE" in line(result.output, "deny rules")
+    assert "NOT ACTIVE" in line(result.output, "hook")
+    assert "Not everything is active." in result.output
+
+
+def test_after_install_everything_is_active_on_both_surfaces(project, at_home):
+    install(at_home)
+
+    result = doctor()
+
+    assert result.exit_code == 0, result.output
+    assert "Everything is active." in result.output
+    assert "CLI  ~/.gemini/antigravity-cli/settings.json" in result.output
+    assert "App  ~/.gemini/config/config.json" in result.output
+    assert result.output.count("exact-path rules present") == 2
+    assert "3 of 3 exact-path rules present" in result.output
+    assert "2 files, 3 variables hold vs_protected" in result.output
+    assert "~/.gemini/config/hooks.json" in result.output
+    assert "NOT ACTIVE" not in result.output
+
+
+def test_a_missing_rule_is_reported_as_partial(project, at_home):
+    install(at_home)
+    settings = json.loads(at_home["cli"].read_text())
+    settings["permissions"]["deny"].pop()
+    at_home["cli"].write_text(fakes.dump(settings))
+
+    result = doctor()
+
+    assert result.exit_code == 1
+    assert "PARTIAL" in line(result.output, "deny rules", "2 of 3")
+    assert "3 of 3" in result.output  # the App is still complete
+
+
+def test_after_unprotect_the_placeholders_are_not_active_and_no_value_is_shown(project, at_home):
+    install(at_home)
+    assert run("unprotect").exit_code == 0
+
+    result = doctor()
+
+    assert result.exit_code == 1
+    assert "NOT ACTIVE" in line(result.output, "placeholders")
+    assert "no file has been protected yet" in result.output
+    for secret in (KEY_VALUE, DB_VALUE, "fake-token-9999"):
+        assert secret not in result.output
+
+
+def test_a_real_value_typed_into_a_protected_file_is_noticed(project, at_home):
+    install(at_home)
+    (project / ".env").write_text("FAKE_KEY=typed-in-again-1234\nDB_URL=vs_protected\n")
+
+    result = doctor()
+
+    assert "real values on disk for .env: FAKE_KEY" in result.output
+    assert "typed-in-again-1234" not in result.output
+
+
+def test_detected_files_are_listed_as_not_covered_by_placeholders(project, at_home):
+    install(at_home)
+    result = doctor()
+    assert "certs/server.pem" in line(result.output, "Not covered by placeholders")
+
+
+def test_a_missing_file_and_a_broken_file_are_reported(project, tmp_path, monkeypatch):
+    home = fakes.make_home(tmp_path, app=False, settings_text="{broken")
+    monkeypatch.setenv("HOME", str(home["home"]))
+
+    result = doctor()
+
+    assert "file not found" in result.output
+    assert "file is not valid JSON" in result.output
+
+
+# --- the hook check ---
+
+
+def hooks_with(**groups):
+    return fakes.dump({"vaultshield-protect": {"PreToolUse": groups.get("pre", []), **groups.get("extra", {})}})
+
+
+def pre(matcher, command, **handler):
+    return [{"matcher": matcher, "hooks": [{"type": "command", "command": command, **handler}]}]
+
+
+def test_a_hook_in_the_project_counts_too(project, at_home):
+    at_home["hooks"].unlink()
+    (project / ".agents").mkdir()
+    (project / ".agents" / "hooks.json").write_text(hooks_with(pre=pre("run_command", agent_install.hook_command())))
+
+    result = doctor()
+
+    assert "ACTIVE" in line(result.output, "hook", ".agents/hooks.json (this project)")
+
+
+@pytest.mark.parametrize("matcher", ["run_command", "", "*", ".*", "run_command|view_file"])
+def test_matchers_that_cover_run_command_count(project, at_home, matcher):
+    at_home["hooks"].write_text(hooks_with(pre=pre(matcher, agent_install.hook_command())))
+    assert "NOT ACTIVE" not in line(doctor().output, "  hook")
+
+
+@pytest.mark.parametrize("matcher", ["view_file", "browser_.*", "run_command_x"])
+def test_matchers_that_do_not_cover_run_command_do_not_count(project, at_home, matcher):
+    at_home["hooks"].write_text(hooks_with(pre=pre(matcher, agent_install.hook_command())))
+    assert "NOT ACTIVE" in line(doctor().output, "  hook")
+
+
+def test_a_disabled_hook_does_not_count(project, at_home):
+    at_home["hooks"].write_text(
+        hooks_with(pre=pre("run_command", agent_install.hook_command()), extra={"enabled": False})
+    )
+    assert "NOT ACTIVE" in line(doctor().output, "  hook")
+
+
+def test_a_hook_that_points_at_a_program_that_is_gone_is_not_active(project, at_home):
+    at_home["hooks"].write_text(hooks_with(pre=pre("run_command", "/nowhere/at/all/vaultshield hook antigravity")))
+
+    result = doctor()
+
+    assert "NOT ACTIVE" in line(result.output, "  hook")
+    assert "no longer exists" in result.output
+
+
+def test_someone_elses_hook_is_not_ours(project, at_home):
+    at_home["hooks"].write_text(fakes.dump(fakes.hooks_object()))
+    assert "NOT ACTIVE" in line(doctor().output, "  hook")
+
+
+# --- credentials in the command grants ---
+
+
+def test_credential_looking_grants_are_flagged_by_position_and_count_only(project, tmp_path, monkeypatch):
+    allow = fakes.grants(extra_credentials=True)
+    flagged = [i for i, g in enumerate(allow) if g in fakes.CREDENTIAL_GRANTS]
+    assert len(flagged) == len(fakes.CREDENTIAL_GRANTS)
+    home = fakes.make_home(tmp_path, config_text=fakes.dump(fakes.config_object(allow=allow)))
+    monkeypatch.setenv("HOME", str(home["home"]))
+
+    result = doctor()
+
+    assert f"WARN: {len(flagged)} of {len(allow)} grants in ~/.gemini/config/config.json look like they contain credentials" in result.output
+    assert "Grant positions (0-based, in userSettings.globalPermissionGrants.allow): " + ", ".join(map(str, flagged)) in result.output
+    assert "The values are not shown." in result.output
+    for fragment in (
+        "fakepass-0000",
+        "fakeuser",
+        "fake-bearer-token",
+        "ghp_fake",
+        "AKIAFAKE",
+        "fake-api-key-value",
+        "sk-test-AAAA",
+        "PRIVATE KEY",
+        "mongodb",
+        "cluster.example",
+    ):
+        assert fragment not in result.output
+
+
+def test_no_warning_for_ordinary_grants(project, at_home):
+    install(at_home)
+    assert "WARN" not in doctor().output
+
+
+def test_the_warning_does_not_change_the_exit_code(project, tmp_path, monkeypatch):
+    home = fakes.make_home(tmp_path, config_text=fakes.dump(fakes.config_object(allow=fakes.grants(extra_credentials=True))))
+    monkeypatch.setenv("HOME", str(home["home"]))
+    install(home)
+
+    result = doctor()
+
+    assert "WARN" in result.output
+    assert result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "grant",
+    [
+        "command(psql postgres://admin:hunter2fake@db.example.invalid/x)",
+        "command(echo ghp_fakeFAKEfake0123456789abcdefABCDEF)",
+        "command(echo xoxb-1234567890-fakefake)",
+        "command(echo AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKE12345)",
+        "command(echo ya29.fake_token_value_0123456789)",
+        "command(echo eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.fakesignature123)",
+        "command(echo -----BEGIN OPENSSH PRIVATE KEY-----)",
+        "command(curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwx' x)",
+        "command(PASSWORD=fakepassword1 ./run)",
+        "command(export TOKEN=abcdefgh12345)",
+        "command(echo \"api_key: 'abcdefghij1234'\")",
+        "command(echo sk-test-AAAA1111BBBB2222)",
+    ],
+)
+def test_these_look_like_credentials(grant):
+    assert agent_doctor.looks_like_a_credential(grant)
+
+
+@pytest.mark.parametrize(
+    "grant",
+    [
+        "command(git status)",
+        "command(npm test)",
+        "command(export TOKEN=$(cat ~/.token))",
+        "command(curl https://example.com/path)",
+        "command(git clone https://github.com/org/repo.git)",
+        "command(ssh user@host)",
+        "command(echo sk-short)",
+        "command(TOKEN=abc ./run)",
+        "command(echo password)",
+        'command(python3 manage.py shell -c "from app import x")',
+        "command(npm config set registry https://registry.npmjs.org/)",
+    ],
+)
+def test_these_do_not_look_like_credentials(grant):
+    assert not agent_doctor.looks_like_a_credential(grant)
+
+
+def test_only_command_grants_are_checked(project, tmp_path, monkeypatch):
+    allow = ["read_file(/Users/fake/ghp_fakeFAKEfake0123456789abcdefABCDEF)", "write_file(/x/password=abcdefghijk)"]
+    home = fakes.make_home(tmp_path, config_text=fakes.dump(fakes.config_object(allow=allow)))
+    monkeypatch.setenv("HOME", str(home["home"]))
+    assert "WARN" not in doctor().output
+
+
+def test_doctor_changes_nothing(project, at_home):
+    install(at_home)
+    before = fakes.snapshot(at_home)
+    stamps = {k: p.stat().st_mtime_ns for k, p in at_home.items() if k != "home"}
+    project_before = {p: p.read_bytes() for p in project.rglob("*") if p.is_file()}
+
+    doctor()
+
+    assert fakes.snapshot(at_home) == before
+    assert {k: p.stat().st_mtime_ns for k, p in at_home.items() if k != "home"} == stamps
+    assert {p: p.read_bytes() for p in project.rglob("*") if p.is_file()} == project_before
+
+
+def test_doctor_needs_a_protected_project(protect_project):
+    result = doctor()
+    assert result.exit_code == 1
+    assert "run `vaultshield protect` first" in result.output
+
+
+def test_doctor_only_knows_antigravity(project):
+    assert run("agents", "doctor", "claude").exit_code == 2

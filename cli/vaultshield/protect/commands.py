@@ -14,6 +14,7 @@ import click
 
 from vaultshield.protect import execute
 from vaultshield.protect.agents import antigravity
+from vaultshield.protect.agents import doctor as agent_doctor
 from vaultshield.protect.agents import install as agent_install
 from vaultshield.protect import manifest as manifest_mod
 from vaultshield.protect import protector
@@ -258,6 +259,48 @@ def uninstall_command(agent: str, home: Path | None) -> None:
         click.echo(f"  {action.target.label} {where}: {action.status}{detail}")
     if all(a.status == "nothing" for a in actions):
         click.echo("Nothing to uninstall.")
+
+
+@agents_group.command("doctor")
+@click.argument("agent", type=click.Choice(["antigravity"]))
+def doctor_command(agent: str) -> None:
+    """Show, for the CLI and the App, whether placeholders, deny rules and the hook are active."""
+    root, manifest = _require_project()
+    home = Path.home()
+    report = agent_doctor.diagnose(home, root, manifest)
+
+    click.echo(f"Antigravity protection for {root}")
+    for surface in report.surfaces:
+        click.echo("")
+        click.echo(f"{surface.name}  {_shown(surface.path, home)}")
+        for label, check in (
+            ("placeholders", surface.placeholders),
+            ("deny rules", surface.deny),
+            ("hook", surface.hook),
+        ):
+            click.echo(f"  {label:<13} {check.state:<11} {check.detail}")
+    if report.not_covered:
+        click.echo("")
+        click.echo(
+            "Not covered by placeholders (detected, not moved; their real contents are still on disk): "
+            + ", ".join(report.not_covered)
+        )
+    if report.credential_grants and report.credential_grants[1]:
+        total, flagged = report.credential_grants
+        click.echo("")
+        click.echo(
+            f"WARN: {len(flagged)} of {total} grants in {_shown(home / agent_install.APP_CONFIG, home)} look like "
+            "they contain credentials, stored in plain text."
+        )
+        click.echo(
+            "      Grant positions (0-based, in userSettings.globalPermissionGrants.allow): "
+            + ", ".join(map(str, flagged))
+            + ". The values are not shown."
+        )
+    click.echo("")
+    click.echo("Everything is active." if report.ok else "Not everything is active.")
+    if not report.ok:
+        click.get_current_context().exit(1)
 
 
 @click.group("hook")
