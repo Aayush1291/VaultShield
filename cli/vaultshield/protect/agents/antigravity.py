@@ -70,13 +70,13 @@ def deny_rules(root: Path, manifest: Manifest) -> list[str]:
     return [f"read_file({base / rel})" for rel in manifest.all_paths()]
 
 
-def hook_config() -> dict:
+def hook_config(command: str = HOOK_COMMAND) -> dict:
     return {
         HOOK_NAME: {
             "PreToolUse": [
                 {
                     "matcher": "run_command",
-                    "hooks": [{"type": "command", "command": HOOK_COMMAND, "timeout": 10}],
+                    "hooks": [{"type": "command", "command": command, "timeout": 10}],
                 }
             ]
         }

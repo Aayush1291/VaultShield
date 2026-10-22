@@ -14,10 +14,11 @@ import click
 
 from vaultshield.protect import execute
 from vaultshield.protect.agents import antigravity
+from vaultshield.protect.agents import install as agent_install
 from vaultshield.protect import manifest as manifest_mod
 from vaultshield.protect import protector
 from vaultshield.protect.discovery import KIND_ENV, KIND_SECRET, discover
-from vaultshield.protect.manifest import ManifestError
+from vaultshield.protect.manifest import Manifest, ManifestError
 
 
 def _line_numbers(lines: list[int]) -> str:
@@ -179,6 +180,64 @@ def render_command(agent: str) -> None:
     if manifest is None or not manifest.all_paths():
         raise click.ClickException("no protected files found; run `vaultshield protect` first")
     click.echo(antigravity.render(root, manifest))
+
+
+def _require_project() -> tuple[Path, Manifest]:
+    """The project at or above the current folder, with its manifest."""
+    root = manifest_mod.find_root(Path.cwd())
+    try:
+        manifest = manifest_mod.load(root) if root is not None else None
+    except ManifestError as exc:
+        raise click.ClickException(f"{manifest_mod.MANIFEST_DIR}/{manifest_mod.MANIFEST_NAME}: {exc}")
+    if root is None or manifest is None or not manifest.all_paths():
+        raise click.ClickException("no protected files found; run `vaultshield protect` first")
+    return root, manifest
+
+
+def _home_or_default(home: Path | None) -> Path:
+    return Path(home).expanduser() if home is not None else Path.home()
+
+
+def _shown(path: Path, home: Path) -> str:
+    try:
+        return "~/" + path.relative_to(home).as_posix()
+    except ValueError:
+        return str(path)
+
+
+_home_option = click.option(
+    "--home",
+    "home",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Use this folder as the home directory. Default: your real home.",
+)
+
+
+@agents_group.command("install")
+@click.argument("agent", type=click.Choice(["antigravity"]))
+@_home_option
+def install_command(agent: str, home: Path | None) -> None:
+    """Install deny rules and the hook for AGENT. Merge-only; `uninstall` undoes it."""
+    root, manifest = _require_project()
+    home = _home_or_default(home)
+    try:
+        actions = agent_install.install(home, root, manifest)
+    except agent_install.InstallError as exc:
+        raise click.ClickException(str(exc))
+
+    click.echo(f"Antigravity backstops for {root} ({len(manifest.all_paths())} files, exact absolute paths)")
+    click.echo("Quit Antigravity before installing: a running App can overwrite config.json.")
+    for action in actions:
+        where = _shown(action.target.path, home)
+        if action.status == "skipped":
+            click.echo(f"  {action.target.label}: skipped, {action.detail}")
+            continue
+        extra = f" ({action.added} deny rule{'s' if action.added != 1 else ''} added)" if action.target.kind != agent_install.KIND_HOOK else ""
+        click.echo(f"  {action.target.label} {where}: {action.status}{extra}")
+    if all(a.status == "skipped" for a in actions):
+        raise click.ClickException("nothing was installed: Antigravity is not set up under this home")
+    click.echo("Check it with: vaultshield agents doctor antigravity")
 
 
 @click.group("hook")
