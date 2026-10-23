@@ -119,6 +119,27 @@ it('renders a failed Run with its own neutral badge rather than the unknown-stat
   expect(badge).not.toHaveClass('bg-slate-100');
 });
 
+it('renders a protect Run like any other row: its agent name and status, no new badge', async () => {
+  // `protect sync` uploads a Run with agent `protect`; the history list shows it
+  // exactly as today, with no special status.
+  const protectRun = {
+    id: 9,
+    run_id: 'run-20240509-pppp',
+    agent: 'protect',
+    status: 'awaiting_review',
+    created_at: '2024-05-09T09:00:00Z',
+  };
+  const { client } = clientReturning(runPage([protectRun]));
+
+  render(<RunHistoryView projectId={7} client={client} />);
+
+  const [row] = await screen.findAllByTestId(RUN_ROW_TESTID);
+  expect(row).toHaveTextContent('protect');
+  expect(row).toHaveTextContent('awaiting_review');
+  const badge = screen.getByTestId(RUN_STATUS_TESTID);
+  expect(badge).toHaveAttribute('data-status', 'awaiting_review');
+});
+
 it('renders an empty state when the Project has no Runs', async () => {
   const { client } = clientReturning(runPage([]));
 

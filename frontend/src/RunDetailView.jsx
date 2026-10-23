@@ -130,6 +130,17 @@ export const APPROVED_STATUS_COPY = 'approved — awaiting submission';
 /** Marks the `vaultshield submit <run-id>` command text for an approved Run. */
 export const SUBMIT_COMMAND_TESTID = 'submit-command';
 
+/** The agent name of a Run that is a protection log, not a sandbox run that a
+ * Reviewer approves or rejects. `protect sync` uploads these. */
+export const PROTECT_AGENT = 'protect';
+
+/** Marks the note shown in place of the decision controls for a protect-log Run. */
+export const PROTECT_NOTE_TESTID = 'protect-note';
+
+/** Shown in place of Approve/Reject for a protect-log Run: there is nothing to
+ * decide, only a record to read. */
+export const PROTECT_LOG_MESSAGE = 'Protection log: nothing to review';
+
 /**
  * The CLI command that submits a given Run, with the real run id interpolated.
  *
@@ -453,10 +464,29 @@ const DECISIONS = [
  * a decision is in flight, because there the affordance is real and the reason
  * it is briefly unavailable is temporary.
  *
- * @param {{ status?: string, runId?: string|null, pending?: string|null,
- *           error?: unknown, onDecide?: (decision: string) => void }} props
+ * ### A protect-log Run has nothing to decide
+ *
+ * A Run whose `agent` is `protect` is the protection log `vaultshield protect
+ * sync` uploads, not a sandbox run a Reviewer acts on. `complete_run` still
+ * leaves it in `awaiting_review`, which would otherwise show the buttons, so
+ * this case is handled before the status is read: the Approve and Reject buttons
+ * are left out entirely and a short note takes their place.
+ *
+ * @param {{ status?: string, agent?: string, runId?: string|null,
+ *           pending?: string|null, error?: unknown,
+ *           onDecide?: (decision: string) => void }} props
  */
-export function DecisionControls({ status, runId, pending = null, error = null, onDecide }) {
+export function DecisionControls({ status, agent, runId, pending = null, error = null, onDecide }) {
+  if (agent === PROTECT_AGENT) {
+    return (
+      <div className="mb-4">
+        <p data-testid={PROTECT_NOTE_TESTID} className="text-sm text-slate-500">
+          {PROTECT_LOG_MESSAGE}
+        </p>
+      </div>
+    );
+  }
+
   const decidable = status === DECIDABLE_STATUS;
   // Requirement 21.4's second half, and only for an approved Run: a `submitted`
   // Run already has its pull request, and running the command again on one would
@@ -872,6 +902,7 @@ export default function RunDetailView({ runId = null, client = api }) {
               long diff. */}
           <DecisionControls
             status={run.status}
+            agent={run.agent}
             runId={run.run_id ?? runId}
             pending={pendingDecision}
             error={decisionError}

@@ -25,6 +25,8 @@ import RunDetailView, {
   EMPTY_SECURITY_MESSAGE,
   EMPTY_TIMELINE_MESSAGE,
   NO_RUN_SELECTED_MESSAGE,
+  PROTECT_LOG_MESSAGE,
+  PROTECT_NOTE_TESTID,
   SCREENSHOT_TESTID,
   SECURITY_FINDING_TESTID,
   TIMELINE_EVENT_TESTID,
@@ -318,6 +320,40 @@ it('re-fetches when the Reviewer retries after a transport failure', async () =>
   await waitFor(() => expect(screen.getAllByTestId(DIFF_FILE_TESTID)).toHaveLength(2));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(calls).toHaveLength(2);
+});
+
+it('shows a protection-log note instead of Approve/Reject for a protect Run', () => {
+  // `protect sync` leaves the Run in `awaiting_review`, which for any other
+  // agent would show the buttons; a protect log is read, not decided.
+  render(<DecisionControls status="awaiting_review" agent="protect" runId="run-20240509-pppp" />);
+
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+  expect(screen.getByTestId(PROTECT_NOTE_TESTID)).toHaveTextContent(PROTECT_LOG_MESSAGE);
+});
+
+it('still offers the buttons for a non-protect Run awaiting review', () => {
+  // The protect case must not have removed the decision controls for everyone
+  // else: the same status on a codex Run still shows both buttons.
+  render(<DecisionControls status="awaiting_review" agent="codex" runId="run-20240506-bbbb" onDecide={() => {}} />);
+
+  expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument();
+  expect(screen.queryByTestId(PROTECT_NOTE_TESTID)).toBeNull();
+});
+
+it('hides the decision controls for a protect Run loaded through the detail view', async () => {
+  // Proves the view threads `run.agent` into the controls, not just the unit above.
+  const protectRun = { ...RUN, agent: 'protect', status: 'awaiting_review' };
+  const { client } = clientReturning(jsonResponse(protectRun));
+
+  render(<RunDetailView runId={protectRun.run_id} client={client} />);
+
+  expect(await screen.findByTestId(PROTECT_NOTE_TESTID)).toHaveTextContent(PROTECT_LOG_MESSAGE);
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+  // The agent is still shown in the header, as for any Run.
+  expect(screen.getByText('protect')).toBeInTheDocument();
 });
 
 it('offers no decision for a failed Run and shows its status as stored', () => {
