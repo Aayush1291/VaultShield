@@ -125,10 +125,6 @@ esac
 # --- finish -------------------------------------------------------------------
 say ""
 "$VAULTSHIELD_BIN" --version
-# `agents doctor all` only has something to report inside a protected project;
-# outside one it prints a short "run protect first" note. Either way it is
-# informational, so it never fails the install.
-"$VAULTSHIELD_BIN" agents doctor all || true
 
 say ""
 say "What to do next:"

@@ -45,7 +45,6 @@ _VENV_PY = """#!/bin/sh
 printf 'VENVPY|%s\\n' "$*" >> "$VS_SHIM_LOG"
 if [ "$1" = "-m" ] && [ "$2" = "vaultshield.cli" ]; then
   if [ "$3" = "--version" ]; then printf '%s\\n' "vaultshield, version 0.1.0"; exit 0; fi
-  if [ "$3" = "agents" ]; then printf '%s\\n' "no protected files found; run vaultshield protect first"; exit 1; fi
   exit 0
 fi
 exit 0
