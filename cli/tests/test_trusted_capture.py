@@ -5,15 +5,27 @@ Docker: archives are built in memory with `tarfile`, and the fake
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
+import os
+import subprocess
 import tarfile
+from pathlib import Path
 
 import docker
 import pytest
 import requests
 
 from vaultshield import trusted_capture as tc
-from vaultshield.git_capture import GitCaptureError, UnsafeGitConfig
+from vaultshield.git_capture import (
+    _GIT_ENV,
+    GitCaptureError,
+    UnsafeGitConfig,
+    _git,
+    commit_run_branch,
+    resolve_diff_base,
+)
 from vaultshield.sandbox import ExecResult, SandboxError
 from vaultshield.trusted_capture import (
     TrustedCapture,
@@ -669,3 +681,185 @@ def test_remove_capture_helper_by_name():
 
     assert tc.remove_capture_helper(RUN_ID, _Client()) is True
     assert tc.remove_capture_helper("other", _Client()) is False
+
+
+# --- export_run_bundle (Day-4 submit/bundle gap) -----------------------------
+#
+# No Docker: `_BundleCapture` runs the hardened git commands against a real
+# local repository (like `test_git_capture.LocalGitSandbox`) and serves
+# `get_archive` from the host filesystem (like `_ArchiveContainer`). The
+# capture helper's hard-coded /tmp/branch.bundle is remapped to a per-instance
+# path so tests stay isolated and never touch the real /tmp.
+
+
+class _BundleCapture:
+    def __init__(self, repo_path: Path, env: dict, bundle_tmp: Path):
+        self.repo_path = repo_path
+        self.env = env
+        self._bundle_tmp = bundle_tmp
+        self.container = self  # we answer get_archive ourselves
+
+    def _map(self, arg):
+        return str(self._bundle_tmp) if arg == tc._BUNDLE_TMP_PATH else arg
+
+    def exec(self, cmd, *, env=None) -> ExecResult:
+        completed = subprocess.run(
+            [self._map(a) for a in cmd],
+            cwd=str(self.repo_path),
+            env={**self.env, **(env or {})},
+            capture_output=True,
+        )
+        return ExecResult(
+            exit_code=completed.returncode,
+            stdout=completed.stdout.decode("utf-8", "replace"),
+            stderr=completed.stderr.decode("utf-8", "replace"),
+            stdout_bytes=completed.stdout,
+        )
+
+    def get_archive(self, path):
+        real = Path(self._map(path))
+        if not real.is_file():
+            raise docker.errors.NotFound(path)
+        return iter([_tar([("branch.bundle", "file", real.read_bytes())])]), {}
+
+
+def _ok(cap: _BundleCapture, *args: str) -> ExecResult:
+    result = cap.exec(_git(*args), env=_GIT_ENV)
+    assert result.exit_code == 0, result.stderr or result.stdout
+    return result
+
+
+def _rev(cap: _BundleCapture, ref: str) -> str:
+    return _ok(cap, "rev-parse", "--verify", ref).stdout.strip()
+
+
+def _bundle_repo(tmp_path: Path, *, with_base: bool = True):
+    """A real repo driven through `_BundleCapture`, with (by default) one base
+    commit, ready for `commit_run_branch` to add the Run's commit on top."""
+    work = tmp_path / "repo"
+    work.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "GIT_TERMINAL_PROMPT": "0"}
+    cap = _BundleCapture(work, env, tmp_path / "helper-branch.bundle")
+    _ok(cap, "init", "-q")
+    _ok(cap, "symbolic-ref", "HEAD", "refs/heads/main")
+    if with_base:
+        (work / "kept.txt").write_text("original\n")
+        _ok(cap, "add", "--all")
+        _ok(
+            cap,
+            "-c", "user.name=Dev",
+            "-c", "user.email=dev@example.invalid",
+            "-c", "commit.gpgsign=false",
+            "commit", "-m", "base",
+        )
+    return cap, work
+
+
+def _run_branch_with_change(cap: _BundleCapture, work: Path):
+    (work / "added.py").write_text("print('x')\n")
+    branch = commit_run_branch(cap, RUN_ID)
+    base_ref = resolve_diff_base(cap, branch)
+    return branch, base_ref
+
+
+def test_export_run_bundle_writes_bundle_and_metadata(tmp_path: Path) -> None:
+    cap, work = _bundle_repo(tmp_path)
+    branch, base_ref = _run_branch_with_change(cap, work)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    result = tc.export_run_bundle(
+        cap, RUN_ID, base_ref, branch, run_dir, "https://github.com/o/r.git"
+    )
+
+    assert result is not None
+    assert result.path == run_dir / "branch.bundle"
+    assert result.path.is_file()
+    meta = json.loads((run_dir / "branch.json").read_text())
+    assert meta == {
+        "run_id": RUN_ID,
+        "branch": branch,
+        "base_oid": _rev(cap, f"{base_ref}^{{commit}}"),
+        "tip_oid": _rev(cap, f"{branch}^{{commit}}"),
+        "repo_url": "https://github.com/o/r.git",
+        "bundle_sha256": hashlib.sha256(result.path.read_bytes()).hexdigest(),
+        "bundle_bytes": result.path.stat().st_size,
+    }
+    # The recorded digest and size describe the file that was written.
+    assert meta["bundle_sha256"] == result.bundle_sha256
+    assert meta["bundle_bytes"] == result.bundle_bytes
+
+
+def test_export_run_bundle_strips_credentials_from_the_repo_url(tmp_path: Path) -> None:
+    cap, work = _bundle_repo(tmp_path)
+    branch, base_ref = _run_branch_with_change(cap, work)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    tc.export_run_bundle(
+        cap,
+        RUN_ID,
+        base_ref,
+        branch,
+        run_dir,
+        "https://x-access-token:SECRETVALUE@github.com/o/r.git",
+    )
+
+    text = (run_dir / "branch.json").read_text()
+    assert json.loads(text)["repo_url"] == "https://github.com/o/r.git"
+    assert "SECRETVALUE" not in text
+
+
+def test_export_run_bundle_skips_when_no_commit_beyond_base(tmp_path: Path) -> None:
+    cap, work = _bundle_repo(tmp_path)
+    branch, _base_ref = _run_branch_with_change(cap, work)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    # base == tip: there is nothing beyond the base to bundle.
+    result = tc.export_run_bundle(
+        cap, RUN_ID, branch, branch, run_dir, "https://h/o/r"
+    )
+
+    assert result is None
+    assert not (run_dir / "branch.bundle").exists()
+    assert not (run_dir / "branch.json").exists()
+
+
+def test_export_run_bundle_skips_a_root_commit_base(tmp_path: Path) -> None:
+    # An empty clone: the Run's commit is a root commit, so `resolve_diff_base`
+    # returns the empty-tree hash, which is not a commit and has no range.
+    cap, work = _bundle_repo(tmp_path, with_base=False)
+    branch, base_ref = _run_branch_with_change(cap, work)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    result = tc.export_run_bundle(cap, RUN_ID, base_ref, branch, run_dir, "https://h/o/r")
+
+    assert result is None
+    assert not (run_dir / "branch.bundle").exists()
+    assert not (run_dir / "branch.json").exists()
+
+
+def test_export_run_bundle_enforces_the_member_cap(tmp_path: Path) -> None:
+    cap, work = _bundle_repo(tmp_path)
+    branch, base_ref = _run_branch_with_change(cap, work)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    with pytest.raises(GitCaptureError, match="exceeds"):
+        tc.export_run_bundle(
+            cap,
+            RUN_ID,
+            base_ref,
+            branch,
+            run_dir,
+            "https://h/o/r",
+            caps=TrustedCaptureCaps(member=10),
+        )
+
+    # Nothing is left behind when the extraction is refused.
+    assert not (run_dir / "branch.bundle").exists()
+    assert not (run_dir / "branch.json").exists()

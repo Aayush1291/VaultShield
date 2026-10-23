@@ -34,6 +34,7 @@ duplicated here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -47,6 +48,7 @@ import pytest
 import yaml
 
 from vaultshield.git_capture import run_branch_name
+from vaultshield.run_directory import run_dir_path
 from vaultshield.submit import (
     APPROVED_STATUS,
     CREDENTIALS_FILE_MODE,
@@ -710,3 +712,246 @@ def test_a_file_sourced_token_reaches_git_through_the_environment() -> None:
     # The token was passed in the environment; the command carries only the
     # names of the variables to read it from.
     assert _GITHUB_TOKEN not in _GIT_CREDENTIAL_HELPER
+
+
+# --- importing the Run's branch from its bundle (Day-4 submit/bundle gap) ----
+#
+# These reuse `_local_repo` (real bare remote), `_run_server` (real backend
+# socket), and `_RecordingOpener` (the provider seam). `branch.bundle` and
+# `branch.json` are written into the Run_Directory under the checkout exactly
+# where step 8 would put them, then the local branch is deleted to stand in
+# for the destroyed capture helper, so `submit` has to import it.
+
+
+def _origin_url(repo: Path) -> str:
+    return _git(repo, "remote", "get-url", "origin").strip()
+
+
+def _local_branches(repo: Path) -> set[str]:
+    output = _git(repo, "branch", "--format=%(refname:short)")
+    return {line.strip() for line in output.splitlines() if line.strip()}
+
+
+def _make_run_bundle(
+    repo: Path,
+    run_dir: Path,
+    *,
+    repo_url: str,
+    base_oid: str | None = None,
+    sha_override: str | None = None,
+) -> dict[str, Any]:
+    """Writes `<run_dir>/branch.bundle` and `branch.json` the way step 8 does,
+    from the `_BRANCH` the `_local_repo` fixture already created. `base_oid`
+    defaults to the branch's parent (what `resolve_diff_base` records)."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    parent = _git(repo, "rev-parse", f"{_BRANCH}~1").strip()
+    tip = _git(repo, "rev-parse", _BRANCH).strip()
+    bundle = run_dir / "branch.bundle"
+    _git(repo, "bundle", "create", str(bundle), f"{parent}..{_BRANCH}")
+    data = bundle.read_bytes()
+    meta = {
+        "run_id": _RUN_ID,
+        "branch": _BRANCH,
+        "base_oid": base_oid if base_oid is not None else parent,
+        "tip_oid": tip,
+        "repo_url": repo_url,
+        "bundle_sha256": sha_override or hashlib.sha256(data).hexdigest(),
+        "bundle_bytes": len(data),
+    }
+    (run_dir / "branch.json").write_text(json.dumps(meta), encoding="utf-8")
+    return meta
+
+
+def test_submit_imports_the_branch_from_its_bundle_then_pushes(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path, with_run_branch=True)
+    run_dir = run_dir_path(repo, _RUN_ID)
+    _make_run_bundle(repo, run_dir, repo_url=_origin_url(repo))
+    # The capture helper is gone, so the checkout no longer carries the branch.
+    _git(repo, "branch", "-D", _BRANCH)
+    assert _BRANCH not in _local_branches(repo)
+    opener = _RecordingOpener()
+
+    with _run_server() as server:
+        pr_url = submit(
+            _RUN_ID,
+            server.origin,  # type: ignore[attr-defined]
+            _DASHBOARD_TOKEN,
+            repo_root=repo,
+            provider="github",
+            credential=_file_credential(),
+            open_pull_request=opener,
+        )
+
+    # The branch was imported into the checkout and then pushed to the remote.
+    assert _BRANCH in _local_branches(repo)
+    assert _BRANCH in _remote_branches(repo)
+    assert pr_url == _PR_URL
+    assert len(opener.calls) == 1
+    assert opener.calls[0]["branch"] == _BRANCH
+
+
+def test_submit_import_leaves_the_working_tree_untouched(tmp_path: Path) -> None:
+    repo = _local_repo(tmp_path, with_run_branch=True)
+    run_dir = run_dir_path(repo, _RUN_ID)
+    _make_run_bundle(repo, run_dir, repo_url=_origin_url(repo))
+    _git(repo, "branch", "-D", _BRANCH)
+
+    head_before = _git(repo, "rev-parse", "HEAD").strip()
+    status_before = _git(repo, "status", "--porcelain")
+    readme_before = (repo / "README.md").read_text(encoding="utf-8")
+    opener = _RecordingOpener()
+
+    with _run_server() as server:
+        submit(
+            _RUN_ID,
+            server.origin,  # type: ignore[attr-defined]
+            _DASHBOARD_TOKEN,
+            repo_root=repo,
+            provider="github",
+            credential=_file_credential(),
+            open_pull_request=opener,
+        )
+
+    # The branch ref is created, but HEAD, the checked-out branch, the index,
+    # and the working tree are all exactly as they were — the import is a
+    # `git fetch` of one ref, never a checkout.
+    assert _BRANCH in _local_branches(repo)
+    assert _git(repo, "rev-parse", "HEAD").strip() == head_before
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert _git(repo, "status", "--porcelain") == status_before
+    assert (repo / "README.md").read_text(encoding="utf-8") == readme_before
+    # The file the Run added lives only on the branch, not in the working tree.
+    assert not (repo / "feature.py").exists()
+
+
+def test_submit_refuses_a_checkout_of_a_different_repository(tmp_path: Path) -> None:
+    repo = _local_repo(tmp_path, with_run_branch=True)
+    run_dir = run_dir_path(repo, _RUN_ID)
+    _make_run_bundle(repo, run_dir, repo_url="https://github.com/someone/else.git")
+    opener = _RecordingOpener()
+
+    with _run_server() as server:
+        with pytest.raises(SubmitError) as excinfo:
+            submit(
+                _RUN_ID,
+                server.origin,  # type: ignore[attr-defined]
+                _DASHBOARD_TOKEN,
+                repo_root=repo,
+                provider="github",
+                credential=_file_credential(),
+                open_pull_request=opener,
+            )
+        requests = list(server.requests)  # type: ignore[attr-defined]
+
+    message = str(excinfo.value)
+    assert "someone/else" in message
+    assert "checkout of" in message
+    # The mismatch stops the submission with no side effect beyond the read.
+    assert [method for method, _p, _h, _b in requests] == ["GET"]
+    assert len(opener.calls) == 0
+    assert _BRANCH not in _remote_branches(repo)
+
+
+def test_submit_refuses_a_bundle_whose_sha256_does_not_match(tmp_path: Path) -> None:
+    repo = _local_repo(tmp_path, with_run_branch=True)
+    run_dir = run_dir_path(repo, _RUN_ID)
+    _make_run_bundle(repo, run_dir, repo_url=_origin_url(repo), sha_override="0" * 64)
+    _git(repo, "branch", "-D", _BRANCH)  # force the import path
+    opener = _RecordingOpener()
+
+    with _run_server() as server:
+        with pytest.raises(SubmitError, match="SHA-256"):
+            submit(
+                _RUN_ID,
+                server.origin,  # type: ignore[attr-defined]
+                _DASHBOARD_TOKEN,
+                repo_root=repo,
+                provider="github",
+                credential=_file_credential(),
+                open_pull_request=opener,
+            )
+
+    assert _BRANCH not in _local_branches(repo)
+    assert _BRANCH not in _remote_branches(repo)
+    assert len(opener.calls) == 0
+
+
+def test_submit_stops_when_the_base_commit_is_missing(tmp_path: Path) -> None:
+    repo = _local_repo(tmp_path, with_run_branch=False)
+    run_dir = run_dir_path(repo, _RUN_ID)
+    run_dir.mkdir(parents=True)
+
+    # Build the bundle in a DIFFERENT repo, so its base commit is one this
+    # checkout does not have.
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "--quiet")
+    _git(other, "symbolic-ref", "HEAD", "refs/heads/main")
+    (other / "x.txt").write_text("x\n", encoding="utf-8")
+    _git(other, "add", "x.txt")
+    _git(other, "commit", "--no-verify", "--quiet", "-m", "other base")
+    _git(other, "checkout", "--quiet", "-b", _BRANCH)
+    (other / "y.txt").write_text("y\n", encoding="utf-8")
+    _git(other, "add", "y.txt")
+    _git(other, "commit", "--no-verify", "--quiet", "-m", "run")
+    base_oid = _git(other, "rev-parse", f"{_BRANCH}~1").strip()
+    bundle = run_dir / "branch.bundle"
+    _git(other, "bundle", "create", str(bundle), f"{base_oid}..{_BRANCH}")
+    data = bundle.read_bytes()
+    (run_dir / "branch.json").write_text(
+        json.dumps(
+            {
+                "run_id": _RUN_ID,
+                "branch": _BRANCH,
+                "base_oid": base_oid,
+                "tip_oid": _git(other, "rev-parse", _BRANCH).strip(),
+                "repo_url": _origin_url(repo),
+                "bundle_sha256": hashlib.sha256(data).hexdigest(),
+                "bundle_bytes": len(data),
+            }
+        ),
+        encoding="utf-8",
+    )
+    opener = _RecordingOpener()
+
+    with _run_server() as server:
+        with pytest.raises(SubmitError) as excinfo:
+            submit(
+                _RUN_ID,
+                server.origin,  # type: ignore[attr-defined]
+                _DASHBOARD_TOKEN,
+                repo_root=repo,
+                provider="github",
+                credential=_file_credential(),
+                open_pull_request=opener,
+            )
+
+    message = str(excinfo.value)
+    assert base_oid in message
+    assert "git fetch" in message
+    assert _BRANCH not in _remote_branches(repo)
+    assert len(opener.calls) == 0
+
+
+def test_submit_without_a_bundle_or_the_branch_is_a_clear_error(tmp_path: Path) -> None:
+    repo = _local_repo(tmp_path, with_run_branch=False)
+    opener = _RecordingOpener()
+
+    with _run_server() as server:
+        with pytest.raises(SubmitError) as excinfo:
+            submit(
+                _RUN_ID,
+                server.origin,  # type: ignore[attr-defined]
+                _DASHBOARD_TOKEN,
+                repo_root=repo,
+                provider="github",
+                credential=_file_credential(),
+                open_pull_request=opener,
+            )
+
+    message = str(excinfo.value)
+    assert _BRANCH in message
+    assert "bundle" in message
+    assert len(opener.calls) == 0

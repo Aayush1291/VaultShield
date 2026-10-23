@@ -473,6 +473,11 @@ def _wire_run_pipeline(
         seen["trusted"].append("check_run_outputs")
         seen["check_args"] = (capture_obj, secrets, run_dir, branch, base_ref)
 
+    def _export_run_bundle(capture_obj, run_id, base_ref, branch, run_dir, repo_url, *, caps):
+        seen["trusted"].append("export_run_bundle")
+        seen["bundle_args"] = (capture_obj, run_id, base_ref, branch, run_dir, repo_url)
+        return None
+
     def _remove_capture_helper(run_id, client):
         seen["trusted"].append("remove_capture_helper")
         return False
@@ -498,6 +503,7 @@ def _wire_run_pipeline(
     monkeypatch.setattr(cli_module, "TrustedCapture", _RecordingCapture)
     monkeypatch.setattr(cli_module, "archive_sandbox_repo", _archive)
     monkeypatch.setattr(cli_module, "check_run_outputs", _check_run_outputs)
+    monkeypatch.setattr(cli_module, "export_run_bundle", _export_run_bundle)
     monkeypatch.setattr(
         cli_module.trusted_capture, "remove_capture_helper", _remove_capture_helper
     )

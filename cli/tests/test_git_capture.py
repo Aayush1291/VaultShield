@@ -1238,3 +1238,88 @@ def test_every_capture_command_uses_the_hardened_prefix(repo):
     prefix = git_capture._git()
     assert sandbox.commands
     assert all(cmd[: len(prefix)] == prefix for cmd in sandbox.commands)
+
+
+# --- bundle round trip for awkward names (Day-4 submit/bundle gap) ----------
+
+
+def test_branch_bundle_round_trip_preserves_non_utf8_and_case_variant_names(
+    tmp_path: Path,
+) -> None:
+    """The commands `trusted_capture.export_run_bundle` and `submit` run — a
+    thin `git bundle` of `base..branch` and a ref-only `git fetch` of it into
+    a repository that already has the base — carry non-UTF-8 and case-only
+    distinct file names through unchanged.
+
+    The names are put straight into the git index with `hash-object` +
+    `update-index` and read back from the object store with `ls-tree -z`, so
+    APFS (which stores neither a non-UTF-8 name nor two names differing only
+    in case) is never involved. The import target is a bare repo, which has no
+    working tree to check out into.
+    """
+    repo = _init_repo(tmp_path)
+    default = repo.current_branch
+    branch = run_branch_name(RUN_ID)
+    repo.git_ok("checkout", "-b", branch)
+
+    names = [b"File.txt", b"file.txt", b"weird-\xff-name.txt"]
+    for index, name in enumerate(names):
+        blob = subprocess.run(
+            [b"git", b"hash-object", b"-w", b"--stdin"],
+            cwd=repo.path,
+            env=repo.env,
+            input=b"content-%d\n" % index,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            [
+                b"git",
+                b"update-index",
+                b"--add",
+                b"--cacheinfo",
+                b"100644," + blob + b"," + name,
+            ],
+            cwd=repo.path,
+            env=repo.env,
+            capture_output=True,
+            check=True,
+        )
+    repo.commit_as_developer("odd names")
+    base_oid = repo.git_ok("rev-parse", f"{branch}~1")
+
+    bundle = tmp_path / "branch.bundle"
+    repo.git_ok("bundle", "create", str(bundle), f"{base_oid}..{branch}")
+
+    bare = tmp_path / "bare.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--quiet", str(bare)],
+        env=repo.env,
+        capture_output=True,
+        check=True,
+    )
+    # Bring the base the thin bundle builds on, then the ref-only import.
+    subprocess.run(
+        ["git", "-C", str(bare), "fetch", "--quiet", str(repo.path),
+         f"{default}:refs/heads/{default}"],
+        env=repo.env,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(bare), "fetch", "--quiet", str(bundle), f"{branch}:{branch}"],
+        env=repo.env,
+        capture_output=True,
+        check=True,
+    )
+
+    listing = subprocess.run(
+        [b"git", b"-C", os.fsencode(bare), b"ls-tree", b"-r", b"-z",
+         b"--name-only", branch.encode()],
+        env=repo.env,
+        capture_output=True,
+        check=True,
+    ).stdout
+    entries = {chunk for chunk in listing.split(b"\x00") if chunk}
+    for name in names:
+        assert name in entries

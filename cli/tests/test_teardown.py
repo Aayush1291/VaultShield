@@ -35,12 +35,15 @@ import docker
 import pytest
 
 from vaultshield.git_capture import run_branch_name
+from vaultshield.run_directory import run_dir_path
 from vaultshield.sandbox import container_name
 from vaultshield.submit import SOURCE_FILE, Credential
 from vaultshield.teardown import (
     REJECTED_STATUS,
     TeardownError,
+    _delete_imported_local_branch,
     delete_run_branch,
+    sync_rejected_branch,
     teardown,
     teardown_sandbox,
 )
@@ -472,3 +475,123 @@ def test_a_docker_refusal_on_a_side_object_is_a_teardown_error():
     client._networks[f"vaultshield-int-{_RUN_ID}"] = obj
     with pytest.raises(TeardownError, match=f"vaultshield-int-{_RUN_ID}"):
         teardown_sandbox(_RUN_ID, client=client)
+
+
+# --- deleting the imported local branch for a rejected Run (Day-4) ----------
+#
+# `vaultshield submit` imports the Run's branch into the checkout from its
+# bundle; teardown on a REJECTED Run cleans that local branch up too, best
+# effort, and only when it still sits at exactly the tip branch.json recorded.
+# `_local_repo(tmp_path, _BRANCH)` leaves that branch present locally (it is
+# created, pushed, then main is checked back out).
+
+
+def _local_branches(repo: Path) -> set[str]:
+    output = _git(repo, "branch", "--format=%(refname:short)")
+    return {line.strip() for line in output.splitlines() if line.strip()}
+
+
+def _write_branch_json(repo: Path, run_id: str, tip_oid: str) -> Path:
+    run_dir = run_dir_path(repo, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "branch.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "branch": run_branch_name(run_id),
+                "base_oid": "0" * 40,
+                "tip_oid": tip_oid,
+                "repo_url": "https://github.com/o/r.git",
+                "bundle_sha256": "0" * 64,
+                "bundle_bytes": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def test_delete_imported_local_branch_removes_a_matching_branch(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path, _BRANCH)
+    tip = _git(repo, "rev-parse", _BRANCH).strip()
+    _write_branch_json(repo, _RUN_ID, tip)
+    assert _BRANCH in _local_branches(repo)
+
+    assert _delete_imported_local_branch(_RUN_ID, repo_root=repo) is True
+    assert _BRANCH not in _local_branches(repo)
+
+
+def test_delete_imported_local_branch_keeps_a_branch_whose_tip_moved(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path, _BRANCH)
+    # branch.json records a different tip, so the local branch is not the
+    # untouched import and must be left alone.
+    _write_branch_json(repo, _RUN_ID, "0" * 40)
+
+    assert _delete_imported_local_branch(_RUN_ID, repo_root=repo) is False
+    assert _BRANCH in _local_branches(repo)
+
+
+def test_delete_imported_local_branch_skips_without_branch_json(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path, _BRANCH)
+
+    assert _delete_imported_local_branch(_RUN_ID, repo_root=repo) is False
+    assert _BRANCH in _local_branches(repo)
+
+
+def test_delete_imported_local_branch_skips_when_the_branch_is_absent(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path)  # no run branch in this checkout
+    _write_branch_json(repo, _RUN_ID, "0" * 40)
+
+    assert _delete_imported_local_branch(_RUN_ID, repo_root=repo) is False
+
+
+def test_sync_rejected_branch_also_deletes_the_imported_local_branch(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path, _BRANCH)
+    tip = _git(repo, "rev-parse", _BRANCH).strip()
+    _write_branch_json(repo, _RUN_ID, tip)
+
+    with _run_server(status=REJECTED_STATUS) as server:
+        sync_rejected_branch(
+            _RUN_ID,
+            server.origin,  # type: ignore[attr-defined]
+            _DASHBOARD_TOKEN,
+            repo_root=repo,
+            provider="github",
+            credential=_file_credential(),
+        )
+
+    # Rejected: the local import and the remote branch are both gone.
+    assert _BRANCH not in _local_branches(repo)
+    assert _BRANCH not in _remote_branches(repo)
+
+
+def test_sync_keeps_the_local_branch_for_a_non_rejected_run(
+    tmp_path: Path,
+) -> None:
+    repo = _local_repo(tmp_path, _BRANCH)
+    tip = _git(repo, "rev-parse", _BRANCH).strip()
+    _write_branch_json(repo, _RUN_ID, tip)
+
+    with _run_server(status="approved") as server:
+        sync_rejected_branch(
+            _RUN_ID,
+            server.origin,  # type: ignore[attr-defined]
+            _DASHBOARD_TOKEN,
+            repo_root=repo,
+            provider="github",
+            credential=_file_credential(),
+        )
+
+    # Not rejected: nothing is deleted, locally or on the remote.
+    assert _BRANCH in _local_branches(repo)
+    assert _BRANCH in _remote_branches(repo)

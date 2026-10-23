@@ -37,6 +37,7 @@ of the test and the container clones `git://host.docker.internal:<port>/...`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -429,6 +430,23 @@ def test_agent_executes_inside_the_sandbox_and_cannot_reach_the_host(
     )
     assert PROBE_REPORT in changed, "the agent's report file is missing from the diff"
     assert changed[AGENT_UNIQUE_FILE]["additions"] == 1
+
+    # --- step 8 exported the run branch as a bundle for `submit` -------------
+    # The Run changed files, so the branch adds a commit beyond its base and a
+    # bundle must exist, with branch.json describing exactly that file.
+    bundle_file = run_dir / "branch.bundle"
+    assert bundle_file.is_file(), (
+        "step 8 wrote no branch.bundle, so `vaultshield submit` would have no "
+        "branch to import once the capture helper is gone"
+    )
+    assert bundle_file.stat().st_size > 0
+    branch_meta = json.loads((run_dir / "branch.json").read_text())
+    assert branch_meta["run_id"] == run_id
+    assert branch_meta["branch"] == f"vaultshield/run-{run_id}"
+    assert branch_meta["bundle_bytes"] == bundle_file.stat().st_size
+    assert branch_meta["bundle_sha256"] == hashlib.sha256(
+        bundle_file.read_bytes()
+    ).hexdigest()
 
     # --- the Monitor observed the changes, with container-side paths ----------
     file_changes = [r for r in records if r["event_type"] == "file_change"]

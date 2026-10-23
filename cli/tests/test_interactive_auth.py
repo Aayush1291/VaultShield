@@ -259,6 +259,7 @@ def _wire(
     monkeypatch.setattr(cli_module, "TrustedCapture", _Capture)
     monkeypatch.setattr(cli_module, "archive_sandbox_repo", lambda sandbox, *, caps: _Split())
     monkeypatch.setattr(cli_module, "check_run_outputs", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "export_run_bundle", lambda *a, **k: None)
     monkeypatch.setattr(
         cli_module.token_hygiene,
         "snapshot",
