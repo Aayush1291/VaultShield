@@ -29,12 +29,15 @@ Every Docker error is mapped to `GitCaptureError` (or `SandboxError` for
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import posixpath
 import re
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, Iterator
 
 import click
@@ -50,6 +53,7 @@ from vaultshield.git_capture import (
     _git,
 )
 from vaultshield.monitor import EventLogRecord, _now_iso8601
+from vaultshield.run_directory import branch_bundle_path, branch_json_path
 from vaultshield.sandbox import (
     KEEP_ALIVE_CMD,
     REPO_DIR,
@@ -913,3 +917,201 @@ def remove_capture_helper(run_id: str, client) -> bool:
     except docker.errors.NotFound:
         return False
     return True
+
+
+# --- run branch bundle (step 8, for `vaultshield submit`) --------------------
+
+# Where `git bundle create` writes inside the capture helper. An absolute path
+# under /tmp, not in the repository, so it is never mistaken for a work-tree
+# file and never collides with the clone. Isolated per helper container (each
+# Run has its own), so the fixed name is safe.
+_BUNDLE_TMP_PATH = "/tmp/branch.bundle"
+
+# A `scheme://userinfo@host…` prefix, so a repo URL cloned with an embedded
+# token (`https://x-access-token:…@host/…`) can be recorded without the
+# secret. scp-style `git@host:path` has no `://` and is left alone: its user
+# is an ssh login, not a credential, and dropping it would change the URL.
+_URL_WITH_USERINFO = re.compile(r"\A([A-Za-z][A-Za-z0-9+.\-]*://)[^/@]*@")
+
+
+@dataclass(frozen=True)
+class RunBundle:
+    """What step 8 wrote for `submit`: the host path of `branch.bundle` and the
+    identifiers mirrored into `branch.json`. `repo_url` is already sanitised."""
+
+    path: Path
+    branch: str
+    base_oid: str
+    tip_oid: str
+    repo_url: str
+    bundle_sha256: str
+    bundle_bytes: int
+
+
+def _run_git(capture, *args: str, step: str) -> ExecResult:
+    """A git command through the helper's `exec`, raising `GitCaptureError` on
+    a nonzero exit. The same hardened prefix and env `TrustedCapture._git_ok`
+    uses, but reachable with only `capture.exec` so a non-Docker stand-in can
+    drive it."""
+    result = capture.exec(_git(*args), env={**_GIT_ENV, "GIT_NO_REPLACE_OBJECTS": "1"})
+    if result.exit_code != 0:
+        detail = (result.stderr or result.stdout or "no output captured").strip()
+        raise GitCaptureError(
+            f"trusted capture: {step} failed (exit code {result.exit_code}): {detail[:300]}"
+        )
+    return result
+
+
+def _sanitise_repo_url(url: str) -> str:
+    """The repository URL with any `scheme://userinfo@` credentials stripped,
+    so `branch.json` keeps the repo's identity without a token."""
+    return _URL_WITH_USERINFO.sub(r"\1", url, count=1)
+
+
+def _extract_bundle_file(container, src_path: str, dest: Path, max_bytes: int, step: str):
+    """Stream the one regular file at `src_path` out of the helper into `dest`,
+    returning `(sha256_hex, byte_count)`. Size-capped by `max_bytes`; Docker,
+    missing-file and malformed-archive errors are mapped to `GitCaptureError`,
+    and a partial `dest` is removed on any failure."""
+    base_error = "trusted capture: cannot read the run branch bundle"
+    try:
+        stream, _stat = _get_archive(container, src_path, step)
+    except docker.errors.NotFound as exc:
+        raise GitCaptureError(f"{base_error}: it is missing from the capture helper") from exc
+    reader = io.BufferedReader(
+        _ChunkReader(stream, max_bytes + 64 * 1024, step=step, what=f"archive of {src_path}")
+    )
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        tf = _open_input(reader)
+        member = tf.next()
+        if member is None:
+            raise GitCaptureError(f"{base_error}: it is missing from its archive")
+        if not member.isreg():
+            raise GitCaptureError(f"{base_error}: it is not a regular file")
+        if member.size > max_bytes:
+            raise GitCaptureError(
+                f"{base_error}: it exceeds {_fmt_bytes(max_bytes)} ({member.size} bytes)"
+            )
+        handle = tf.extractfile(member)
+        with open(dest, "wb") as out:
+            if handle is not None:
+                while True:
+                    chunk = handle.read(1 << 20)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    digest.update(chunk)
+                    out.write(chunk)
+    except (tarfile.TarError, EOFError, _MalformedArchive) as exc:
+        _unlink_quietly(dest)
+        raise GitCaptureError(f"{base_error}: its archive is malformed") from exc
+    except BaseException:
+        _unlink_quietly(dest)
+        raise
+    return digest.hexdigest(), total
+
+
+def _unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _write_branch_json(run_dir: Path, run_id: str, bundle: RunBundle) -> None:
+    """Write `<run_dir>/branch.json`: identifiers only — run id, branch, base
+    and tip commit ids, the (sanitised) repo URL, and the bundle's digest and
+    size. No credential value and no file content ever land here."""
+    data = {
+        "run_id": run_id,
+        "branch": bundle.branch,
+        "base_oid": bundle.base_oid,
+        "tip_oid": bundle.tip_oid,
+        "repo_url": bundle.repo_url,
+        "bundle_sha256": bundle.bundle_sha256,
+        "bundle_bytes": bundle.bundle_bytes,
+    }
+    branch_json_path(run_dir).write_text(
+        json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def export_run_bundle(
+    capture,
+    run_id: str,
+    base_ref: str,
+    branch: str,
+    run_dir: Path,
+    repo_url: str,
+    *,
+    caps: TrustedCaptureCaps = TrustedCaptureCaps(),
+) -> RunBundle | None:
+    """Bundle `<base_ref>..<branch>` inside the capture helper and copy it to
+    `<run_dir>/branch.bundle`, recording `<run_dir>/branch.json`.
+
+    Returns the `RunBundle`, or `None` when there is nothing to bundle — the
+    base is not a commit (a root-commit capture, where `resolve_diff_base`
+    returns the empty-tree hash), or the branch adds no commit beyond its base.
+    Neither file is written in that case.
+
+    Called in cli.py step 8 only after `check_run_outputs` has passed and
+    before `capture.remove()`, so it never runs for a quarantined diff or a
+    token-hygiene violation (both raise earlier). Every git command uses the
+    same hardened `exec` path git_capture uses; the bundle is pulled out with
+    the Docker archive API under the trusted-capture size caps. Every failure
+    is a `GitCaptureError` (or a `SandboxError` from `exec` itself).
+    """
+    container = getattr(capture, "container", None)
+    if container is None:
+        raise _gone()
+
+    # `--verify --quiet` prints the commit id and exits 0 only when the base
+    # really resolves to a commit; for the empty-tree sentinel it exits
+    # nonzero, and there is nothing to bundle.
+    base = capture.exec(
+        _git("rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}"),
+        env={**_GIT_ENV, "GIT_NO_REPLACE_OBJECTS": "1"},
+    )
+    base_oid = base.stdout.strip()
+    if base.exit_code != 0 or not base_oid:
+        return None
+
+    tip_oid = _run_git(
+        capture, "rev-parse", "--verify", f"{branch}^{{commit}}",
+        step="resolve the run branch tip",
+    ).stdout.strip()
+
+    counted = _run_git(
+        capture, "rev-list", "--count", f"{base_oid}..{branch}",
+        step="count the run branch commits",
+    ).stdout.strip()
+    try:
+        commits = int(counted)
+    except ValueError as exc:
+        raise GitCaptureError(
+            f"trusted capture: cannot count the run branch commits: {_sanitise(counted, 60)}"
+        ) from exc
+    if commits == 0:
+        return None
+
+    _run_git(
+        capture, "bundle", "create", _BUNDLE_TMP_PATH, f"{base_ref}..{branch}",
+        step="create the run branch bundle",
+    )
+    dest = branch_bundle_path(run_dir)
+    sha256, nbytes = _extract_bundle_file(
+        container, _BUNDLE_TMP_PATH, dest, caps.member, "extract the run branch bundle"
+    )
+    bundle = RunBundle(
+        path=dest,
+        branch=branch,
+        base_oid=base_oid,
+        tip_oid=tip_oid,
+        repo_url=_sanitise_repo_url(repo_url),
+        bundle_sha256=sha256,
+        bundle_bytes=nbytes,
+    )
+    _write_branch_json(run_dir, run_id, bundle)
+    return bundle

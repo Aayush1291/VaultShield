@@ -144,6 +144,28 @@ EVENT_LOG_FILENAME = "events.jsonl"
 DIFF_FILENAME = "diff.json"
 SCREENSHOTS_DIRNAME = "screenshots"
 
+# Two more artifacts, written by step 8's git capture alongside `diff.json`
+# so that `vaultshield submit` can push the Run's branch from a checkout that
+# never saw the (now destroyed) capture helper:
+#
+#   <run_dir>/branch.bundle   a `git bundle` of `<base>..<branch>`, carrying
+#                             exactly the Run's commit and its objects.
+#   <run_dir>/branch.json     the metadata `submit` needs to import that
+#                             bundle safely: the run id, the branch name, the
+#                             base and tip commit ids, the repository URL the
+#                             Run was taken from, and the bundle's SHA-256 and
+#                             byte length. It holds identifiers only — never a
+#                             credential value or any file content.
+#
+# Public for the same reason the three names above are: step 8 (git_capture /
+# trusted_capture) writes them and `submit`/`teardown` read them back out of a
+# Run_Directory one side did not create. Both are optional — a Run whose
+# branch adds no commit beyond its base writes neither (see
+# `trusted_capture.export_run_bundle`), so a reader must treat their absence
+# as "this Run has no importable branch", not as an error.
+BRANCH_BUNDLE_FILENAME = "branch.bundle"
+BRANCH_JSON_FILENAME = "branch.json"
+
 # Maximum accepted `run_id` length, matching design.md's backend data
 # model (`run_id = models.CharField(max_length=64, unique=True)`). A
 # longer id would be accepted locally and then silently truncated or
@@ -304,3 +326,20 @@ def screenshots_dir(run_dir: Path) -> Path:
     has something to write, per the module docstring.
     """
     return run_dir / SCREENSHOTS_DIRNAME
+
+
+def branch_bundle_path(run_dir: Path) -> Path:
+    """Returns `<run_dir>/branch.bundle`, the `git bundle` of the Run's
+    branch that `submit` imports before pushing (written by step 8's
+    `trusted_capture.export_run_bundle`). Pure; may not exist (a Run with no
+    commit beyond its base writes no bundle).
+    """
+    return run_dir / BRANCH_BUNDLE_FILENAME
+
+
+def branch_json_path(run_dir: Path) -> Path:
+    """Returns `<run_dir>/branch.json`, the identifiers `submit` and
+    `teardown` read to import and later clean up the Run's branch (written
+    beside `branch.bundle`). Pure; may not exist (see `branch_bundle_path`).
+    """
+    return run_dir / BRANCH_JSON_FILENAME

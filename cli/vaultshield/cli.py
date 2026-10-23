@@ -124,6 +124,7 @@ from vaultshield.trusted_capture import (
     TrustedCapture,
     TrustedCaptureCaps,
     archive_sandbox_repo,
+    export_run_bundle,
     kill_sandbox,
     notices_to_events,
     record_trusted_base,
@@ -920,6 +921,14 @@ def run(
                 base_ref = resolve_diff_base(capture, branch)
                 diff_file = build_structured_diff(capture, base_ref, branch, run_dir)
                 check_run_outputs(capture, secrets, run_dir, branch, base_ref)
+                # Only now that token hygiene has passed (and the diff was not
+                # quarantined) export the branch as a `git bundle`, so `submit`
+                # can push it from a checkout that never saw this helper. Done
+                # before `capture.remove()` — the helper holds the only copy of
+                # the Run's commit objects.
+                bundle = export_run_bundle(
+                    capture, run_id, base_ref, branch, run_dir, repo_url, caps=caps
+                )
             finally:
                 capture.remove()
                 if split is not None:
@@ -928,6 +937,16 @@ def run(
                 f"Committed run {run_id} to branch {branch} in the capture helper; "
                 f"structured diff written to {diff_file}"
             )
+            if bundle is None:
+                click.echo(
+                    f"Run {run_id}: branch {branch} adds no commit beyond its base, "
+                    "so no branch bundle was written."
+                )
+            else:
+                click.echo(
+                    f"Run {run_id}: branch bundle written to {bundle.path} "
+                    f"({bundle.bundle_bytes} bytes)."
+                )
         except EgressError as exc:
             # Batch 3 FR2: the topology, the proxy or the isolation check
             # failed. Includes `EgressConfigError`, which step 1 already turns
