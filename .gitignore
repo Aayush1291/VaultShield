@@ -27,3 +27,6 @@ eval "$(ssh-agent -s)".pub
 *.pem
 id_rsa
 id_ed25519
+
+# Built wheel served by website/install.sh (website/build.sh writes it here).
+/website/dist/
