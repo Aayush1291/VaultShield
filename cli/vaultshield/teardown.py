@@ -158,7 +158,12 @@ from docker import DockerClient
 
 from vaultshield.egress import EgressError, remove_egress_resources
 from vaultshield.git_capture import run_branch_name
-from vaultshield.run_directory import RunDirectoryError, validate_run_id
+from vaultshield.run_directory import (
+    RunDirectoryError,
+    branch_json_path,
+    run_dir_path,
+    validate_run_id,
+)
 from vaultshield.sandbox import Sandbox, SandboxError, container_name
 from vaultshield.trusted_capture import capture_container_name, remove_capture_helper
 from vaultshield.submit import (
@@ -339,6 +344,13 @@ def sync_rejected_branch(
     if status != REJECTED_STATUS:
         return
 
+    # A rejected Run's branch may have been imported into this checkout by
+    # `vaultshield submit` (from <run_dir>/branch.bundle). Delete that local
+    # branch too, best effort — before the remote delete, and only when it
+    # still sits at exactly the tip branch.json recorded, so a branch the
+    # developer kept working on is never removed.
+    _delete_imported_local_branch(run_id, repo_root=repo_root)
+
     delete_run_branch(
         run_id,
         repo_root=repo_root,
@@ -476,6 +488,100 @@ def delete_run_branch(
         env=env,
     )
     return True
+
+
+def _delete_imported_local_branch(
+    run_id: str, *, repo_root: Path | None = None
+) -> bool:
+    """Best-effort: delete `vaultshield/run-<run_id>` from this checkout if it
+    is there at exactly the tip `<run_dir>/branch.json` recorded.
+
+    This is the local counterpart to `delete_run_branch`, for the branch
+    `vaultshield submit` imports from the Run's bundle. It runs only for a
+    rejected Run (its caller gates on that) and returns whether it deleted
+    anything.
+
+    Three safety conditions, any of which skips the delete:
+
+    - no `branch.json` (nothing was imported, or nothing recorded a tip);
+    - no such local branch;
+    - the local branch's tip differs from `branch.json`'s `tip_oid` — a branch
+      the developer rebased or built on is left untouched, which is the whole
+      point of the tip check.
+
+    Never raises: every git and filesystem error is caught and treated as
+    "could not, so did not". Teardown's job is to not leave things lying
+    around, not to fail because a cleanup it offered as a courtesy could not
+    be completed.
+    """
+    try:
+        root = repo_root if repo_root is not None else Path.cwd()
+        meta = _read_branch_json_quietly(run_dir_path(root, run_id))
+        if meta is None:
+            return False
+        recorded_tip = meta.get("tip_oid")
+        if not isinstance(recorded_tip, str) or not recorded_tip:
+            return False
+        branch = run_branch_name(run_id)
+        local_tip = _local_branch_tip(root, branch)
+        if local_tip is None or local_tip != recorded_tip:
+            return False
+        return _delete_local_branch(root, branch)
+    except Exception:  # noqa: BLE001 - best effort, never raises
+        return False
+
+
+def _read_branch_json_quietly(run_dir: Path) -> dict[str, Any] | None:
+    """Parsed `<run_dir>/branch.json`, or `None` if it is absent, unreadable,
+    not JSON, or not a JSON object. Best-effort — never raises."""
+    try:
+        meta = json.loads(branch_json_path(run_dir).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def _local_branch_tip(repo_root: Path, branch: str) -> str | None:
+    """The commit `refs/heads/<branch>` points at in `repo_root`, or `None`
+    when there is no such local branch or git could not be asked. Best-effort
+    — never raises."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{_HEADS_REF_PREFIX}{branch}"],
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env={**os.environ, _GIT_TERMINAL_PROMPT_ENVVAR: "0"},
+            timeout=_GIT_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _delete_local_branch(repo_root: Path, branch: str) -> bool:
+    """`git branch -D <branch>` in `repo_root`, returning whether it exited 0.
+    Best-effort — never raises. `-D` rather than `-d` because the branch is a
+    Run artifact being cleaned up, not merged work whose loss should be
+    guarded against; the caller has already confirmed its tip."""
+    try:
+        completed = subprocess.run(
+            ["git", "branch", "-D", branch],
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env={**os.environ, _GIT_TERMINAL_PROMPT_ENVVAR: "0"},
+            timeout=_GIT_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
 
 
 def _validated_run_id(run_id: str) -> str:
