@@ -124,6 +124,69 @@ chance to mark it: a `run` that is SIGKILLed or loses power, a registration
 whose response was lost after the backend saved it (a timeout), and Ctrl-C
 during registration itself. A server-side reaper for these is a follow-up.
 
+## The run → approve → submit flow
+
+A Run never reaches a real branch or pull request on its own. The lifecycle is:
+
+1. **`vaultshield run …`** sandboxes the agent, commits its work to
+   `vaultshield/run-<run-id>` inside a throwaway capture helper, and uploads the
+   result for review. The Run ends `awaiting_review`.
+2. **Review and approve** the Run in the dashboard. Approving moves it to
+   `approved`; rejecting moves it to `rejected`.
+3. **`vaultshield submit <run-id>`** pushes that branch and opens a pull/merge
+   request — but only for an `approved` Run.
+
+### Where the branch lives between `run` and `submit`
+
+The capture helper that built the Run's commit is destroyed at the end of
+`run`, and the agent's branch was never on your checkout. So step 8 also writes
+two files into the Run_Directory, next to `diff.json`:
+
+```
+.vaultshield/runs/<run-id>/branch.bundle   # a git bundle of <base>..<branch>
+.vaultshield/runs/<run-id>/branch.json     # run_id, branch, base_oid, tip_oid,
+                                           # repo_url, bundle_sha256, bundle_bytes
+```
+
+`branch.bundle` carries exactly the Run's commit and its objects; `branch.json`
+holds identifiers only — no credential value and no file content. They are
+written only after the token-hygiene scan passes, never for a quarantined diff.
+A Run whose branch adds no commit beyond its base (the rare empty-clone edge)
+writes neither, and says so in one line.
+
+### What `submit` does with them
+
+Before pushing, and before resolving any credential, `vaultshield submit`:
+
+- **checks the repository matches.** The checkout's `origin` must be the same
+  repository the Run was taken from (`branch.json`'s `repo_url`), compared by
+  host and path and ignoring `.git`, embedded credentials, and SSH-vs-HTTPS. If
+  it does not match, submit stops with one line telling you to run it from a
+  checkout of that repository. **Run `vaultshield submit` from a clone of the
+  repo the Run was produced from** — the same directory the Run_Directory lives
+  under.
+- **imports the branch** from `branch.bundle` if your checkout does not already
+  have it. It verifies the bundle's SHA-256 against `branch.json`, and if your
+  checkout is missing the base commit the bundle builds on, stops and tells you
+  to `git fetch origin` first. The import is a ref-only `git fetch`: it creates
+  `vaultshield/run-<run-id>` and never checks out or touches your working tree.
+
+Every existing safety check is kept: a non-`approved` Run is refused with its
+actual status and no side effect, the git/host credential is resolved before
+the push, and the push is a plain `git push` with no `--force`.
+
+### Rejecting and cleaning up
+
+`vaultshield teardown <run-id>` on a `rejected` Run deletes the Run's branch
+from the remote if it was pushed, and — best effort — also deletes the local
+`vaultshield/run-<run-id>` that `submit` imported, but only when it still sits
+at exactly the tip `branch.json` recorded, so a branch you kept working on is
+left alone.
+
+`spike/submit_smoke.sh` walks this whole flow against a throwaway repo without
+pushing: it runs the mock agent and then prints the exact approve and submit
+commands for you to run by hand.
+
 ## Configuration: `project_dir`
 
 `.vaultshield.yml` assumes the application lives at the repository root. When it
