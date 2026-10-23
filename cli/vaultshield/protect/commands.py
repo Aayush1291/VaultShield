@@ -14,6 +14,7 @@ import click
 
 from vaultshield import uploader
 from vaultshield.config import ConfigError, load_config
+from vaultshield.protect import PLACEHOLDER
 from vaultshield.protect import execute
 from vaultshield.protect import sync as sync_mod
 from vaultshield.protect.agents import antigravity
@@ -527,9 +528,140 @@ def unprotect_command() -> None:
         click.get_current_context().exit(1)
 
 
+# `vaultshield secure`: the one friendly command. Which agents it can add
+# backstops for, each by the config directory whose presence means the agent is
+# set up, with a one-line description of what installing changes.
+_SECURE_AGENTS = [
+    ("antigravity", ".gemini", "exact-path deny rules and a command hook in Antigravity's config"),
+    ("claude-code", ".claude", "Read deny rules and a PreToolUse hook in ~/.claude/settings.json"),
+    ("kiro", ".kiro", "fs_read deny rules and a PreToolUse hook under ~/.kiro"),
+    ("codex", ".codex", "a permission profile (left unselected) and a hook under ~/.codex"),
+]
+
+
+def _secure_install_agent(agent: str, home: Path, root: Path, manifest: Manifest) -> None:
+    """Install one agent's backstops, reusing the existing installers."""
+    if agent == "antigravity":
+        agent_install.install(home, root, manifest)
+    else:
+        agentinstall.install(NEW_AGENTS[agent].install_edits(home, root, manifest))
+
+
+@click.command("secure")
+@click.option(
+    "--dir",
+    "directory",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="The project directory to secure.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Protect without the confirmation prompt. Never installs any agent backstop.",
+)
+def secure_command(directory: Path, yes: bool) -> None:
+    """Protect this project's secrets in one friendly step.
+
+    Shows what it found (names only), asks before changing anything, moves secret
+    values into the macOS Keychain, optionally adds per-agent backstops, and ends
+    with how to undo it.
+    """
+    root = directory.resolve()
+
+    # (a) discovery, in plain English (names and counts only, never values).
+    found = discover(root)
+    if not found:
+        click.echo(f"No secret files found in {root}. Nothing to protect.")
+        return
+    env_files = [f for f in found if f.kind == KIND_ENV]
+    secret_files = [f for f in found if f.kind == KIND_SECRET]
+
+    click.echo(f"VaultShield looked in {root} and found:")
+    for f in env_files:
+        analysis = protector.analyze(root / f.path)
+        if analysis.refusal:
+            click.echo(f"  {f.path} — cannot be protected safely ({analysis.refusal})")
+            continue
+        names = sorted(set(analysis.real) | set(analysis.placeholders))
+        if not names:
+            click.echo(f"  {f.path} — no values to protect")
+        else:
+            count = len(names)
+            click.echo(f"  {f.path} — {count} variable{'s' if count != 1 else ''}: {', '.join(names)}")
+    for f in secret_files:
+        click.echo(f"  {f.path} — a key or credential file (detected only; its contents stay on disk)")
+    click.echo("Only the names are shown above; VaultShield never prints a value.")
+
+    # (b) one confirmation, then the existing protect.
+    if not yes and not click.confirm("Move these secret values into the macOS Keychain now?", default=False):
+        click.echo("Nothing was changed.")
+        return
+    try:
+        report = protector.protect_project(root)
+    except ManifestError as exc:
+        raise click.ClickException(f"{manifest_mod.MANIFEST_DIR}/{manifest_mod.MANIFEST_NAME}: {exc}")
+
+    moved = 0
+    protected_files = 0
+    for result in report.files:
+        if result.status == protector.STATUS_PROTECTED:
+            moved += len(result.names)
+            protected_files += 1
+        elif result.status == protector.STATUS_REFUSED:
+            click.echo(f"  Skipped {result.path}: {result.reason}.")
+    click.echo(
+        f"Moved {moved} value{'s' if moved != 1 else ''} from {protected_files} "
+        f"file{'s' if protected_files != 1 else ''} into the Keychain; the files now hold {PLACEHOLDER}."
+    )
+
+    try:
+        manifest = manifest_mod.load(root)
+    except ManifestError:
+        manifest = None
+
+    # (c) per-agent backstops: detected by config dir, default no, one prompt each.
+    #     Skipped entirely with --yes, which never installs a backstop.
+    installed: list[str] = []
+    home = Path.home()
+    if not yes and manifest is not None and manifest.all_paths():
+        detected = [(agent, why) for agent, dirname, why in _SECURE_AGENTS if (home / dirname).is_dir()]
+        if detected:
+            click.echo("")
+            click.echo("These AI agents are set up on this Mac. The placeholders already protect every")
+            click.echo("agent; the backstops below are optional extra rules (default: no).")
+            for agent, why in detected:
+                if click.confirm(f"  Add backstops for {agent}? (adds {why})", default=False):
+                    try:
+                        _secure_install_agent(agent, home, root, manifest)
+                        installed.append(agent)
+                    except agent_install.InstallError as exc:
+                        click.echo(f"    Could not add {agent} backstops: {exc}")
+
+    # (d) the existing doctor for whatever was installed.
+    if installed and manifest is not None:
+        click.echo("")
+        for agent in installed:
+            _doctor_one(agent, root, manifest, home)
+
+    # (e) a plain summary.
+    click.echo("")
+    click.echo("Summary:")
+    click.echo(
+        f"  Secrets moved to the Keychain: {moved} value{'s' if moved != 1 else ''} "
+        f"in {protected_files} file{'s' if protected_files != 1 else ''}."
+    )
+    if report.detected:
+        click.echo("  Detected but left on disk (not .env format): " + ", ".join(sorted(report.detected)))
+    click.echo("  Agent backstops added: " + (", ".join(installed) if installed else "none") + ".")
+    click.echo("To undo: vaultshield unprotect")
+
+
 def register_protect_commands(group: click.Group) -> None:
     """Adds every Protect command to `group`."""
     group.add_command(protect_command)
+    group.add_command(secure_command)
     group.add_command(unprotect_command)
     group.add_command(exec_command)
     group.add_command(status_command)
