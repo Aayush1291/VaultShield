@@ -12,7 +12,10 @@ from pathlib import Path
 
 import click
 
+from vaultshield import uploader
+from vaultshield.config import ConfigError, load_config
 from vaultshield.protect import execute
+from vaultshield.protect import sync as sync_mod
 from vaultshield.protect.agents import antigravity
 from vaultshield.protect.agents import agentdoctor, agentinstall, claude_code, codex, kiro
 from vaultshield.protect.agents import doctor as agent_doctor
@@ -21,6 +24,14 @@ from vaultshield.protect import manifest as manifest_mod
 from vaultshield.protect import protector
 from vaultshield.protect.discovery import KIND_ENV, KIND_SECRET, discover
 from vaultshield.protect.manifest import Manifest, ManifestError
+
+# The default dashboard backend, matching `vaultshield run`'s `--backend-url`
+# (cli.py `_DEFAULT_BACKEND_URL` / `_BACKEND_URL_ENVVAR`). Spelled here rather
+# than imported, because cli.py imports this module and the reverse import would
+# be circular; the two strings are the one contract `protect sync` shares with
+# `run`, and a test pins them equal.
+_SYNC_DEFAULT_BACKEND_URL = "http://localhost:8000"
+_SYNC_BACKEND_ENVVAR = "VAULTSHIELD_BACKEND_URL"
 
 
 def _line_numbers(lines: list[int]) -> str:
@@ -66,14 +77,24 @@ def _dry_run(root: Path) -> None:
     click.echo("Dry run: nothing was changed.")
 
 
-@click.command("protect")
+@click.group("protect", invoke_without_command=True)
 @click.option(
     "--dry-run",
     is_flag=True,
     help="List the secret files that would be handled. Changes nothing.",
 )
-def protect_command(dry_run: bool) -> None:
-    """Move secret values out of this project's files and into the Keychain."""
+@click.pass_context
+def protect_command(ctx: click.Context, dry_run: bool) -> None:
+    """Move secret values out of this project's files and into the Keychain.
+
+    With no subcommand this protects the current project, exactly as before.
+    `protect sync` pushes recorded protection and orchestrator activity to the
+    dashboard.
+    """
+    # A subcommand (e.g. `protect sync`) runs on its own; the group body is only
+    # the bare `protect` / `protect --dry-run` behaviour.
+    if ctx.invoked_subcommand is not None:
+        return
     root = Path.cwd()
     if dry_run:
         _dry_run(root)
@@ -106,6 +127,79 @@ def protect_command(dry_run: bool) -> None:
     click.echo(f"{moved} variable{'s' if moved != 1 else ''} moved to the Keychain.")
     if report.refused:
         click.get_current_context().exit(1)
+
+
+def _resolve_sync_project(project: str | None, root: Path) -> str:
+    """The backend project id for this sync, resolved like `vaultshield run`:
+    `--project` wins, then `.vaultshield.yml`'s `project:`, else a clear error.
+
+    `--project`, when given, is used without reading `.vaultshield.yml` at all,
+    so a sync works even where there is no config. Otherwise the config is read
+    (and a malformed one surfaces its own error, as `run` would)."""
+    explicit = (project or "").strip()
+    if explicit:
+        return explicit
+    try:
+        config = load_config(root)
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+    resolved = config.project.strip()
+    if not resolved:
+        raise click.ClickException(
+            "No project for this sync: pass --project <project-id> or set "
+            "`project: <project-id>` in .vaultshield.yml (ids are listed by "
+            "the dashboard / GET /api/projects/)."
+        )
+    return resolved
+
+
+@protect_command.command("sync")
+@click.option(
+    "--project",
+    "project",
+    default=None,
+    help="Backend project id to register the Run under. Overrides `project:` in .vaultshield.yml.",
+)
+@click.option(
+    "--backend-url",
+    default=_SYNC_DEFAULT_BACKEND_URL,
+    show_default=True,
+    envvar=_SYNC_BACKEND_ENVVAR,
+    help=f"VaultShield backend the protection log is uploaded to.  [env var: {_SYNC_BACKEND_ENVVAR}]",
+)
+def sync_command(project: str | None, backend_url: str) -> None:
+    """Push unsynced protection and orchestrator activity to the dashboard.
+
+    Reads this project's `.vaultshield/violations.jsonl` and
+    `.vaultshield/orchestrator.jsonl`, uploads whatever is new as one Run (agent
+    `protect`) marked ready for review, and remembers how far it got so the next
+    run sends only what came after. Needs a `vaultshield login` token. If nothing
+    is new, it says so and creates no Run.
+    """
+    root = sync_mod.project_dir(Path.cwd())
+    resolved = _resolve_sync_project(project, root)
+    try:
+        token = uploader.load_token()
+    except uploader.UploadError as exc:
+        raise click.ClickException(str(exc)) from exc
+    try:
+        outcome = sync_mod.perform(root, resolved, backend_url, token)
+    except uploader.UploadError as exc:
+        raise click.ClickException(
+            f"Sync did not complete: {exc} (nothing was marked synced, so the next "
+            "`vaultshield protect sync` resends it)"
+        ) from exc
+    except sync_mod.SyncError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if outcome.nothing:
+        click.echo("nothing to sync")
+        return
+    plural = "s" if outcome.event_count != 1 else ""
+    click.echo(
+        f"Synced {outcome.event_count} event{plural} to run {outcome.run_id} "
+        f"({backend_url}); it is awaiting review in the dashboard."
+    )
 
 
 @click.command("exec", context_settings={"ignore_unknown_options": True})
