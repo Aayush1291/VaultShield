@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VaultShield — your AI agent sees secret names, never values</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --card: #f5f6f8;
+    --border: #d9dce1;
+    --accent: #1f6feb;
+    --code-bg: #0d1117;
+    --code-fg: #e6edf3;
+    --ok: #1a7f37;
+    --warn: #8a6d00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e6e6;
+      --muted: #9aa0a6;
+      --card: #171a21;
+      --border: #2a2f3a;
+      --accent: #58a6ff;
+      --code-bg: #05070a;
+      --code-fg: #e6edf3;
+      --ok: #3fb950;
+      --warn: #d4a72c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 2rem 1.1rem 4rem; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 .6rem; }
+  h2 { font-size: 1.3rem; margin: 2.2rem 0 .6rem; }
+  p { margin: .6rem 0; }
+  .lead { font-size: 1.1rem; color: var(--muted); }
+  ol.steps { padding-left: 0; counter-reset: step; list-style: none; }
+  ol.steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: .2rem 0 .2rem 2.4rem;
+    margin: .9rem 0;
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: .1rem;
+    width: 1.7rem; height: 1.7rem;
+    border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: .95rem;
+  }
+  .cmdbox {
+    display: flex; gap: .5rem; align-items: stretch;
+    background: var(--code-bg);
+    border-radius: 8px; padding: .75rem .85rem; margin: .8rem 0;
+    overflow-x: auto;
+  }
+  .cmdbox code {
+    color: var(--code-fg);
+    font: .95rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre; flex: 1;
+  }
+  button.copy {
+    flex: 0 0 auto;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: 6px;
+    padding: .35rem .7rem; font-size: .85rem; font-weight: 600;
+    cursor: pointer;
+  }
+  button.copy:active { opacity: .8; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    margin: 1rem 0;
+  }
+  ul.plain { list-style: none; padding-left: 0; }
+  ul.plain > li { padding: .3rem 0 .3rem 1.7rem; position: relative; }
+  ul.plain > li .mark { position: absolute; left: 0; top: .35rem; font-weight: 700; }
+  .yes .mark { color: var(--ok); }
+  .no .mark { color: var(--warn); }
+  .measured li.claim { padding: .35rem 0 .35rem 1.7rem; position: relative; }
+  .measured li.claim .mark { position: absolute; left: 0; top: .35rem; font-weight: 700; }
+  .measured li.yes .mark { color: var(--ok); }
+  .measured li.pending .mark { color: var(--warn); }
+  code.inline {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0 .3rem; font-family: ui-monospace, Menlo, monospace; font-size: .9em;
+  }
+  footer { margin-top: 2.5rem; color: var(--muted); font-size: .9rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Your AI coding agent should see the <em>names</em> of your secrets, never the <em>values</em>.</h1>
+  <p class="lead">
+    AI coding tools read your project files to help you — including <code class="inline">.env</code>
+    files full of API keys and passwords. VaultShield moves those values into the macOS Keychain
+    and leaves a harmless placeholder behind, so the agent still sees that a key exists and what it
+    is called, but not the secret itself.
+  </p>
+
+  <h2>Three steps</h2>
+  <ol class="steps">
+    <li><strong>Install.</strong> Paste one command in Terminal. It sets up a private, isolated
+      copy of VaultShield and nothing else on your system.</li>
+    <li><strong>Secure a project.</strong> In your project folder, run
+      <code class="inline">vaultshield secure</code>. It shows what it found, asks before changing
+      anything, and tucks the values into the Keychain.</li>
+    <li><strong>Ask your agent as usual.</strong> Point your AI coding tool at the project. It sees
+      <code class="inline">API_KEY=vs_protected</code>, not your real key.</li>
+  </ol>
+
+  <h2>Install</h2>
+  <p>macOS, one line in Terminal:</p>
+  <div class="cmdbox">
+    <code id="install-cmd">curl -fsSL http://localhost:8080/install.sh | sh</code>
+    <button type="button" class="copy" id="copy-btn">Copy</button>
+  </div>
+  <p class="muted">
+    It finds a Python 3.11+, makes a private environment just for VaultShield, and adds a
+    <code class="inline">vaultshield</code> command. It installs no system software and never edits
+    your shell startup files. Remove it later with
+    <code class="inline">curl -fsSL http://localhost:8080/install.sh | sh -s -- --uninstall</code>.
+  </p>
+
+  <h2>What it protects, and what it does not</h2>
+  <div class="card">
+    <ul class="plain">
+      <li class="yes"><span class="mark">✓</span> The <strong>value</strong> of every variable
+        VaultShield moves out of a <code class="inline">.env</code> file. It lives in the Keychain;
+        the file holds <code class="inline">vs_protected</code>.</li>
+      <li class="yes"><span class="mark">✓</span> The agent can still read variable
+        <strong>names</strong>, so it can reason about your project without seeing a single secret.</li>
+      <li class="yes"><span class="mark">✓</span> You can undo it any time with
+        <code class="inline">vaultshield unprotect</code>, which puts the real values back.</li>
+    </ul>
+    <p class="muted" style="margin-bottom:.3rem">Honest about the limits:</p>
+    <ul class="plain">
+      <li class="no"><span class="mark">!</span> VaultShield protects the files it moves. A value
+        you copied into a comment, another file, git history, or your shell history is not touched.</li>
+      <li class="no"><span class="mark">!</span> A determined program running as <em>you</em> can
+        still try indirect tricks (reading the Keychain through other tools, or encoding a value so a
+        simple filter misses it). VaultShield raises the bar; it is not a sandbox.</li>
+      <li class="no"><span class="mark">!</span> Only results that were actually measured are claimed
+        below. Nothing here is a guarantee.</li>
+    </ul>
+  </div>
+
+  <h2>Measured so far</h2>
+  <div class="card measured">
+    <ul class="plain" id="measured-list">
+      <li class="claim yes"><span class="mark">✓</span> Placeholders held in the Antigravity CLI and App: an agent that got past the rules read the placeholder, not the secret.</li>
+      <li class="claim yes"><span class="mark">✓</span> The command hook blocked printenv live in Antigravity.</li>
+      <li class="claim pending"><span class="mark">○</span> Claude Code, Kiro and Codex backstops are built from docs, not yet live-tested.</li>
+    </ul>
+    <p class="muted">No invented numbers. These are the outcomes of the spike and the live tests that
+      were run; the rest is honestly marked as not yet tested.</p>
+  </div>
+
+  <footer>
+    <p>To try it locally: <code class="inline">cd website &amp;&amp; python3 -m http.server 8080</code>,
+      then open this page and run the install command above.</p>
+  </footer>
+</main>
+
+<script>
+  (function () {
+    var btn = document.getElementById('copy-btn');
+    var cmdEl = document.getElementById('install-cmd');
+    if (!btn || !cmdEl) { return; }
+    function flash(text) {
+      var original = 'Copy';
+      btn.textContent = text;
+      setTimeout(function () { btn.textContent = original; }, 1500);
+    }
+    function fallbackCopy(text) {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'absolute';
+      area.style.left = '-9999px';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      flash(ok ? 'Copied' : 'Copy failed');
+    }
+    btn.addEventListener('click', function () {
+      var text = cmdEl.textContent.trim();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(
+          function () { flash('Copied'); },
+          function () { fallbackCopy(text); }
+        );
+      } else {
+        fallbackCopy(text);
+      }
+    });
+  })();
+</script>
+</body>
+</html>
