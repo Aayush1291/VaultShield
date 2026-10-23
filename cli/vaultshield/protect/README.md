@@ -241,6 +241,56 @@ temporary home, so the real Keychain and the real agent configs were never
 touched. Whether each layer actually blocks a shell read is unverified until you
 run the leak script.
 
+## Seeing protection in the dashboard
+
+The VaultShield dashboard is where humans review agent runs. `vaultshield protect
+sync` puts this project's protection and orchestrator activity there too, so it
+sits next to the sandbox runs.
+
+```
+vaultshield protect sync [--project ID] [--backend-url URL]
+```
+
+It reads this project's `.vaultshield/violations.jsonl` (the hook's denials) and
+`.vaultshield/orchestrator.jsonl` (the orchestrator's call ledger), takes only
+what is new since last time, and uploads it as **one Run** with agent `protect`,
+marked ready for review. Each entry becomes a timeline event:
+
+- a violation -> a `violation` event, its payload as logged (already value-free);
+- an orchestrator call -> an `output` event,
+  `orchestrator: <provider> <model> <outcome> (<request_bytes> bytes)`.
+
+Every payload is scrubbed against this project's vault values in memory before it
+is sent, and the upload is refused if any value would still appear.
+
+How far it got is remembered as byte offsets in `.vaultshield/sync.json`, advanced
+only after the Run is fully uploaded. So running it again sends only what came
+after, a second run with nothing new prints `nothing to sync` and creates no Run,
+and a failed or unreachable upload leaves the offsets untouched — the next
+`protect sync` resends. It uses the token from `vaultshield login`, and resolves
+the backend project the way `run` does: `--project`, then `project:` in
+`.vaultshield.yml`, else a one-line error. `--backend-url` defaults to
+`http://localhost:8000` (or `VAULTSHIELD_BACKEND_URL`), the same as `run`.
+
+In the dashboard a `protect` Run appears in the run history like any other, with
+its agent name and status. Its detail view has nothing to approve or reject, so
+the buttons are left out and it reads **"Protection log: nothing to review"** — it
+is a record, not a decision.
+
+Try it end to end with `spike/sync_smoke.sh` (it is not run for you; it needs your
+local backend, your `vaultshield login`, and a `VS_PROJECT` id).
+
+## Chaining `ask` into `run`
+
+`vaultshield ask` prints an enriched prompt on stdout (its questions and notes go
+to stderr), so `--yes` makes it scriptable and you can feed it straight into a
+Run:
+
+```
+vaultshield run --agent codex --project <project-id> --repo-url <url> \
+  --prompt "$(vaultshield ask --yes 'Add a login page to the shop')"
+```
+
 ## Honest limits
 
 These were checked by tests unless marked otherwise.
