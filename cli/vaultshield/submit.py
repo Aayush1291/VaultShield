@@ -240,6 +240,7 @@ with only the host API replaced; `cli.py` passes none of them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -256,7 +257,12 @@ from vaultshield.git_capture import run_branch_name
 from vaultshield.providers import ProviderError, parse_remote_url
 from vaultshield.providers import github as github_provider
 from vaultshield.providers import gitlab as gitlab_provider
-from vaultshield.run_directory import RunDirectoryError
+from vaultshield.run_directory import (
+    RunDirectoryError,
+    branch_bundle_path,
+    branch_json_path,
+    run_dir_path,
+)
 from vaultshield.uploader import (
     AUTH_HEADER_NAME,
     AUTH_SCHEME,
@@ -876,6 +882,20 @@ def submit(
         root = repo_root if repo_root is not None else Path.cwd()
         remote_url = _remote_url(root, remote)
         host_provider = provider or detect_provider(remote_url)
+
+        # The Run's commit was built in a capture helper that no longer
+        # exists, so before pushing make sure the branch is in this checkout:
+        # import it from `<run_dir>/branch.bundle` if it is not, and first
+        # confirm this checkout is a clone of the repository the Run was taken
+        # from. Both checks are reads/ref-only and happen BEFORE the
+        # credential is resolved and the branch is pushed, so a wrong checkout
+        # or a bad bundle stops the submission with nothing pushed.
+        run_dir = run_dir_path(root, run_id)
+        branch_meta = _load_branch_json(run_dir, run_id)
+        if branch_meta is not None:
+            _check_repo_url_matches(remote_url, run_id, branch_meta, remote)
+        _ensure_run_branch(root, run_id, branch, remote, run_dir, branch_meta)
+
         resolved = (
             credential
             if credential is not None
@@ -1073,6 +1093,273 @@ def _remote_default_branch(repo_root: Path, remote: str) -> str | None:
     if reference.startswith(prefix):
         reference = reference[len(prefix) :]
     return reference or None
+
+
+# --- importing the Run's branch from its bundle (Day-4 submit/bundle gap) ----
+#
+# The Run's commit is built in a capture helper that is destroyed at the end
+# of `run`, so the developer's checkout usually does not have
+# `vaultshield/run-<run_id>`. Step 8 therefore writes `<run_dir>/branch.bundle`
+# (a `git bundle` of `<base>..<branch>`) and `<run_dir>/branch.json`. The
+# helpers below import that branch into this checkout, ref-only, before the
+# push — and first refuse to run against a checkout of a different repository.
+
+
+def _load_branch_json(run_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """Returns the parsed `<run_dir>/branch.json`, or `None` if it is absent.
+
+    Absent is not an error: a Run whose branch adds no commit beyond its base
+    wrote no bundle and no `branch.json` (see
+    `trusted_capture.export_run_bundle`), and a submission whose branch is
+    already in the checkout needs neither. Field-level validation is deferred
+    to the point of use (the `repo_url` check and the bundle import), so a
+    present-but-partial file does not block a submission that does not need
+    the missing field.
+
+    Raises `SubmitError` if the file exists but cannot be read, is not JSON,
+    or is not a JSON object — all of which mean the recorded metadata cannot
+    be trusted.
+    """
+    path = branch_json_path(run_dir)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SubmitError(f"Run {run_id}: cannot read {path}: {exc}") from exc
+
+    try:
+        meta = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise SubmitError(f"Run {run_id}: {path} is not valid JSON: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise SubmitError(f"Run {run_id}: {path} is not a JSON object.")
+    return meta
+
+
+def _check_repo_url_matches(
+    remote_url: str, run_id: str, meta: dict[str, Any], remote: str
+) -> None:
+    """Stops the submission unless this checkout's `remote` points at the same
+    repository the Run was taken from.
+
+    Compares the recorded `repo_url` against `remote_url` by their normalised
+    identity — host (case-insensitively) and path, ignoring a `.git` suffix,
+    embedded userinfo, and whether the URL is SSH or HTTPS (via
+    `providers.parse_remote_url`). Local filesystem remotes, which have no
+    host, are compared as normalised paths instead.
+
+    A recorded `repo_url` that is absent or blank is not compared (there is
+    nothing to compare against). On a genuine mismatch, raises `SubmitError`
+    telling the developer to submit from a checkout of the Run's repository —
+    pushing the Run's branch to an unrelated remote would be the wrong side
+    effect.
+    """
+    recorded = meta.get("repo_url")
+    if not isinstance(recorded, str) or not recorded:
+        return
+    if _same_repository(remote_url, recorded):
+        return
+    raise SubmitError(
+        f"Run {run_id} was produced from {recorded!r}, but git remote "
+        f"{remote!r} in this checkout is {remote_url!r}. Run `vaultshield "
+        f"submit` from a checkout of {recorded!r}."
+    )
+
+
+def _same_repository(a: str, b: str) -> bool:
+    """Whether two git remote URLs identify the same repository, under the
+    normalisation `_check_repo_url_matches` describes."""
+    return _repo_identity(a) == _repo_identity(b)
+
+
+def _repo_identity(url: str):
+    """A comparable identity for a remote URL: `(host.lower(), path)` for a
+    hosted remote, or a normalised path string for a local filesystem remote
+    (which `parse_remote_url` rejects for having no host)."""
+    try:
+        repo = parse_remote_url(url)
+    except ProviderError:
+        return _normalise_local_remote(url)
+    return (repo.host.lower(), repo.path)
+
+
+def _normalise_local_remote(url: str) -> str:
+    """A local remote path reduced for comparison: a `file://` scheme and any
+    trailing slash or `.git` suffix removed."""
+    text = url.strip()
+    if text.startswith("file://"):
+        text = text[len("file://") :]
+    text = text.rstrip("/")
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    return text.rstrip("/")
+
+
+def _ensure_run_branch(
+    repo_root: Path,
+    run_id: str,
+    branch: str,
+    remote: str,
+    run_dir: Path,
+    meta: dict[str, Any] | None,
+) -> None:
+    """Makes sure `branch` is in `repo_root`, importing it from
+    `<run_dir>/branch.bundle` if it is not.
+
+    A no-op when the branch is already present (a prior submit, or a setup
+    where the capture commit landed on the host checkout). Otherwise:
+
+    1. refuse with a clear message if there is no `branch.json` or no bundle
+       file to import from;
+    2. verify the bundle's SHA-256 against `branch.json` before using it;
+    3. if the checkout is missing the base commit the bundle builds on, stop
+       and tell the developer to `git fetch <remote>` first;
+    4. `git bundle verify` as the integrity gate;
+    5. `git fetch <bundle> <branch>:<branch>` — which creates only the branch
+       ref and never checks out or touches the working tree.
+
+    Raises `SubmitError` on any of those stops, before the push.
+    """
+    if _branch_exists(repo_root, branch):
+        return
+
+    bundle = branch_bundle_path(run_dir)
+    if meta is None or not bundle.is_file():
+        raise SubmitError(
+            f"Run {run_id}: branch {branch} is not in this checkout, and no "
+            f"importable bundle was found at {bundle}. Submit from the "
+            "checkout this Run's artifacts were written to, or re-run the Run "
+            "here."
+        )
+
+    expected_sha = _required_meta(meta, "bundle_sha256", run_id)
+    base_oid = _required_meta(meta, "base_oid", run_id)
+    _verify_bundle_sha256(bundle, expected_sha, run_id)
+
+    # Prerequisite: the bundle is thin against `base_oid`, so that commit must
+    # already be in this checkout. Checked explicitly so the message can name
+    # it and point at the fix, exactly as asked.
+    have_base, _out, _err = _git_try(
+        repo_root,
+        ["rev-parse", "--verify", "--quiet", f"{base_oid}^{{commit}}"],
+        step="checking for the run's base commit",
+    )
+    if have_base != 0:
+        raise SubmitError(
+            f"Run {run_id}: this checkout is missing commit {base_oid}, which "
+            f"branch {branch} builds on. Run `git fetch {remote}` first, then "
+            "retry `vaultshield submit`."
+        )
+
+    verify_code, _vout, verr = _git_try(
+        repo_root,
+        ["bundle", "verify", str(bundle)],
+        step=f"verifying the run branch bundle {bundle}",
+    )
+    if verify_code != 0:
+        detail = " ".join(verr.split()) or "git bundle verify reported it unusable"
+        raise SubmitError(
+            f"Run {run_id}: the branch bundle {bundle} is not usable: "
+            f"{detail[:200]}"
+        )
+
+    # Ref-only import: `<branch>:<branch>` writes refs/heads/<branch> and
+    # nothing else. `git fetch` never checks out or disturbs the working tree.
+    _git(
+        repo_root,
+        ["fetch", str(bundle), f"{branch}:{branch}"],
+        step=f"importing branch {branch} from the run bundle",
+    )
+
+
+def _branch_exists(repo_root: Path, branch: str) -> bool:
+    """Whether `refs/heads/<branch>` exists in `repo_root`.
+
+    `git show-ref --verify --quiet` exits 0 when the ref exists and non-zero
+    when it does not, so the branch's absence is an expected answer rather
+    than an error — which is why this uses `_git_try` and not `_git`.
+    """
+    code, _out, _err = _git_try(
+        repo_root,
+        ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        step=f"checking for branch {branch}",
+    )
+    return code == 0
+
+
+def _required_meta(meta: dict[str, Any], key: str, run_id: str) -> str:
+    """Returns a required non-empty string field of `branch.json`, raising
+    `SubmitError` if it is missing or not a usable string.
+
+    Called only on the import path, so the Run branch is never imported from a
+    bundle whose recorded base commit or digest is missing.
+    """
+    value = meta.get(key)
+    if not isinstance(value, str) or not value:
+        raise SubmitError(
+            f"Run {run_id}: branch.json has no usable {key!r}, so the run "
+            "branch cannot be imported safely."
+        )
+    return value
+
+
+def _verify_bundle_sha256(bundle: Path, expected: str, run_id: str) -> None:
+    """Raises `SubmitError` unless `bundle`'s SHA-256 equals `expected`
+    (`branch.json`'s `bundle_sha256`), read in bounded chunks so a large
+    bundle is not held in memory."""
+    digest = hashlib.sha256()
+    try:
+        with open(bundle, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise SubmitError(
+            f"Run {run_id}: cannot read the branch bundle {bundle}: {exc}"
+        ) from exc
+    actual = digest.hexdigest()
+    if actual != expected:
+        raise SubmitError(
+            f"Run {run_id}: the branch bundle {bundle} does not match the "
+            f"SHA-256 recorded in branch.json (expected {expected}, got "
+            f"{actual}), so it was not used. Re-run this Run to rebuild it."
+        )
+
+
+def _git_try(
+    repo_root: Path,
+    args: list[str],
+    *,
+    step: str,
+    env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
+    """Runs one `git` command like `_git`, but returns
+    `(returncode, stdout, stderr)` instead of raising on a non-zero exit.
+
+    For checks whose "failure" exit code is an expected answer rather than an
+    error — a branch that is absent, a bundle whose prerequisites are not yet
+    present. A git that cannot be run at all, or that times out, is still a
+    `SubmitError`.
+    """
+    command = ["git", *args]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env={**os.environ, **(env or {})},
+            timeout=_GIT_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SubmitError(
+            f"Timed out after {_GIT_TIMEOUT_S:.0f}s while {step}."
+        ) from exc
+    except OSError as exc:
+        raise SubmitError(f"Cannot run git while {step}: {exc}") from exc
+    return completed.returncode, completed.stdout, completed.stderr
 
 
 def git_credential_args(
