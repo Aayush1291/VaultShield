@@ -386,6 +386,24 @@ export function createApiClient({
     },
 
     /**
+     * Follow a DRF pagination link (`next`/`previous` from a list response).
+     *
+     * The link is taken from the previous page's payload. Only its path and
+     * query are used, never its host: DRF builds these links with
+     * `request.build_absolute_uri`, so behind the dashboard's `changeOrigin`
+     * proxy the host would be the backend's (`web:8000`), which the browser
+     * cannot reach. Following path + query keeps the request same-origin, like
+     * every other call here.
+     *
+     * @param {string} url a `next`/`previous` URL from a list response
+     * @param {{ signal?: AbortSignal }} [options]
+     */
+    followPage(url, options = {}) {
+      const { pathname, search } = new URL(url, 'http://vaultshield.invalid');
+      return request(`${pathname}${search}`, options);
+    },
+
+    /**
      * `POST /api/runs/` — create a Run for an existing Project.
      *
      * @param {object} run

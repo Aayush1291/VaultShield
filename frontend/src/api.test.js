@@ -96,6 +96,16 @@ describe('request construction', () => {
     });
   });
 
+  it('follows a pagination link by path and query only, dropping the backend host', async () => {
+    const fetchImpl = recordingFetch(jsonResponse({ count: 0, next: null, previous: null, results: [] }));
+    const { client } = makeClient({ fetchImpl });
+
+    // DRF builds this with the proxied host; following it must stay same-origin.
+    await client.followPage('http://web:8000/api/runs/?project=7&page=2');
+
+    expect(fetchImpl.calls[0].url).toBe('/api/runs/?project=7&page=2');
+  });
+
   it('deletes a project by id with a DELETE and resolves null on 204', async () => {
     const fetchImpl = recordingFetch(jsonResponse(undefined, { status: 204, statusText: '' }));
     const { client } = makeClient({ fetchImpl });
