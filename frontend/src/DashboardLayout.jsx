@@ -248,7 +248,7 @@ export default function DashboardLayout() {
             )}
           </header>
 
-          <main className="w-full flex-1 px-4 py-8 md:px-8">
+          <main className="w-full flex-1 px-6 py-8 md:px-8">
             <Outlet
               context={{
                 projects,

@@ -51,8 +51,15 @@ const LANDING_CSS = `
   --shadow:0 1px 2px rgba(15,23,42,.05), 0 12px 32px rgba(15,23,42,.08);
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  color-scheme:light dark; background:var(--bg); color:var(--fg);
+  color-scheme:light dark; color:var(--fg);
   font:16px/1.65 var(--sans); min-height:100vh; -webkit-font-smoothing:antialiased;
+  /* Full-bleed gradient wash behind the whole page (spans the viewport
+     because .vs-landing is the full-width root), over the base canvas. */
+  background-color:var(--bg);
+  background-image:
+    radial-gradient(70% 45% at 50% -8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 72%),
+    radial-gradient(45% 35% at 92% 2%, color-mix(in srgb, var(--accent-2) 14%, transparent), transparent 70%);
+  background-repeat:no-repeat;
 }
 @media (prefers-color-scheme: dark) {
   .vs-landing {
@@ -65,7 +72,7 @@ const LANDING_CSS = `
 }
 .vs-landing *, .vs-landing *::before, .vs-landing *::after { box-sizing:border-box; }
 .vs-landing a { color:var(--accent); }
-.vs-landing .page { max-width:880px; margin:0 auto; padding:1.5rem 1.2rem 5rem; }
+.vs-landing .page { max-width:1240px; margin:0 auto; padding:1.5rem 1.5rem 5rem; }
 .vs-landing .topnav { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
 .vs-landing .topnav .links { display:flex; align-items:center; gap:.9rem; font-size:.92rem; }
 .vs-landing .wordmark { display:flex; align-items:center; gap:.55rem; font-weight:600; letter-spacing:-.01em; }
@@ -95,7 +102,7 @@ const LANDING_CSS = `
 .vs-landing button.copy { flex:0 0 auto; background:var(--accent); color:var(--on-accent); border:none; border-radius:10px; padding:.4rem .8rem; font:600 .85rem var(--sans); cursor:pointer; }
 .vs-landing button.copy:active { opacity:.85; }
 .vs-landing .hero-grid { display:grid; gap:1.6rem; grid-template-columns:1fr; align-items:start; }
-@media (min-width:760px) { .vs-landing .hero-grid { grid-template-columns:1.1fr .9fr; } }
+@media (min-width:1024px) { .vs-landing .hero-grid { grid-template-columns:1.1fr .9fr; gap:2.5rem; } }
 .vs-landing .term { background:var(--code-bg); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
 .vs-landing .term-bar { display:flex; gap:.4rem; padding:.6rem .8rem; border-bottom:1px solid rgba(255,255,255,.08); }
 .vs-landing .term-bar i { width:.65rem; height:.65rem; border-radius:50%; background:#3a3f4b; }
