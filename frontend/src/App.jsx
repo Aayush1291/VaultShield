@@ -33,7 +33,7 @@
  * drive.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import api from './api.js';
 import LoginView from './LoginView.jsx';
@@ -107,6 +107,126 @@ function guardClient(client, onUnauthorized) {
 }
 
 /**
+ * Confirm-before-delete modal for a Project (Task: delete project).
+ *
+ * A genuine modal: `role="dialog"` + `aria-modal`, focus moved inside on open
+ * and returned to the trigger on close, Escape cancels, and Tab is trapped
+ * within the panel so keyboard focus cannot wander behind it. It names the
+ * Project and spells out that its runs go with it, because the delete cascades
+ * every Run and artifact under the Project and cannot be undone.
+ *
+ * It owns no delete state of its own — pending, error, and the request all
+ * live in `App`, which is where the success path (clear selection, reload the
+ * sidebar) has to happen. This component only renders that state and reports
+ * the two intents: confirm and cancel.
+ *
+ * @param {{ project: { id?: string|number, name?: string }, pending: boolean,
+ *           error: unknown, onConfirm: () => void, onCancel: () => void,
+ *           returnFocusRef: { current: HTMLElement|null } }} props
+ */
+function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, returnFocusRef }) {
+  const panelRef = useRef(null);
+  const cancelRef = useRef(null);
+
+  // Move focus into the dialog on open; hand it back to the trigger on close.
+  // The trigger is captured now because by cleanup time a successful delete
+  // has already unmounted it (focusing a detached node is then a harmless
+  // no-op); on cancel it is still mounted and focus returns to it.
+  useEffect(() => {
+    const trigger = returnFocusRef?.current ?? null;
+    cancelRef.current?.focus();
+    return () => trigger?.focus?.();
+  }, [returnFocusRef]);
+
+  function handleKeyDown(event) {
+    if (event.key === 'Escape') {
+      if (!pending) onCancel();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    // Trap Tab within the panel so focus cannot leave an aria-modal dialog.
+    const focusable = panelRef.current?.querySelectorAll(
+      'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusable || focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Visual overlay; clicking it cancels. Kept out of the tab order
+          (tabIndex -1) so the trap below only cycles the panel's controls. */}
+      <button
+        type="button"
+        aria-label="Close dialog"
+        tabIndex={-1}
+        onClick={() => {
+          if (!pending) onCancel();
+        }}
+        className="absolute inset-0 bg-black/50"
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-project-title"
+        aria-describedby="delete-project-description"
+        onKeyDown={handleKeyDown}
+        className="relative z-10 w-full max-w-md rounded-card-lg border border-border bg-surface p-6 shadow-soft"
+      >
+        <h2 id="delete-project-title" className="text-lg font-semibold text-fg">
+          Delete {project.name}?
+        </h2>
+        <p id="delete-project-description" className="mt-2 text-sm text-fg-muted">
+          This permanently deletes{' '}
+          <span className="font-medium text-fg">{project.name}</span> and all of its runs. This
+          can&rsquo;t be undone.
+        </p>
+
+        {error !== null && error !== undefined && (
+          <p
+            role="alert"
+            className="mt-4 rounded-card border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+          >
+            Could not delete the project. Please try again.
+          </p>
+        )}
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            ref={cancelRef}
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="rounded-card border border-border bg-surface px-4 py-2 text-sm font-medium text-fg-muted hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={pending}
+            className="rounded-card border border-red-600 bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {pending ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * @param {{ client?: typeof api }} props `client` defaults to the shared
  *   singleton, matching the views; a test injects one with `createApiClient`.
  */
@@ -115,6 +235,17 @@ export default function App({ client = api }) {
   const [selectedProject, setSelectedProject] = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Delete-project flow (the modal below). `confirming` is whether the dialog
+  // is open; `pending`/`error` carry the in-flight DELETE's state.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+  // Bumped after a successful delete to remount `ProjectListView` (via its
+  // `key`), which re-runs its fetch-on-mount and drops the gone Project — the
+  // same reload the list does for itself after a create, driven from here.
+  const [sidebarReloadKey, setSidebarReloadKey] = useState(0);
+  // So the dialog can return focus to the control that opened it on close.
+  const deleteButtonRef = useRef(null);
 
   const guardedClient = useMemo(
     () =>
@@ -134,6 +265,9 @@ export default function App({ client = api }) {
     setSelectedProject(project);
     setSelectedRun(null);
     setDrawerOpen(false);
+    // A dialog opened for the previous Project must not linger over the new one.
+    setConfirmingDelete(false);
+    setDeleteError(null);
   }
 
   function handleSignOut() {
@@ -142,6 +276,46 @@ export default function App({ client = api }) {
     setSelectedProject(null);
     setSelectedRun(null);
     setDrawerOpen(false);
+    setConfirmingDelete(false);
+    setDeleteError(null);
+  }
+
+  /** Open the confirm dialog, clearing any error left from a prior attempt. */
+  function openDeleteDialog() {
+    setDeleteError(null);
+    setConfirmingDelete(true);
+  }
+
+  /** Close the dialog without deleting (Cancel, Escape, or the overlay). */
+  function cancelDelete() {
+    setConfirmingDelete(false);
+    setDeleteError(null);
+  }
+
+  /**
+   * Delete the selected Project, then drop it everywhere and reload the list.
+   *
+   * On success the Project and whatever Run was open are cleared (both belong
+   * to a Project that no longer exists), the mobile drawer is closed, and the
+   * sidebar is remounted to re-fetch without the gone Project. A failure keeps
+   * the dialog open with its error shown so the Reviewer can retry or cancel.
+   */
+  async function confirmDeleteProject() {
+    if (!selectedProject) return;
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      await guardedClient.deleteProject(selectedProject.id);
+      setConfirmingDelete(false);
+      setSelectedProject(null);
+      setSelectedRun(null);
+      setDrawerOpen(false);
+      setSidebarReloadKey((key) => key + 1);
+    } catch (error) {
+      setDeleteError(error);
+    } finally {
+      setDeletePending(false);
+    }
   }
 
   if (!signedIn) {
@@ -178,6 +352,7 @@ export default function App({ client = api }) {
 
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
             <ProjectListView
+              key={sidebarReloadKey}
               client={guardedClient}
               onSelectProject={selectProject}
               selectedProjectId={selectedProject?.id ?? null}
@@ -239,6 +414,19 @@ export default function App({ client = api }) {
                 )}
               </ol>
             </nav>
+
+            {/* Delete the open Project. Only meaningful once one is selected,
+                so it is absent otherwise rather than disabled. */}
+            {selectedProject && (
+              <button
+                ref={deleteButtonRef}
+                type="button"
+                onClick={openDeleteDialog}
+                className="ml-auto inline-flex shrink-0 items-center rounded-card border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/40"
+              >
+                Delete project
+              </button>
+            )}
           </header>
 
           <main className="mx-auto w-full max-w-4xl flex-1 space-y-10 px-4 py-8 md:px-8">
@@ -253,6 +441,17 @@ export default function App({ client = api }) {
           </main>
         </div>
       </div>
+
+      {confirmingDelete && selectedProject && (
+        <DeleteProjectDialog
+          project={selectedProject}
+          pending={deletePending}
+          error={deleteError}
+          onConfirm={confirmDeleteProject}
+          onCancel={cancelDelete}
+          returnFocusRef={deleteButtonRef}
+        />
+      )}
     </div>
   );
 }

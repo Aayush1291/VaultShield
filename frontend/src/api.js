@@ -354,6 +354,20 @@ export function createApiClient({
      */
     createProject: (project) => request('/api/projects/', { method: 'POST', body: project }),
 
+    /**
+     * `DELETE /api/projects/:id/` — delete a Project and everything under it
+     * (its Runs and their events, diff, screenshots, approval, security
+     * findings, and sandbox records). Answers `204 No Content`, which
+     * `request` returns as `null`.
+     *
+     * The id is the Project's pk (a MongoDB ObjectId string), as returned by
+     * `listProjects`.
+     *
+     * @param {string|number} id
+     */
+    deleteProject: (id) =>
+      request(`/api/projects/${encodeURIComponent(id)}/`, { method: 'DELETE' }),
+
     // --- Runs -------------------------------------------------------------
 
     /**
