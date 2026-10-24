@@ -42,6 +42,40 @@ for URL-addressable views yet, so no routing library is pulled in. Both views
 stay mounted, and `RunHistoryView` renders a "select a project" prompt until
 one is picked rather than requesting an unfiltered run list.
 
+## Signing in and creating projects
+
+The dashboard uses **single-user MVP authentication**: one shared account and a
+token, with no sign-up, no password reset, and no multi-user roles. It is
+deliberately minimal and is not a substitute for real multi-user auth.
+
+**Signing in.** With no token stored, the app shows a sign-in screen
+(`LoginView`) instead of the three views. Enter the dashboard account's username
+and password and submit; on success `POST /api/auth/login/` returns a token,
+which the client stores. A wrong username or password shows "Wrong username or
+password" and stores nothing; a backend that cannot be reached shows "Cannot
+reach the VaultShield backend". The password and the token are never logged or
+rendered. This replaces pasting a token into the browser console.
+
+Once signed in, a **Sign out** link in the header clears the stored token and
+returns to the sign-in screen. If any view's request is refused as
+unauthenticated (401/403) — typically an expired or cleared token — the token is
+dropped and the sign-in screen returns automatically.
+
+**Creating a project.** The project list has a **New project** button that opens
+a small form with Name and Repository URL. The URL field accepts both
+`https://…` and `git@…:…` remotes; both fields are required and trimmed.
+Submitting calls `POST /api/projects/`; on success the form closes, the list
+reloads, and the new project is selected (opening its run history). This
+replaces the old `curl` step. Duplicate names are allowed — the backend decides
+— so a name clash comes back as a `400` shown next to the Name field, alongside
+any other field errors.
+
+**Where the token lives.** The Dashboard_Auth_Token is still kept in
+`localStorage` (key `vaultshield.dashboard_auth_token`), falling back to memory
+for the session where storage writes throw — signing in through the UI stores it
+exactly the way pasting it into the console did. It is not an httpOnly cookie;
+again, this is MVP single-user auth, not a hardened session.
+
 ## Development setup
 
 ```bash
