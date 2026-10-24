@@ -48,15 +48,34 @@ function dashFetch({ createStatus = 201 } = {}) {
   });
 }
 
-function renderDashboard(fetchImpl) {
+function renderDashboard(fetchImpl, path = '/dashboard') {
   const store = createMemoryTokenStore();
   store.set('active-token');
   const client = createApiClient({ fetchImpl, tokenStore: store });
   render(
-    <MemoryRouter initialEntries={['/dashboard']}>
+    <MemoryRouter initialEntries={[path]}>
       <App client={client} />
     </MemoryRouter>,
   );
+}
+
+const PROJECT = { id: 7, name: 'checkout', repo_url: 'git@github.com:acme/checkout.git' };
+
+/** Project list answers [PROJECT] until a DELETE lands, then empty. */
+function deleteFetch() {
+  let deleted = false;
+  return jest.fn(async (url, init = {}) => {
+    const method = init.method ?? 'GET';
+    if (url.startsWith('/api/projects/') && method === 'DELETE') {
+      deleted = true;
+      return resp(undefined);
+    }
+    if (url.startsWith('/api/projects/')) {
+      const list = deleted ? [] : [PROJECT];
+      return resp({ count: list.length, next: null, results: list });
+    }
+    return resp({ count: 0, next: null, results: [] });
+  });
 }
 
 it('opens an accessible New project modal from the sidebar and moves focus into it', async () => {
@@ -125,4 +144,52 @@ it('surfaces a backend 400 inside the still-open modal', async () => {
   // The field error is shown and the modal stays open.
   expect(await screen.findByText('already taken')).toBeInTheDocument();
   expect(screen.getByRole('dialog')).toBeInTheDocument();
+});
+
+// --- delete project (top-bar control on a project route) -------------------
+
+it('shows the Delete project control on a project route and confirms before deleting', async () => {
+  renderDashboard(deleteFetch(), '/dashboard/projects/7');
+
+  // The control appears once the project is resolved from the loaded list.
+  const trigger = await screen.findByRole('button', { name: 'Delete project' });
+  await userEvent.click(trigger);
+
+  const dialog = screen.getByRole('dialog');
+  expect(dialog).toHaveAttribute('aria-modal', 'true');
+  expect(dialog).toHaveTextContent(PROJECT.name);
+  expect(dialog).toHaveTextContent(/runs/i);
+});
+
+it('deletes the project and navigates back to the overview', async () => {
+  const fetchImpl = deleteFetch();
+  renderDashboard(fetchImpl, '/dashboard/projects/7');
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Delete project' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+  await waitFor(() =>
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/projects/7/',
+      expect.objectContaining({ method: 'DELETE' }),
+    ),
+  );
+  // Back on the overview, and the control is gone. The empty message shows in
+  // both the sidebar and the overview once the project list is empty.
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect((await screen.findAllByText(/No projects yet/i)).length).toBeGreaterThan(0);
+  expect(screen.queryByRole('button', { name: 'Delete project' })).not.toBeInTheDocument();
+});
+
+it('cancels the delete on Escape without deleting', async () => {
+  const fetchImpl = deleteFetch();
+  renderDashboard(fetchImpl, '/dashboard/projects/7');
+
+  const trigger = await screen.findByRole('button', { name: 'Delete project' });
+  await userEvent.click(trigger);
+  await userEvent.keyboard('{Escape}');
+
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+  expect(fetchImpl).not.toHaveBeenCalledWith('/api/projects/7/', expect.objectContaining({ method: 'DELETE' }));
 });
