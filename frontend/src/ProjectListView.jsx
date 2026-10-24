@@ -21,7 +21,6 @@ import { useEffect, useState } from 'react';
 
 import api, { unwrapResults } from './api.js';
 import { describeLoadFailure as describeFailure, formatDate } from './format.js';
-import NewProjectForm from './NewProjectForm.jsx';
 
 /**
  * Marks one rendered Project card.
@@ -170,14 +169,14 @@ export default function ProjectListView({
   onSelectProject,
   selectedProjectId = null,
   onProjectsLoaded,
+  onNewProject,
+  newProjectButtonRef,
 }) {
   // `null` distinguishes "not loaded yet" from the genuinely empty list, so
   // the first paint is a loading line rather than a flash of the empty state.
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState(null);
   const [reloadCount, setReloadCount] = useState(0);
-  // The "New project" form is open or closed; closed to start.
-  const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -215,18 +214,6 @@ export default function ProjectListView({
 
   const loading = projects === null && error === null;
 
-  /**
-   * After a Project is created: close the form, reload the list through the
-   * view's existing reload mechanism, and open the new Project's run history.
-   *
-   * @param {object} project the created record the backend returned
-   */
-  function handleProjectCreated(project) {
-    setShowForm(false);
-    setReloadCount((count) => count + 1);
-    if (typeof onSelectProject === 'function') onSelectProject(project);
-  }
-
   return (
     <section aria-labelledby="project-list-heading">
       <div className="mb-3 flex items-baseline justify-between gap-2">
@@ -244,21 +231,13 @@ export default function ProjectListView({
       </div>
 
       <button
+        ref={newProjectButtonRef}
         type="button"
-        onClick={() => setShowForm((open) => !open)}
-        aria-expanded={showForm}
+        onClick={onNewProject}
         className="mb-3 w-full rounded-card border border-border bg-surface px-3 py-2 text-left text-sm font-medium text-fg hover:border-border-strong hover:text-accent"
       >
         <span aria-hidden="true" className="mr-1 text-accent">+</span>New project
       </button>
-
-      {showForm && (
-        <NewProjectForm
-          client={client}
-          onCreated={handleProjectCreated}
-          onCancel={() => setShowForm(false)}
-        />
-      )}
 
       {loading && (
         <p role="status" className="text-sm text-fg-subtle">

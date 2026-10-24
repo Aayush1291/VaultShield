@@ -21,6 +21,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useNavigate, useParams } from 'react-router-dom';
 
+import Modal from './Modal.jsx';
+import NewProjectForm from './NewProjectForm.jsx';
 import ProjectListView from './ProjectListView.jsx';
 import { useAuth } from './auth.jsx';
 
@@ -68,6 +70,13 @@ export default function DashboardLayout() {
   const [deleteError, setDeleteError] = useState(null);
   const deleteButtonRef = useRef(null);
 
+  // New-project modal: whether it is open, whether a create is in flight (so
+  // the modal refuses to close mid-request), and the button to restore focus
+  // to on close.
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const newProjectButtonRef = useRef(null);
+
   const currentProject = projects.find((p) => String(p?.id) === String(projectId)) ?? null;
 
   function selectProject(project) {
@@ -84,6 +93,13 @@ export default function DashboardLayout() {
 
   function reloadProjects() {
     setSidebarReloadKey((key) => key + 1);
+  }
+
+  /** After a create: close the modal, refresh the sidebar, open the new one. */
+  function handleProjectCreated(project) {
+    setNewProjectOpen(false);
+    reloadProjects();
+    navigate(`/dashboard/projects/${encodeURIComponent(project.id)}`);
   }
 
   function openDeleteDialog() {
@@ -147,6 +163,8 @@ export default function DashboardLayout() {
               onSelectProject={selectProject}
               selectedProjectId={projectId ?? null}
               onProjectsLoaded={setProjects}
+              onNewProject={() => setNewProjectOpen(true)}
+              newProjectButtonRef={newProjectButtonRef}
             />
           </div>
 
@@ -233,6 +251,22 @@ export default function DashboardLayout() {
           </main>
         </div>
       </div>
+
+      {newProjectOpen && (
+        <Modal
+          title="New project"
+          onClose={() => setNewProjectOpen(false)}
+          closeDisabled={creating}
+          returnFocusRef={newProjectButtonRef}
+        >
+          <NewProjectForm
+            client={client}
+            onCreated={handleProjectCreated}
+            onCancel={() => setNewProjectOpen(false)}
+            onPendingChange={setCreating}
+          />
+        </Modal>
+      )}
 
       {confirmingDelete && currentProject && (
         <DeleteProjectDialog

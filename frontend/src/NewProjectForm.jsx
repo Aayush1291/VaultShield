@@ -28,16 +28,19 @@
  * which the client already built from the response.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import api from './api.js';
 
 /**
  * @param {{ client?: typeof api,
  *           onCreated?: (project: object) => void,
- *           onCancel?: () => void }} props
+ *           onCancel?: () => void,
+ *           onPendingChange?: (pending: boolean) => void }} props
+ *   `onPendingChange` lets a container (e.g. the New project modal) learn when
+ *   a create is in flight, so it can refuse to close mid-request.
  */
-export default function NewProjectForm({ client = api, onCreated, onCancel }) {
+export default function NewProjectForm({ client = api, onCreated, onCancel, onPendingChange }) {
   const [name, setName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [pending, setPending] = useState(false);
@@ -45,6 +48,11 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
   // straight onto the inputs.
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState(null);
+
+  // Report the in-flight state up so a container can block its own close.
+  useEffect(() => {
+    if (typeof onPendingChange === 'function') onPendingChange(pending);
+  }, [pending, onPendingChange]);
 
   async function handleSubmit(event) {
     event.preventDefault();

@@ -9,6 +9,10 @@
  * The transport is injected via `createApiClient({ fetchImpl })`, the same way
  * `src/api.test.js` does it, so these render the real component against the
  * real client with nothing mocked out of the middle.
+ *
+ * Creating a project is no longer an inline form here — it opens the New
+ * project modal (step 5), so that flow is covered in `DashboardLayout.test.jsx`
+ * rather than against this component.
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -72,6 +76,29 @@ it('requests the project list endpoint once and renders one card per Project', a
   expect(cards[2]).not.toHaveTextContent('Created');
 });
 
+it('hands the loaded records up through onProjectsLoaded', async () => {
+  const { client } = clientReturning(
+    jsonResponse({ count: 3, next: null, previous: null, results: PROJECTS }),
+  );
+  const onProjectsLoaded = jest.fn();
+
+  render(<ProjectListView client={client} onProjectsLoaded={onProjectsLoaded} />);
+
+  await screen.findAllByTestId(PROJECT_CARD_TESTID);
+  expect(onProjectsLoaded).toHaveBeenCalledWith(PROJECTS);
+});
+
+it('invokes onNewProject when the New project button is pressed', async () => {
+  const { client } = clientReturning(jsonResponse({ count: 0, next: null, previous: null, results: [] }));
+  const onNewProject = jest.fn();
+
+  render(<ProjectListView client={client} onNewProject={onNewProject} />);
+  await screen.findByText(EMPTY_PROJECTS_MESSAGE);
+
+  await userEvent.click(screen.getByRole('button', { name: 'New project' }));
+  expect(onNewProject).toHaveBeenCalledTimes(1);
+});
+
 it('renders an empty state when the backend returns no Projects', async () => {
   const { client } = clientReturning(jsonResponse({ count: 0, next: null, previous: null, results: [] }));
 
@@ -127,132 +154,4 @@ describe('formatCreatedAt', () => {
       expect(formatCreatedAt(value)).toBe('');
     }
   });
-});
-
-// --- the New project form ---------------------------------------------------
-
-const CREATED_PROJECT = {
-  id: 7,
-  name: 'new-service',
-  repo_url: 'git@github.com:acme/new-service.git',
-  created_at: '2024-06-01T10:00:00Z',
-};
-
-async function openNewProjectForm() {
-  await userEvent.click(screen.getByRole('button', { name: 'New project' }));
-}
-
-it('creates a project, closes the form, reloads the list, and selects it', async () => {
-  const { client, calls } = clientReturning(
-    jsonResponse({ count: 0, next: null, previous: null, results: [] }), // initial load
-    jsonResponse(CREATED_PROJECT, { status: 201, statusText: 'Created' }), // createProject
-    jsonResponse({ count: 1, next: null, previous: null, results: [CREATED_PROJECT] }), // reload
-  );
-  const onSelectProject = jest.fn();
-
-  render(<ProjectListView client={client} onSelectProject={onSelectProject} />);
-  await screen.findByText(EMPTY_PROJECTS_MESSAGE);
-
-  await openNewProjectForm();
-  // Leading/trailing whitespace is trimmed before the request.
-  await userEvent.type(screen.getByLabelText('Name'), '  new-service  ');
-  await userEvent.type(
-    screen.getByLabelText('Repository URL'),
-    '  git@github.com:acme/new-service.git  ',
-  );
-  await userEvent.click(screen.getByRole('button', { name: 'Create project' }));
-
-  await waitFor(() => expect(onSelectProject).toHaveBeenCalledWith(CREATED_PROJECT));
-
-  const createCall = calls.find((call) => call.init?.method === 'POST');
-  expect(createCall.url).toBe('/api/projects/');
-  expect(JSON.parse(createCall.init.body)).toEqual({
-    name: 'new-service',
-    repo_url: 'git@github.com:acme/new-service.git',
-  });
-
-  // The form closed, and the list reloaded (a second GET) now showing the card.
-  expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
-  const listCalls = calls.filter((call) => (call.init?.method ?? 'GET') === 'GET');
-  expect(listCalls).toHaveLength(2);
-  expect(await screen.findByTestId(PROJECT_CARD_TESTID)).toHaveTextContent('new-service');
-});
-
-it('requires both fields and does not call the backend when either is empty', async () => {
-  const { client, calls } = clientReturning(
-    jsonResponse({ count: 0, next: null, previous: null, results: [] }),
-  );
-
-  render(<ProjectListView client={client} onSelectProject={jest.fn()} />);
-  await screen.findByText(EMPTY_PROJECTS_MESSAGE);
-
-  await openNewProjectForm();
-  await userEvent.click(screen.getByRole('button', { name: 'Create project' }));
-
-  expect(await screen.findByText('Name is required.')).toBeInTheDocument();
-  expect(screen.getByText('Repository URL is required.')).toBeInTheDocument();
-  // Nothing was posted: only the initial list GET was ever made.
-  expect(calls.filter((call) => call.init?.method === 'POST')).toHaveLength(0);
-  // The form stays open.
-  expect(screen.getByLabelText('Name')).toBeInTheDocument();
-});
-
-it('shows a backend 400 next to the matching field (duplicate names are the backend\'s call)', async () => {
-  const { client } = clientReturning(
-    jsonResponse({ count: 0, next: null, previous: null, results: [] }),
-    jsonResponse(
-      {
-        name: ['project with this name already exists.'],
-        repo_url: ['Enter a valid repository URL.'],
-      },
-      { status: 400, statusText: 'Bad Request' },
-    ),
-  );
-
-  render(<ProjectListView client={client} onSelectProject={jest.fn()} />);
-  await screen.findByText(EMPTY_PROJECTS_MESSAGE);
-
-  await openNewProjectForm();
-  await userEvent.type(screen.getByLabelText('Name'), 'checkout-service');
-  await userEvent.type(screen.getByLabelText('Repository URL'), 'git@github.com:acme/checkout.git');
-  await userEvent.click(screen.getByRole('button', { name: 'Create project' }));
-
-  // The request was made (no client-side duplicate check), and each field
-  // error landed under its field.
-  expect(await screen.findByText('project with this name already exists.')).toBeInTheDocument();
-  expect(screen.getByText('Enter a valid repository URL.')).toBeInTheDocument();
-  // The form stays open so the Reviewer can fix the input.
-  expect(screen.getByLabelText('Name')).toBeInTheDocument();
-});
-
-it('prevents a double submit while the create is in flight', async () => {
-  let resolveCreate;
-  let postCount = 0;
-  const fetchImpl = jest.fn(async (url, init) => {
-    if ((init?.method ?? 'GET') === 'POST') {
-      postCount += 1;
-      return new Promise((resolve) => {
-        resolveCreate = resolve;
-      });
-    }
-    return jsonResponse({ count: 0, next: null, previous: null, results: [] });
-  });
-  const client = createApiClient({ fetchImpl, tokenStore: createMemoryTokenStore() });
-
-  render(<ProjectListView client={client} onSelectProject={jest.fn()} />);
-  await screen.findByText(EMPTY_PROJECTS_MESSAGE);
-
-  await openNewProjectForm();
-  await userEvent.type(screen.getByLabelText('Name'), 'svc');
-  await userEvent.type(screen.getByLabelText('Repository URL'), 'git@github.com:acme/svc.git');
-
-  const submit = screen.getByRole('button', { name: 'Create project' });
-  await userEvent.click(submit); // first submit: create is now in flight
-  expect(submit).toBeDisabled();
-  await userEvent.click(submit); // ignored while pending
-  expect(postCount).toBe(1);
-
-  // Settle the in-flight request so no state updates land after the test.
-  resolveCreate(jsonResponse(CREATED_PROJECT, { status: 201, statusText: 'Created' }));
-  await waitFor(() => expect(screen.queryByLabelText('Name')).not.toBeInTheDocument());
 });
