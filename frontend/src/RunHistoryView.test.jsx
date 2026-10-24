@@ -87,9 +87,15 @@ it("requests only the Project's Runs and renders one row per Run with its status
   const badges = screen.getAllByTestId(RUN_STATUS_TESTID);
   expect(badges.map((badge) => badge.textContent)).toEqual(RUNS.map((run) => run.status));
 
-  expect(rows[0]).toHaveTextContent('2024-05-07');
-  // `created_at: null` on the last record renders no date rather than an
-  // "Invalid Date" one.
+  // Redesign: a row shows a relative time ("… ago"); the exact date moved into
+  // the <time> element's `title` attribute.
+  const when = rows[0].querySelector('time');
+  expect(when).toBeInTheDocument();
+  expect(when.getAttribute('title')).toContain('2024-05-07');
+  expect(when).toHaveTextContent(/ago|just now/);
+  // `created_at: null` on the last record renders no time element rather than
+  // an "Invalid Date" one.
+  expect(rows[4].querySelector('time')).toBeNull();
   expect(rows[4]).not.toHaveTextContent('Invalid');
 
   expect(screen.getByRole('heading', { name: /checkout-service/ })).toBeInTheDocument();

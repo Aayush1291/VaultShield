@@ -245,10 +245,10 @@ export function DiffTab({ diff, id, labelledBy }) {
       records={files}
       itemTestId={DIFF_FILE_TESTID}
       emptyMessage={EMPTY_DIFF_MESSAGE}
-      listClassName="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white"
+      listClassName="divide-y divide-border rounded-card-lg border border-border bg-surface"
       renderItem={(file) => (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
-          <span className="min-w-0 grow break-all font-mono text-sm text-slate-900">
+          <span className="min-w-0 grow break-all font-mono text-sm text-fg">
             {file?.path}
           </span>
           <span
@@ -296,22 +296,22 @@ export function TimelineTab({ events, id, labelledBy }) {
       records={ordered}
       itemTestId={TIMELINE_EVENT_TESTID}
       emptyMessage={EMPTY_TIMELINE_MESSAGE}
-      listClassName="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white"
+      listClassName="divide-y divide-border rounded-card-lg border border-border bg-surface"
       renderItem={(event) => {
         const at = formatTimestamp(event?.timestamp);
 
         return (
           <div className="px-4 py-2">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-mono text-xs text-slate-500">{at}</span>
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
+              <span className="font-mono text-xs text-fg-subtle">{at}</span>
+              <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs text-fg-muted">
                 {event?.event_type}
               </span>
             </div>
             {/* `whitespace-pre-wrap`: a `payload` is a captured line of
                 terminal output, so its own line breaks and indentation are
                 part of what the Reviewer needs to read. */}
-            <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-slate-800">
+            <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-fg-muted">
               {event?.payload}
             </p>
           </div>
@@ -347,16 +347,16 @@ export function ScreenshotsTab({ screenshots, id, labelledBy }) {
       emptyMessage={EMPTY_SCREENSHOTS_MESSAGE}
       listClassName="grid gap-4 sm:grid-cols-2"
       renderItem={(screenshot) => (
-        <figure className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <figure className="overflow-hidden rounded-card-lg border border-border bg-surface">
           <img
             src={screenshot?.image}
             alt={`Screenshot of ${screenshot?.route ?? 'an unnamed route'}`}
             // Lazy because a Run can have a screenshot per configured route and
             // they are only worth fetching once this tab is on screen.
             loading="lazy"
-            className="block w-full bg-slate-100 object-cover"
+            className="block w-full bg-surface-muted object-cover"
           />
-          <figcaption className="break-all border-t border-slate-200 px-3 py-2 font-mono text-xs text-slate-700">
+          <figcaption className="break-all border-t border-border px-3 py-2 font-mono text-xs text-fg-muted">
             {screenshot?.route}
           </figcaption>
         </figure>
@@ -480,7 +480,7 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
   if (agent === PROTECT_AGENT) {
     return (
       <div className="mb-4">
-        <p data-testid={PROTECT_NOTE_TESTID} className="text-sm text-slate-500">
+        <p data-testid={PROTECT_NOTE_TESTID} className="text-sm text-fg-muted">
           {PROTECT_LOG_MESSAGE}
         </p>
       </div>
@@ -500,27 +500,30 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
   return (
     <div className="mb-4 space-y-3">
       {decidable && (
-        <div className="flex flex-wrap items-center gap-3">
-          {DECISIONS.map((decision) => (
-            <button
-              key={decision.value}
-              type="button"
-              // Both buttons go down together: see `DECISIONS`.
-              disabled={pending !== null}
-              // Announces the wait on the button the Reviewer actually pressed,
-              // rather than only on the status line below.
-              aria-busy={pending === decision.value}
-              onClick={() => onDecide?.(decision.value)}
-              className={`rounded border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed ${decision.className}`}
-            >
-              {decision.label}
-            </button>
-          ))}
-          {pending !== null && (
-            <p role="status" className="text-xs text-slate-500">
-              Recording your decision…
-            </p>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-card-lg border border-border bg-accent-soft p-4">
+          <p className="text-sm font-medium text-fg">This run is awaiting your review.</p>
+          <div className="flex flex-wrap items-center gap-3">
+            {DECISIONS.map((decision) => (
+              <button
+                key={decision.value}
+                type="button"
+                // Both buttons go down together: see `DECISIONS`.
+                disabled={pending !== null}
+                // Announces the wait on the button the Reviewer actually pressed,
+                // rather than only on the status line below.
+                aria-busy={pending === decision.value}
+                onClick={() => onDecide?.(decision.value)}
+                className={`rounded-card border px-4 py-1.5 text-sm font-medium disabled:cursor-not-allowed ${decision.className}`}
+              >
+                {decision.label}
+              </button>
+            ))}
+            {pending !== null && (
+              <p role="status" className="text-xs text-fg-muted">
+                Recording your decision…
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -544,7 +547,7 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
       {error !== null && (
         <div
           role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
         >
           {describeDecisionFailure(error)}
         </div>
@@ -854,41 +857,50 @@ export default function RunDetailView({ runId = null, client = api }) {
 
   return (
     <section aria-labelledby="run-detail-heading">
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-        <h2 id="run-detail-heading" className="text-base font-semibold text-slate-900">
+      {/* Sticky under the top bar, so the Run's id and status stay in view
+          while a long diff or timeline scrolls. */}
+      <div className="sticky top-14 z-10 -mx-4 mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 border-b border-border bg-canvas/85 px-4 py-3 backdrop-blur md:-mx-8 md:px-8">
+        <h2 id="run-detail-heading" className="text-xl font-semibold tracking-tight text-fg">
           Run detail
         </h2>
         {run !== null && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="break-all font-mono text-sm text-slate-900">{run.run_id}</span>
-            <span className="text-xs text-slate-600">{run.agent}</span>
+            <span className="break-all font-mono text-sm text-fg">{run.run_id}</span>
+            <span className="rounded-pill border border-border bg-surface-muted px-2 py-0.5 text-xs text-fg-muted">
+              {run.agent}
+            </span>
             {/* Requirement 21.4's copy replaces the badge's text for an approved
                 Run rather than sitting beside it: two status strings in one
                 header, in two vocabularies, is one more than the Run has. */}
             <RunStatusBadge status={run.status} label={statusCopy(run.status)} />
-            {created !== '' && <span className="text-xs text-slate-500">{created}</span>}
+            {created !== '' && <span className="text-xs text-fg-subtle">{created}</span>}
           </div>
         )}
       </div>
 
-      {!selected && <p className="text-sm text-slate-500">{NO_RUN_SELECTED_MESSAGE}</p>}
+      {!selected && <p className="text-sm text-fg-subtle">{NO_RUN_SELECTED_MESSAGE}</p>}
 
       {loading && (
-        <p role="status" className="text-sm text-slate-500">
-          Loading run…
-        </p>
+        <div role="status" aria-busy="true" className="space-y-3">
+          <span className="sr-only">Loading run…</span>
+          <div aria-hidden="true" className="h-8 w-40 animate-pulse rounded-card bg-surface-muted" />
+          <div
+            aria-hidden="true"
+            className="h-40 animate-pulse rounded-card-lg border border-border bg-surface-muted"
+          />
+        </div>
       )}
 
       {error !== null && (
         <div
           role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
         >
           <p>{describeLoadFailure(error, { subject: 'run details' })}</p>
           <button
             type="button"
             onClick={() => setReloadCount((count) => count + 1)}
-            className="mt-3 rounded border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100"
+            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
           >
             Try again
           </button>
@@ -916,7 +928,7 @@ export default function RunDetailView({ runId = null, client = api }) {
             role="tablist"
             aria-label="Run artifacts"
             onKeyDown={onTabListKeyDown}
-            className="mb-4 flex flex-wrap gap-1 border-b border-slate-200"
+            className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-card border border-border bg-surface-muted p-1"
           >
             {TABS.map((tab) => {
               const isActive = tab.id === activeTab.id;
@@ -936,10 +948,10 @@ export default function RunDetailView({ runId = null, client = api }) {
                     tabRefs.current[tab.id] = node;
                   }}
                   onClick={() => setActiveTabId(tab.id)}
-                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+                  className={`rounded-card px-3 py-1.5 text-sm font-medium transition-colors ${
                     isActive
-                      ? 'border-indigo-600 text-indigo-700'
-                      : 'border-transparent text-slate-600 hover:text-slate-900'
+                      ? 'bg-surface text-fg shadow-soft'
+                      : 'text-fg-muted hover:text-fg'
                   }`}
                 >
                   {tab.label}

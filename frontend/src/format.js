@@ -101,3 +101,67 @@ export function describeLoadFailure(error, { subject }) {
 function capitalize(value) {
   return value === '' ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 }
+
+
+/**
+ * A short relative time like `5 min ago`, for a Run row.
+ *
+ * Paired with `formatTimestamp` in a `title` attribute so the exact instant is
+ * one hover away; this is the glanceable half. Hand-rolled rather than
+ * `Intl.RelativeTimeFormat` so the unit reads `min`/`hour`/`day` (the task's
+ * "5 min ago") rather than the locale's own wording, and so a pinned `now`
+ * makes it testable. UTC-agnostic: it works on the absolute millisecond gap.
+ *
+ * Anything unparseable yields `''`, so the caller omits the element — the same
+ * contract as `formatDate`/`formatTimestamp`, so a `null` `created_at` renders
+ * nothing rather than "Invalid Date ago".
+ *
+ * @param {unknown} value typically an ISO 8601 timestamp from DRF
+ * @param {number} [now] epoch ms to measure against (defaults to `Date.now()`)
+ * @returns {string}
+ */
+export function formatRelative(value, now = Date.now()) {
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return '';
+
+  const diffMs = now - then;
+  const future = diffMs < 0;
+  const seconds = Math.round(Math.abs(diffMs) / 1000);
+
+  const phrase = relativePhrase(seconds);
+  if (phrase === 'just now') return phrase;
+  return future ? `in ${phrase}` : `${phrase} ago`;
+}
+
+/**
+ * The magnitude part of a relative time (`5 min`, `2 hours`, …), or `just now`
+ * under ~45s. Direction (`ago`/`in`) is added by the caller.
+ *
+ * @param {number} seconds non-negative whole seconds
+ * @returns {string}
+ */
+function relativePhrase(seconds) {
+  const units = [
+    { limit: 45, label: null, value: 'just now' }, // < 45s
+    { limit: 90, label: 'min', amount: 1 }, // ~1 min
+    { limit: 3600, label: 'min', per: 60 }, // minutes
+    { limit: 5400, label: 'hour', amount: 1 }, // ~1 hour
+    { limit: 86400, label: 'hour', per: 3600 }, // hours
+    { limit: 129600, label: 'day', amount: 1 }, // ~1 day
+    { limit: 2592000, label: 'day', per: 86400 }, // days (< 30d)
+    { limit: 3888000, label: 'month', amount: 1 }, // ~1 month
+    { limit: 31536000, label: 'month', per: 2592000 }, // months (< 12mo)
+    { limit: 47304000, label: 'year', amount: 1 }, // ~1 year
+    { limit: Infinity, label: 'year', per: 31536000 }, // years
+  ];
+
+  for (const unit of units) {
+    if (seconds < unit.limit) {
+      if (unit.value) return unit.value;
+      const amount = unit.amount ?? Math.max(1, Math.round(seconds / unit.per));
+      return `${amount} ${unit.label}${amount === 1 ? '' : 's'}`;
+    }
+  }
+  return 'just now'; // unreachable; the last limit is Infinity
+}

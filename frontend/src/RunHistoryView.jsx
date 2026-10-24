@@ -29,7 +29,10 @@
 import { useEffect, useState } from 'react';
 
 import api, { unwrapResults } from './api.js';
-import { describeLoadFailure, formatDate } from './format.js';
+import { describeLoadFailure, formatRelative, formatTimestamp } from './format.js';
+
+/** A representative command for the empty state's copyable hint. */
+export const RUN_HINT_COMMAND = 'vaultshield run --agent=mock --prompt="..." --repo-url=<repo>';
 
 /**
  * Marks one rendered Run row.
@@ -134,31 +137,37 @@ export function RunStatusBadge({ status, label }) {
  *           onSelect?: (run: object) => void }} props
  */
 export function RunRow({ run, onSelect }) {
-  const created = formatDate(run?.created_at);
+  // Relative for the glance, the exact timestamp in the `title` for certainty.
+  const relative = formatRelative(run?.created_at);
+  const exact = formatTimestamp(run?.created_at);
   const selectable = typeof onSelect === 'function';
 
   return (
     <li
       data-testid={RUN_ROW_TESTID}
       data-run-id={run?.run_id}
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 px-4 py-3 last:border-b-0"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-surface-muted"
     >
       {selectable ? (
         <button
           type="button"
           onClick={() => onSelect(run)}
-          className="min-w-0 grow break-all text-left font-mono text-sm text-indigo-700 underline-offset-2 hover:underline"
+          className="min-w-0 grow break-all text-left font-mono text-sm text-accent underline-offset-2 hover:underline"
         >
           {run?.run_id}
         </button>
       ) : (
-        <span className="min-w-0 grow break-all font-mono text-sm text-slate-900">
-          {run?.run_id}
-        </span>
+        <span className="min-w-0 grow break-all font-mono text-sm text-fg">{run?.run_id}</span>
       )}
-      <span className="text-xs text-slate-600">{run?.agent}</span>
+      <span className="rounded-pill border border-border bg-surface-muted px-2 py-0.5 text-xs text-fg-muted">
+        {run?.agent}
+      </span>
       <RunStatusBadge status={run?.status} />
-      {created !== '' && <span className="text-xs text-slate-500">{created}</span>}
+      {relative !== '' && (
+        <time dateTime={run?.created_at} title={exact} className="shrink-0 text-xs text-fg-subtle">
+          {relative}
+        </time>
+      )}
     </li>
   );
 }
@@ -179,15 +188,61 @@ export function RunRow({ run, onSelect }) {
  *
  * @param {{ runs?: unknown[], onSelectRun?: (run: object) => void }} props
  */
+/** A one-line command box with a Copy button (best-effort clipboard). */
+function CopyCommand({ command }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
+    } catch {
+      /* clipboard unavailable; the command is still selectable */
+    }
+  }
+
+  return (
+    <div className="mt-4 flex items-stretch gap-2 text-left">
+      <code className="min-w-0 grow overflow-x-auto rounded-card bg-surface-muted px-3 py-2 font-mono text-xs text-fg">
+        {command}
+      </code>
+      <button
+        type="button"
+        onClick={copy}
+        className="shrink-0 rounded-card border border-border bg-surface px-3 text-xs font-medium text-fg-muted hover:border-border-strong"
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
+/** Requirement 19.3's empty state, made friendly: the message plus a copyable
+ * `vaultshield run …` hint so a Reviewer knows how to produce the first Run. */
+function EmptyRuns() {
+  return (
+    <div className="rounded-card-lg border border-dashed border-border bg-surface p-6 text-center">
+      <p className="text-sm text-fg-muted">{EMPTY_RUNS_MESSAGE}</p>
+      <CopyCommand command={RUN_HINT_COMMAND} />
+    </div>
+  );
+}
+
 export function RunList({ runs, onSelectRun }) {
   const records = Array.isArray(runs) ? runs : [];
 
   if (records.length === 0) {
-    return <p className="text-sm text-slate-500">{EMPTY_RUNS_MESSAGE}</p>;
+    return <EmptyRuns />;
   }
 
   return (
-    <ul role="list" className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <ul
+      role="list"
+      className="overflow-hidden rounded-card-lg border border-border bg-surface shadow-soft"
+    >
       {records.map((run, index) => (
         <RunRow key={run?.run_id ?? run?.id ?? index} run={run} onSelect={onSelectRun} />
       ))}
@@ -272,34 +327,41 @@ export default function RunHistoryView({
   return (
     <section aria-labelledby="run-history-heading">
       <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h2 id="run-history-heading" className="text-base font-semibold text-slate-900">
+        <h2 id="run-history-heading" className="text-xl font-semibold tracking-tight text-fg">
           {heading}
         </h2>
         {runs !== null && (
-          <p className="shrink-0 text-xs text-slate-500">
+          <p className="shrink-0 text-xs text-fg-subtle">
             {runs.length} {runs.length === 1 ? 'run' : 'runs'}
           </p>
         )}
       </div>
 
-      {!selected && <p className="text-sm text-slate-500">{NO_PROJECT_SELECTED_MESSAGE}</p>}
+      {!selected && <p className="text-sm text-fg-subtle">{NO_PROJECT_SELECTED_MESSAGE}</p>}
 
       {loading && (
-        <p role="status" className="text-sm text-slate-500">
-          Loading runs…
-        </p>
+        <div role="status" aria-busy="true" className="space-y-2">
+          <span className="sr-only">Loading runs…</span>
+          {[0, 1, 2].map((row) => (
+            <div
+              key={row}
+              aria-hidden="true"
+              className="h-12 animate-pulse rounded-card-lg border border-border bg-surface-muted"
+            />
+          ))}
+        </div>
       )}
 
       {error !== null && (
         <div
           role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
         >
           <p>{describeLoadFailure(error, { subject: 'runs' })}</p>
           <button
             type="button"
             onClick={() => setReloadCount((count) => count + 1)}
-            className="mt-3 rounded border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100"
+            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
           >
             Try again
           </button>
