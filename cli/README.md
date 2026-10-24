@@ -83,6 +83,37 @@ understanding before you do it by hand: that token carries broad Google scopes
 credential than the per-service API keys the Codex and Kiro adapters inject. It
 is your call, not a default.
 
+## Building the agent prompt: `--prompt` or `--ask`
+
+`vaultshield run` takes the agent's prompt from exactly one of:
+
+- `--prompt "<text>"` — a literal prompt, exactly as before.
+- `--ask "<task>"` — build an enriched prompt with the VaultShield orchestrator
+  (the same engine as `vaultshield ask`) before the Run starts.
+
+Giving both, or neither, is a one-line error.
+
+With `--ask`, the orchestrator runs at the very start of `run` — before the run
+id, the Run_Directory, the backend registration, or any Docker call exist:
+
+1. It **scans the current directory as the project**, so run `vaultshield run
+   --ask` from a checkout of the repo (the same rule as `submit`).
+2. It asks a few clarifying questions (`--yes` skips them; `--answers FILE`
+   reads them from JSON — exactly as `vaultshield ask` treats those flags) and
+   builds the enriched prompt. The prompt never contains a secret value or the
+   contents of a secret file — see `vaultshield/orchestrate/README.md`.
+3. The enriched prompt is saved under `.vaultshield/context/<timestamp>.md` (as
+   `ask` does) and, once the Run_Directory exists, copied into it as
+   `prompt.md`, with this run's model call-log lines copied verbatim to
+   `orchestrator.jsonl` (metadata only — no prompt or reply content).
+
+If no Gemini key is set, `run --ask` stops before anything is created with the
+one line `No Gemini API key found. Run: vaultshield config set-key gemini`. If
+the model is unavailable the orchestrator falls back to a few generic questions
+and the Run continues. The enriched prompt passes the same final secret check
+`ask` runs, right before it is handed to the agent and before the Run is
+registered.
+
 ## Registering the Run: `--project`
 
 `vaultshield run` registers its Run with the backend before it does anything

@@ -29,6 +29,20 @@ The prompt is saved as `.vaultshield/context/<timestamp>.md` and printed to stdo
 questions and notes go to stderr, so `vaultshield ask "..." --yes | pbcopy` copies only the
 prompt. Run it from the project folder or any folder below it.
 
+### One flow: `vaultshield run --ask`
+
+The same engine powers `vaultshield run --ask "<task>"`, which builds the enriched prompt and
+then starts the sandboxed Run with it, in one command — instead of `ask` writing a prompt you
+paste into an agent yourself.
+
+`run --ask` reuses this flow unchanged (the questions, `--yes`, `--answers`, the secret rules,
+the fallback, the call log) with two differences: it does not print the prompt to stdout, and
+it **scans the current directory** as the project — run it from a checkout of the repo, the
+same rule as `vaultshield submit` — rather than walking up to an ancestor project folder. It
+also copies the enriched prompt to `<run_dir>/prompt.md` and this run's `orchestrator.jsonl`
+lines into the Run_Directory. The model key is still required: `run --ask` stops before
+anything is created if it is missing. See the CLI README for the full run flow.
+
 ### The prompt has five parts
 
 Task, Project summary, Answers, Constraints, and Suggested approach. The approach comes from
