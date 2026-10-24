@@ -171,6 +171,68 @@ it('closes the open Run when a different Project is selected', async () => {
   expect(screen.queryAllByTestId(DIFF_FILE_TESTID)).toHaveLength(0);
 });
 
+it('shows only the selected Project\'s runs, never mixing two Projects (Requirement 19.2)', async () => {
+  // Two Projects, each with its own Runs. The backend scopes the list by the
+  // `?project=` query parameter (the step-1 fix), so switching Projects must
+  // replace the run rows wholesale — a Run of the Project no longer selected
+  // must never remain on screen.
+  const other = { id: 43, name: 'billing-service', repo_url: 'git@github.com:acme/billing.git' };
+  const runsA = [
+    { id: 1, run_id: 'run-20240507-aaaa', agent: 'codex', status: 'awaiting_review' },
+    { id: 2, run_id: 'run-20240507-aaab', agent: 'codex', status: 'approved' },
+  ];
+  const runsB = [{ id: 3, run_id: 'run-20240507-bbbb', agent: 'claude', status: 'running' }];
+
+  globalThis.fetch = jest.fn(async (url) => {
+    let body;
+    if (url.startsWith('/api/projects/')) {
+      body = { count: 2, next: null, previous: null, results: [PROJECT, other] };
+    } else if (url === `/api/runs/?project=${PROJECT.id}`) {
+      body = { count: runsA.length, next: null, previous: null, results: runsA };
+    } else if (url === `/api/runs/?project=${other.id}`) {
+      body = { count: runsB.length, next: null, previous: null, results: runsB };
+    } else {
+      // Any unscoped `/api/runs/` (every Project's Runs) would be the bug this
+      // guards against, so answer it with a mix that the assertions reject.
+      body = { count: 3, next: null, previous: null, results: [...runsA, ...runsB] };
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(body),
+    };
+  });
+
+  const runIdsOnScreen = () =>
+    screen.queryAllByTestId(RUN_ROW_TESTID).map((row) => row.getAttribute('data-run-id'));
+
+  render(<App />);
+
+  // Select Project A: exactly A's Runs, in order, and nothing of B's.
+  await userEvent.click(await screen.findByRole('button', { name: PROJECT.name }));
+  await waitFor(() =>
+    expect(runIdsOnScreen()).toEqual([runsA[0].run_id, runsA[1].run_id]),
+  );
+
+  // Switch to Project B: only B's Run remains; both of A's are gone.
+  await userEvent.click(screen.getByRole('button', { name: other.name }));
+  await waitFor(() => expect(runIdsOnScreen()).toEqual([runsB[0].run_id]));
+  expect(screen.queryByText(runsA[0].run_id)).not.toBeInTheDocument();
+  expect(screen.queryByText(runsA[1].run_id)).not.toBeInTheDocument();
+
+  // Each list was fetched scoped to its own Project id, never unfiltered.
+  expect(globalThis.fetch).toHaveBeenCalledWith(
+    `/api/runs/?project=${PROJECT.id}`,
+    expect.anything(),
+  );
+  expect(globalThis.fetch).toHaveBeenCalledWith(
+    `/api/runs/?project=${other.id}`,
+    expect.anything(),
+  );
+});
+
 // --- authentication gate (single-user MVP auth) ----------------------------
 //
 // These inject a client built on a memory token store, so the signed-in state
