@@ -6,11 +6,13 @@ with a registered `init` command. `init` now performs real file writes
 isolated filesystem to avoid writing `.vaultshield.yml` into the real repo.
 """
 
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -34,6 +36,8 @@ from vaultshield.sandbox_monitor import SandboxMonitorError
 from vaultshield.submit import CredentialError, SubmitError
 from vaultshield.teardown import TeardownError
 from vaultshield.uploader import UploadError, token_path
+from vaultshield.orchestrate import provider as orch_provider
+from orchestrate_fakes import APPROACH, FAKE_KEY, QUESTIONS, FakeGemini
 
 
 def test_cli_group_help_exits_zero():
@@ -2226,3 +2230,174 @@ def test_an_app_port_that_collides_with_the_proxy_stops_at_step_1(monkeypatch):
         assert not Path(".vaultshield/runs").exists()
         assert "docker_from_env_calls" not in seen
         assert seen["backend"] == []
+
+
+# --- run --ask: the orchestrator + sandbox pipeline as one flow -------------
+#
+# No Docker and no live model: the Docker/network pipeline is stubbed by
+# `_wire_run_pipeline`, and the orchestrator is pointed at a mocked Gemini
+# transport (`FakeGemini`) with a fake key, HOME in a throwaway dir, and the
+# in-memory `fake_keyring`. The prompt the orchestrator builds is observed as
+# `seen["supervise_args"][2]` — the exact text handed to the adapter.
+
+_ASK_ARGS = [
+    "run",
+    "--agent=mock",
+    "--repo-url=https://example.com/acme/widgets.git",
+    f"--project={_PROJECT_ID}",
+]
+
+
+def _wire_orchestrator(monkeypatch, *, key=FAKE_KEY, questions=QUESTIONS, approach=APPROACH):
+    """Point the orchestrator at a mocked Gemini transport and a fake key, with
+    HOME in a throwaway directory. No live model call, no real HOME; combine
+    with the `fake_keyring` fixture so the real Keychain is never touched."""
+    server = FakeGemini(questions=questions, approach=approach)
+    monkeypatch.setattr(orch_provider, "default_transport", lambda: httpx.MockTransport(server))
+    home = Path("orchestrator-home")
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home.resolve()))
+    if key is None:
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("GEMINI_API_KEY", key)
+    return server
+
+
+def test_run_ask_and_prompt_are_mutually_exclusive():
+    runner = CliRunner()
+    # Both given: a one-line UsageError (exit 2), before any config read.
+    with runner.isolated_filesystem():
+        both = runner.invoke(cli, [*_ASK_ARGS, "--prompt=literal", "--ask=a task"])
+    assert both.exit_code == 2
+    assert "exactly one of --prompt or --ask" in both.output
+    # Neither given: the same error.
+    with runner.isolated_filesystem():
+        neither = runner.invoke(cli, _ASK_ARGS)
+    assert neither.exit_code == 2
+    assert "exactly one of --prompt or --ask" in neither.output
+
+
+def test_run_ask_without_a_key_stops_before_any_run_or_docker(monkeypatch, fake_keyring):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        Path("README.md").write_text("# Demo\n")
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        _wire_orchestrator(monkeypatch, key=None)
+
+        result = runner.invoke(cli, [*_ASK_ARGS, "--ask=Add a login page", "--yes"])
+
+        # The existing one-line message, and nothing created: no Run_Directory,
+        # no backend registration, no Docker call.
+        assert result.exit_code == 1
+        assert "vaultshield config set-key gemini" in result.output
+        assert not Path(".vaultshield/runs").exists()
+        assert seen.get("docker_from_env_calls") is None
+        assert seen["backend"] == []
+
+
+def test_run_ask_hands_the_enriched_prompt_to_the_adapter(monkeypatch, fake_keyring):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        Path("README.md").write_text("# Demo\n\nA small web app.\n")
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        _wire_orchestrator(monkeypatch)
+
+        result = runner.invoke(cli, [*_ASK_ARGS, "--ask=Add a login page", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        # The adapter got the orchestrator-built prompt, not the raw task.
+        adapter_prompt = seen["supervise_args"][2]
+        assert adapter_prompt.startswith("## Task")
+        assert "Add a login page" in adapter_prompt
+        assert "## Project summary" in adapter_prompt
+        assert "## Suggested approach" in adapter_prompt
+
+        # The run folder is self-explanatory.
+        [run_dir] = list(Path(".vaultshield/runs").iterdir())
+        assert (run_dir / "prompt.md").read_text() == adapter_prompt
+        assert (run_dir / "orchestrator.jsonl").read_text().strip()  # ≥1 call line
+        # The enriched prompt is also saved under .vaultshield/context/, as `ask` does.
+        assert list(Path(".vaultshield/context").glob("*.md"))
+        assert "Enriched prompt saved to" in result.output
+
+
+def test_run_ask_yes_skips_the_questions(monkeypatch, fake_keyring):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        Path("README.md").write_text("# Demo\n")
+        _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        server = _wire_orchestrator(monkeypatch)
+
+        result = runner.invoke(cli, [*_ASK_ARGS, "--ask=Add a login page", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        # Only the approach call is made; the clarifying-questions call is skipped.
+        assert server.kinds() == ["approach"]
+
+
+def test_run_ask_reads_answers_from_a_file(monkeypatch, fake_keyring):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        Path("README.md").write_text("# Demo\n\nA small web app.\n")
+        Path("answers.json").write_text(json.dumps({"db": "Postgres", "tests": "Yes please"}))
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        server = _wire_orchestrator(monkeypatch)
+
+        result = runner.invoke(cli, [*_ASK_ARGS, "--ask=Add a login page", "--answers=answers.json"])
+
+        assert result.exit_code == 0, result.output
+        assert server.kinds() == ["questions", "approach"]
+        adapter_prompt = seen["supervise_args"][2]
+        assert "- Which database should it use?\n  Postgres" in adapter_prompt
+        assert "- Should tests be added?\n  Yes please" in adapter_prompt
+
+
+def test_run_ask_falls_back_when_the_model_fails_and_the_run_continues(monkeypatch, fake_keyring):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        Path("README.md").write_text("# Demo\n")
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        # Both model calls fail: questions fall back to generic ones, the
+        # approach is dropped, and the run still completes.
+        _wire_orchestrator(
+            monkeypatch,
+            questions=httpx.ConnectError("no network"),
+            approach=httpx.ConnectError("no network"),
+        )
+
+        result = runner.invoke(
+            cli, [*_ASK_ARGS, "--ask=Add a login page"], input="\n\n\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "generic questions" in result.output  # the fallback note
+        adapter_prompt = seen["supervise_args"][2]
+        assert adapter_prompt.startswith("## Task")
+        assert "Add a login page" in adapter_prompt
+
+
+def test_run_ask_never_sends_or_embeds_a_planted_secret(monkeypatch, fake_keyring):
+    runner = CliRunner()
+    secret = "sk-PLANTEDsecret0123456789abcdefGHIJ"  # sk- + >=16 chars: secret-shaped
+    with runner.isolated_filesystem():
+        Path(".vaultshield.yml").write_text(_CONFIG_YAML)
+        Path("README.md").write_text(f"# Demo\n\nThe API key is {secret}, do not leak it.\n")
+        _, seen = _wire_run_pipeline(monkeypatch, lambda run_dir: [])
+        server = _wire_orchestrator(monkeypatch)
+
+        result = runner.invoke(cli, [*_ASK_ARGS, "--ask=Add a login page", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        # Never in any request body the model would have received...
+        assert secret.encode() not in server.all_request_bytes()
+        # ...and never in the prompt handed to the adapter or saved to disk.
+        adapter_prompt = seen["supervise_args"][2]
+        assert secret not in adapter_prompt
+        [run_dir] = list(Path(".vaultshield/runs").iterdir())
+        assert secret not in (run_dir / "prompt.md").read_text()
