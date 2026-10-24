@@ -352,3 +352,147 @@ it('highlights the selected project in the sidebar', async () => {
     screen.getByRole('button', { name: PROJECT.name }).closest('[data-testid="project-card"]'),
   ).toHaveAttribute('aria-current', 'true');
 });
+
+// --- delete project: top-bar control, confirm dialog, and flow -------------
+
+const OTHER_PROJECT = {
+  id: 43,
+  name: 'billing-service',
+  repo_url: 'git@github.com:acme/billing.git',
+};
+
+/** A fetch mock for the delete flow. The project list answers `before` until
+ *  a DELETE has landed, then `after`; runs are always empty here. */
+function deleteFlowFetch({ before, after, deleteStatus = 204 } = {}) {
+  let deleted = false;
+  const respond = (body, status) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 204 ? '' : 'OK',
+    headers: { get: () => 'application/json' },
+    text: async () => (body === undefined ? '' : JSON.stringify(body)),
+  });
+
+  return jest.fn(async (url, init = {}) => {
+    const method = init.method ?? 'GET';
+    if (url.startsWith('/api/projects/') && method === 'DELETE') {
+      deleted = true;
+      return respond(undefined, deleteStatus);
+    }
+    if (url.startsWith('/api/projects/')) {
+      const list = deleted ? after ?? [] : before ?? [];
+      return respond({ count: list.length, next: null, previous: null, results: list }, 200);
+    }
+    // Any /api/runs/ fetch: no runs for this flow.
+    return respond({ count: 0, next: null, previous: null, results: [] }, 200);
+  });
+}
+
+it('shows the Delete project control only once a Project is selected', async () => {
+  globalThis.fetch = deleteFlowFetch({ before: [PROJECT] });
+
+  render(<App />);
+  const projectButton = await screen.findByRole('button', { name: PROJECT.name });
+
+  // Nothing selected: no delete control in the top bar.
+  expect(screen.queryByRole('button', { name: 'Delete project' })).not.toBeInTheDocument();
+
+  await userEvent.click(projectButton);
+
+  expect(screen.getByRole('button', { name: 'Delete project' })).toBeInTheDocument();
+});
+
+it('opens a confirm dialog that names the Project and its runs', async () => {
+  globalThis.fetch = deleteFlowFetch({ before: [PROJECT] });
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: PROJECT.name }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+
+  const dialog = screen.getByRole('dialog');
+  expect(dialog).toHaveAttribute('aria-modal', 'true');
+  expect(dialog).toHaveTextContent(PROJECT.name);
+  expect(dialog).toHaveTextContent(/runs/i);
+  // Confirming has not happened, so nothing was deleted yet.
+  expect(globalThis.fetch).not.toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/projects\/.+\//),
+    expect.objectContaining({ method: 'DELETE' }),
+  );
+});
+
+it('moves focus into the dialog on open and back to the trigger on cancel', async () => {
+  globalThis.fetch = deleteFlowFetch({ before: [PROJECT] });
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: PROJECT.name }));
+  const trigger = screen.getByRole('button', { name: 'Delete project' });
+  await userEvent.click(trigger);
+
+  // Focus landed inside the dialog (its Cancel control).
+  expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+  // Dialog gone, focus handed back to the control that opened it.
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Delete project' })).toHaveFocus();
+});
+
+it('cancels on Escape without deleting anything', async () => {
+  globalThis.fetch = deleteFlowFetch({ before: [PROJECT] });
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: PROJECT.name }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+
+  await userEvent.keyboard('{Escape}');
+
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  // The Project is still selected (its run history heading is still shown).
+  expect(screen.getByRole('heading', { name: `Run history — ${PROJECT.name}` })).toBeInTheDocument();
+  expect(globalThis.fetch).not.toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/projects\/.+\//),
+    expect.objectContaining({ method: 'DELETE' }),
+  );
+});
+
+it('deletes the Project, clears the selection, and reloads the sidebar without it', async () => {
+  globalThis.fetch = deleteFlowFetch({ before: [PROJECT, OTHER_PROJECT], after: [OTHER_PROJECT] });
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: PROJECT.name }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+  // The DELETE hit the selected Project's detail URL.
+  await waitFor(() =>
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      `/api/projects/${PROJECT.id}/`,
+      expect.objectContaining({ method: 'DELETE' }),
+    ),
+  );
+
+  // Dialog closed, selection cleared (run history is back to its prompt), and
+  // the reloaded sidebar no longer lists the deleted Project.
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(screen.getByText(NO_PROJECT_SELECTED_MESSAGE)).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: PROJECT.name })).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole('button', { name: OTHER_PROJECT.name })).toBeInTheDocument();
+});
+
+it('keeps the dialog open and shows an error when the delete fails', async () => {
+  globalThis.fetch = deleteFlowFetch({ before: [PROJECT], deleteStatus: 500 });
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: PROJECT.name }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+  // The failure is announced and the dialog stays open so the Reviewer can
+  // retry or cancel; the Project is still selected.
+  expect(await screen.findByRole('alert')).toBeInTheDocument();
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: `Run history — ${PROJECT.name}` })).toBeInTheDocument();
+});

@@ -96,6 +96,19 @@ describe('request construction', () => {
     });
   });
 
+  it('deletes a project by id with a DELETE and resolves null on 204', async () => {
+    const fetchImpl = recordingFetch(jsonResponse(undefined, { status: 204, statusText: '' }));
+    const { client } = makeClient({ fetchImpl });
+
+    const result = await client.deleteProject('65260f8a1c9d440000a1b2c3');
+
+    expect(fetchImpl.calls[0]).toMatchObject({
+      url: '/api/projects/65260f8a1c9d440000a1b2c3/',
+      init: { method: 'DELETE' },
+    });
+    expect(result).toBeNull();
+  });
+
   it('lets the browser set the multipart Content-Type for screenshot upload', async () => {
     const fetchImpl = recordingFetch(jsonResponse({ id: 1 }));
     const { client } = makeClient({ fetchImpl });

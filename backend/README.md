@@ -133,6 +133,25 @@ with SIGKILL or a power loss, a `create_run` response lost after the server
 committed, and Ctrl-C during registration. A server-side reaper for those is a
 follow-up and not built.
 
+## Projects and run filtering
+
+- `GET /api/runs/` filters by `?project=<id>`, combined with the existing
+  `?status=` and `?submitted=` filters (all optional, AND-ed together). This is
+  what scopes the dashboard's run history to one Project — without it the list
+  returned every Project's Runs. The id is a Project's ObjectId pk; a value that
+  is not a valid ObjectId is a 400 `{"project": [...]}`, and a valid id that
+  names no Project returns an empty page. Ordering (`-created_at`) and
+  pagination are unchanged, and only the `list` action filters, so a Run's
+  detail URL is unaffected by a stray query parameter.
+- `DELETE /api/projects/:id/` deletes a Project and everything under it — its
+  Runs and, by `on_delete=CASCADE`, every event, diff, screenshot row,
+  approval, security finding, and sandbox record — inside one
+  `django_mongodb_backend` transaction (retried on a transient abort). The
+  screenshot image files are then unlinked from storage, which the row cascade
+  does not do on its own. It answers `204 No Content`; an unknown or malformed
+  id is a `404`. `GET`/`PUT`/`PATCH` on the detail URL are not routed (`405`):
+  a Project has no mutable field, so there is no update endpoint.
+
 ## Running
 
 ```bash

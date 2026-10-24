@@ -15,7 +15,7 @@ frontend/
   jest.config.cjs       # jsdom environment, co-located *.test.js(x)
   src/
     main.jsx            # browser entry; the only reader of import.meta.env
-    App.jsx             # dashboard shell; mounts the views, holds the selected Project
+    App.jsx             # dashboard shell; mounts the views, holds the selected Project, owns the delete-project dialog
     ProjectListView.jsx # GET /api/projects/, one card per Project
     RunHistoryView.jsx  # GET /api/runs/?project=:id, one row per Run with its status
     api.js              # backend API client (one function per REST endpoint)
@@ -70,6 +70,16 @@ replaces the old `curl` step. Duplicate names are allowed — the backend decide
 — so a name clash comes back as a `400` shown next to the Name field, alongside
 any other field errors.
 
+**Deleting a project.** With a Project open, a **Delete project** control in the
+top bar opens a confirmation dialog that names the Project and warns that all of
+its runs are permanently deleted. The dialog is modal (`role="dialog"` +
+`aria-modal`): focus moves into it on open and returns to the control on close,
+Escape cancels, and Tab stays within it. Confirming calls
+`DELETE /api/projects/:id/`, which removes the Project and its whole run history
+on the backend; a failure is shown in the dialog so you can retry or cancel. On
+success the selection clears, the run detail closes, and the sidebar reloads
+without the deleted Project. The control is absent until a Project is selected.
+
 **Where the token lives.** The Dashboard_Auth_Token is still kept in
 `localStorage` (key `vaultshield.dashboard_auth_token`), falling back to memory
 for the session where storage writes throw — signing in through the UI stores it
@@ -112,6 +122,9 @@ await api.login({ username, password });        // stores the Dashboard_Auth_Tok
 const projects = unwrapResults(await api.listProjects());
 const runs = unwrapResults(await api.listRuns({ project: projects[0].id }));
 const run = await api.getRun(runs[0].run_id);
+
+await api.createProject({ name, repo_url });    // POST /api/projects/
+await api.deleteProject(projects[0].id);        // DELETE /api/projects/:id/, resolves null on 204
 ```
 
 Two things it handles so no view has to:

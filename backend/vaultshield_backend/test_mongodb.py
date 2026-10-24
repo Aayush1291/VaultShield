@@ -56,6 +56,8 @@ import pytest
 from bson import ObjectId
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
+from django.core.files.storage import default_storage
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, connection, connections
 from django.db.utils import DatabaseError, NotSupportedError
 from pymongo.errors import OperationFailure
@@ -67,7 +69,7 @@ from rest_framework.test import APIClient
 from rest_framework.validators import UniqueValidator
 
 from projects.models import Project
-from runs.models import Approval, Run, RunDiff, RunEvent
+from runs.models import Approval, Run, RunDiff, RunEvent, Screenshot
 from runs.sequences import (
     SequenceAllocationError,
     allocate_event_sequences,
@@ -1904,3 +1906,226 @@ class TestTransientTransactionRetry:
     def test_a_zero_attempt_budget_is_rejected(self):
         with pytest.raises(ValueError):
             retry_on_transient_transaction_error(lambda: None, attempts=0)
+
+
+# --- 11. the run list's project filter -------------------------------------
+
+
+@pytest.mark.django_db
+class TestRunListProjectFilter:
+    """`GET /api/runs/?project=<id>` scopes the list to one Project.
+
+    The dashboard's run history fetches `/api/runs/?project=:id`; before this
+    filter existed the query parameter was ignored and every Project's Runs
+    came back, which is what `App.test.jsx`'s cross-project test guards on the
+    frontend. These pin the backend half.
+    """
+
+    def test_it_returns_only_the_named_projects_runs(self):
+        client, _, _ = _authenticated_client()
+        mine = _project("mine")
+        other = _project("other")
+        _run(mine)
+        _run(mine)
+        _run(other)
+
+        response = client.get(f"/api/runs/?project={mine.pk}")
+
+        assert response.status_code == 200
+        assert response.data["count"] == 2
+        returned_projects = {row["project"] for row in response.data["results"]}
+        assert returned_projects == {str(mine.pk)}
+
+    def test_an_unknown_but_valid_id_returns_an_empty_list(self):
+        """A syntactically valid ObjectId that names no Project is not an
+        error — it matches no Run, so the page is empty."""
+        client, _, _ = _authenticated_client()
+        _run(_project())
+
+        response = client.get(f"/api/runs/?project={ObjectId()}")
+
+        assert response.status_code == 200
+        assert response.data["count"] == 0
+
+    def test_a_malformed_id_is_a_400_naming_the_parameter(self):
+        client, _, _ = _authenticated_client()
+        _run(_project())
+
+        response = client.get("/api/runs/?project=not-an-object-id")
+
+        assert response.status_code == 400
+        assert "project" in response.json()
+
+    def test_a_blank_project_is_treated_as_no_filter(self):
+        client, _, _ = _authenticated_client()
+        _run(_project("a"))
+        _run(_project("b"))
+
+        response = client.get("/api/runs/?project=")
+
+        assert response.status_code == 200
+        assert response.data["count"] == 2
+
+    def test_it_composes_with_status_and_submitted(self):
+        """All three filters AND together, unchanged ordering/pagination."""
+        client, _, _ = _authenticated_client()
+        mine = _project("mine")
+        other = _project("other")
+        # Target: in `mine`, approved, submitted (has a pr_url).
+        _run(mine, status="approved", pr_url="https://example.invalid/pr/1")
+        # Same project, approved, but not submitted.
+        _run(mine, status="approved")
+        # Same project, submitted, but not approved.
+        _run(mine, status="running", pr_url="https://example.invalid/pr/2")
+        # Right status + submitted, wrong project.
+        _run(other, status="approved", pr_url="https://example.invalid/pr/3")
+
+        response = client.get(
+            f"/api/runs/?project={mine.pk}&status=approved&submitted=true"
+        )
+
+        assert response.status_code == 200
+        assert response.data["count"] == 1
+        assert response.data["results"][0]["project"] == str(mine.pk)
+        assert response.data["results"][0]["status"] == "approved"
+        assert response.data["results"][0]["pr_url"] == "https://example.invalid/pr/1"
+
+    def test_the_project_filter_leaves_detail_lookup_alone(self):
+        """`get_queryset` only filters `list`, so a Run's detail URL still
+        resolves regardless of any stray query parameter."""
+        client, _, _ = _authenticated_client()
+        run = _run()
+
+        assert client.get(f"/api/runs/{run.run_id}/?project=not-an-id").status_code == 200
+
+
+# --- 12. deleting a Project and everything under it ------------------------
+
+# A real 1x1 PNG, so `Screenshot.image` holds a genuine image file whose
+# removal from storage can be asserted after the Project is deleted.
+_PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def _screenshot(run: Run, name: str = "shot.png") -> Screenshot:
+    """A Screenshot whose image file is really written to storage."""
+    return Screenshot.objects.create(
+        run=run,
+        route="/",
+        image=SimpleUploadedFile(name, _PNG_1x1, content_type="image/png"),
+    )
+
+
+@pytest.mark.django_db
+class TestProjectDeletion:
+    """`DELETE /api/projects/:id/` removes the Project, its Runs, every
+    dependent document, and the screenshot image files on disk.
+
+    The row cascade is the schema's own (`on_delete=CASCADE` all the way down
+    from `Project` through `Run`); these assert it reaches every table and
+    that the one thing the cascade does not do — unlink `ImageField` files —
+    is done by `perform_destroy`.
+    """
+
+    def test_it_returns_204_and_removes_the_project(self):
+        client, _, _ = _authenticated_client()
+        project = _project()
+
+        response = client.delete(f"/api/projects/{project.pk}/")
+
+        assert response.status_code == 204
+        assert not Project.objects.filter(pk=project.pk).exists()
+
+    def test_it_cascades_every_dependent_document(self):
+        client, _, _ = _authenticated_client()
+        project = _project()
+        run = _run(project, status="awaiting_review")
+        RunEvent.objects.create(
+            run=run, event_type="output", timestamp=timezone.now(), payload="x", sequence=0
+        )
+        RunDiff.objects.create(run=run, files=[])
+        Approval.objects.create(run=run, decision="approved")
+        SandboxRecord.objects.create(run=run)
+        SecurityFinding.objects.create(
+            run=run, rule_id="r", file_path="f", line_number=1, description="d"
+        )
+        _screenshot(run)
+
+        response = client.delete(f"/api/projects/{project.pk}/")
+
+        assert response.status_code == 204
+        assert not Run.objects.filter(pk=run.pk).exists()
+        assert RunEvent.objects.filter(run_id=run.pk).count() == 0
+        assert RunDiff.objects.filter(run_id=run.pk).count() == 0
+        assert Approval.objects.filter(run_id=run.pk).count() == 0
+        assert SandboxRecord.objects.filter(run_id=run.pk).count() == 0
+        assert SecurityFinding.objects.filter(run_id=run.pk).count() == 0
+        assert Screenshot.objects.filter(run_id=run.pk).count() == 0
+
+    def test_it_removes_screenshot_files_from_disk(self, settings, tmp_path):
+        # Redirect media at a throwaway dir so the files this test writes (and
+        # the delete removes) never touch the repo. Changing MEDIA_ROOT through
+        # the `settings` fixture resets `default_storage` to the new location.
+        settings.MEDIA_ROOT = str(tmp_path)
+        client, _, _ = _authenticated_client()
+        project = _project()
+        run = _run(project)
+        first = _screenshot(run, "a.png")
+        second = _screenshot(run, "b.png")
+        assert default_storage.exists(first.image.name)
+        assert default_storage.exists(second.image.name)
+
+        response = client.delete(f"/api/projects/{project.pk}/")
+
+        assert response.status_code == 204
+        assert not default_storage.exists(first.image.name)
+        assert not default_storage.exists(second.image.name)
+
+    def test_it_only_removes_the_named_projects_runs(self):
+        client, _, _ = _authenticated_client()
+        doomed = _project("doomed")
+        kept = _project("kept")
+        _run(doomed)
+        survivor = _run(kept)
+
+        client.delete(f"/api/projects/{doomed.pk}/")
+
+        assert Project.objects.filter(pk=kept.pk).exists()
+        assert Run.objects.filter(pk=survivor.pk).exists()
+
+    def test_deleting_an_unknown_but_valid_id_is_404(self):
+        client, _, _ = _authenticated_client()
+
+        assert client.delete(f"/api/projects/{ObjectId()}/").status_code == 404
+
+    def test_deleting_with_a_malformed_id_is_404(self):
+        client, _, _ = _authenticated_client()
+
+        assert client.delete("/api/projects/not-an-object-id/").status_code == 404
+
+    def test_put_and_patch_and_detail_get_are_not_routed(self):
+        """Only create, list, and delete are routed, so the detail URL answers
+        every other verb with 405 — no full replacement, no partial update,
+        no read-detail endpoint."""
+        client, _, _ = _authenticated_client()
+        project = _project()
+
+        assert client.get(f"/api/projects/{project.pk}/").status_code == 405
+        assert client.put(
+            f"/api/projects/{project.pk}/", {"name": "x", "repo_url": "y"}, format="json"
+        ).status_code == 405
+        assert client.patch(
+            f"/api/projects/{project.pk}/", {"name": "x"}, format="json"
+        ).status_code == 405
+
+    def test_delete_requires_authentication(self):
+        """The same Dashboard_Auth_Token policy as every other `/api/` path."""
+        project = _project()
+
+        response = APIClient().delete(f"/api/projects/{project.pk}/")
+
+        assert response.status_code == 401
+        assert Project.objects.filter(pk=project.pk).exists()
