@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 
 import api, { unwrapResults } from './api.js';
 import { describeLoadFailure as describeFailure, formatDate } from './format.js';
+import NewProjectForm from './NewProjectForm.jsx';
 
 /**
  * Marks one rendered Project card.
@@ -154,6 +155,8 @@ export default function ProjectListView({ client = api, onSelectProject }) {
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState(null);
   const [reloadCount, setReloadCount] = useState(0);
+  // The "New project" form is open or closed; closed to start.
+  const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -184,18 +187,48 @@ export default function ProjectListView({ client = api, onSelectProject }) {
 
   const loading = projects === null && error === null;
 
+  /**
+   * After a Project is created: close the form, reload the list through the
+   * view's existing reload mechanism, and open the new Project's run history.
+   *
+   * @param {object} project the created record the backend returned
+   */
+  function handleProjectCreated(project) {
+    setShowForm(false);
+    setReloadCount((count) => count + 1);
+    if (typeof onSelectProject === 'function') onSelectProject(project);
+  }
+
   return (
     <section aria-labelledby="project-list-heading">
       <div className="mb-4 flex items-baseline justify-between">
         <h2 id="project-list-heading" className="text-base font-semibold text-slate-900">
           Projects
         </h2>
-        {projects !== null && (
-          <p className="text-xs text-slate-500">
-            {projects.length} {projects.length === 1 ? 'project' : 'projects'}
-          </p>
-        )}
+        <div className="flex items-baseline gap-3">
+          {projects !== null && (
+            <p className="text-xs text-slate-500">
+              {projects.length} {projects.length === 1 ? 'project' : 'projects'}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowForm((open) => !open)}
+            aria-expanded={showForm}
+            className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            New project
+          </button>
+        </div>
       </div>
+
+      {showForm && (
+        <NewProjectForm
+          client={client}
+          onCreated={handleProjectCreated}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
 
       {loading && (
         <p role="status" className="text-sm text-slate-500">
