@@ -1,0 +1,4 @@
+# config=C2 status=SUCCESS
+# tools_used=read_file,run_command
+# ---- agent response ----
+
