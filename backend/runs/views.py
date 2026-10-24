@@ -18,6 +18,8 @@ from collections.abc import Iterable
 from functools import partial
 from typing import Literal
 
+from bson import ObjectId
+
 # NOT `django.db.transaction`. `django-mongodb-backend` reports
 # `supports_transactions = False` for Django's native API, which means Django
 # quietly turns every `django.db.transaction.atomic()` block into a no-op and
@@ -510,13 +512,17 @@ class RunViewSet(
     SUBMITTED_FALSE_VALUES = frozenset(BooleanField.FALSE_VALUES)
 
     def get_queryset(self):
-        """Every Run, narrowed by Requirement 12.6's `status`/`submitted`.
+        """Every Run, narrowed by `status`/`submitted` (Requirement 12.6)
+        and by `project`.
 
-        The two filters are independent and both optional, so applying each
+        The three filters are independent and all optional, so applying each
         only when its parameter is present is what makes every combination
-        behave: `status` alone, `submitted` alone either way, both together
-        (design.md's `?status=approved&submitted=false`), and neither, which
-        is the unfiltered page.
+        behave: `status` alone, `submitted` alone either way, `project`
+        scoping the page to one Project's Runs, any pair together (design.md's
+        `?status=approved&submitted=false`), all three, and none, which is
+        the unfiltered page. `project` is an equality on the `project_id` the
+        row already carries, so it composes with the other two as a further
+        `AND` and changes neither the ordering nor the pagination.
 
         `submitted` is derived rather than stored — "has this Run been
         submitted" is `pr_url != ""` — which is why `Run.pr_url` defaults to
@@ -549,9 +555,16 @@ class RunViewSet(
         one change set gets a second pull request, so the request is
         rejected instead.
 
-        A blank value (`?status=&submitted=`) counts as not supplied for
-        both: a query string assembled from empty inputs is expressing no
-        filter, and `status=""` matches no row in any case.
+        A blank value (`?status=&submitted=&project=`) counts as not supplied
+        for all three: a query string assembled from empty inputs is
+        expressing no filter, and `status=""` matches no row in any case.
+
+        An unparseable `project` is rejected like an unreadable `submitted`:
+        a Project pk is a MongoDB ObjectId, so a value that is not one can
+        name no Project and cannot be looked up, and `_parse_project` turns
+        it into the same 400 rather than a driver-level 500. A *valid* id
+        that names no Project is not an error — it matches no row and the
+        page is empty.
         """
         queryset = Run.objects.all()
 
@@ -568,6 +581,10 @@ class RunViewSet(
                 queryset = queryset.exclude(pr_url="")
             else:
                 queryset = queryset.filter(pr_url="")
+
+        project_value = self.request.query_params.get("project", "").strip()
+        if project_value:
+            queryset = queryset.filter(project_id=self._parse_project(project_value))
 
         # `Run.Meta.ordering` is `-created_at`, so the paginated page split
         # is stable without ordering again here. No `select_related`:
@@ -598,6 +615,29 @@ class RunViewSet(
                     "`false` for Runs without one."
                 )
             }
+        )
+
+    def _parse_project(self, raw_value: str) -> str:
+        """`?project=` as a Project pk, or a 400 naming the parameter.
+
+        A Project's pk is a MongoDB ObjectId (`ObjectIdAutoField`), so a
+        value that is not a 24-character hex string can match no Project and
+        is not a thing the database can look up at all — filtering on it
+        raises deep in the driver rather than returning an empty page. This
+        rejects it up front with the same DRF `ValidationError` shape
+        (`{"project": [...]}`) a rejected `POST /api/runs/` body gets, so a
+        malformed id is a 400 a client can read rather than a 500.
+
+        A syntactically valid id that names no Project is *not* an error:
+        `ObjectId.is_valid` passes it, the `filter(project_id=...)` matches
+        no row, and the caller gets an empty page — the true answer to
+        "which Runs belong to this project" when the project is gone.
+        """
+        if ObjectId.is_valid(raw_value):
+            return raw_value
+
+        raise ValidationError(
+            {"project": ["Must be a valid project id."]}
         )
 
     def get_serializer_class(self):
