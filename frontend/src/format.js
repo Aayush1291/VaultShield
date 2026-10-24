@@ -160,7 +160,10 @@ function relativePhrase(seconds) {
     if (seconds < unit.limit) {
       if (unit.value) return unit.value;
       const amount = unit.amount ?? Math.max(1, Math.round(seconds / unit.per));
-      return `${amount} ${unit.label}${amount === 1 ? '' : 's'}`;
+      // `min` is an abbreviation and reads uninflected ("5 min ago"); the
+      // spelled-out units pluralise normally.
+      const plural = unit.label === 'min' || amount === 1 ? '' : 's';
+      return `${amount} ${unit.label}${plural}`;
     }
   }
   return 'just now'; // unreachable; the last limit is Infinity

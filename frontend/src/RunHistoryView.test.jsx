@@ -18,6 +18,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { createApiClient, createMemoryTokenStore } from './api.js';
+import { formatRelative } from './format.js';
 import RunHistoryView, {
   EMPTY_RUNS_MESSAGE,
   NO_PROJECT_SELECTED_MESSAGE,
@@ -217,4 +218,34 @@ it('re-fetches when the Reviewer retries after a transport failure', async () =>
   await waitFor(() => expect(screen.getAllByTestId(RUN_ROW_TESTID)).toHaveLength(1));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(calls).toHaveLength(2);
+});
+
+
+it('offers a copyable `vaultshield run` hint in the empty state', async () => {
+  const { client } = clientReturning(runPage([]));
+
+  render(<RunHistoryView projectId={7} client={client} />);
+
+  expect(await screen.findByText(EMPTY_RUNS_MESSAGE)).toBeInTheDocument();
+  // The friendly empty state adds a copyable `vaultshield run` command hint
+  // (the full command, distinct from the message's prose mention).
+  expect(screen.getByText(/--repo-url=<repo>/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+});
+
+describe('formatRelative', () => {
+  const NOW = Date.parse('2024-05-07T12:00:00Z');
+
+  it('renders a short, unit-abbreviated relative label against a pinned now', () => {
+    expect(formatRelative('2024-05-07T11:59:40Z', NOW)).toBe('just now');
+    expect(formatRelative('2024-05-07T11:55:00Z', NOW)).toBe('5 min ago');
+    expect(formatRelative('2024-05-07T09:00:00Z', NOW)).toBe('3 hours ago');
+    expect(formatRelative('2024-05-06T12:00:00Z', NOW)).toBe('1 day ago');
+  });
+
+  it('yields an empty string for anything unparseable', () => {
+    for (const value of [undefined, null, '', 'not a date', {}, []]) {
+      expect(formatRelative(value, NOW)).toBe('');
+    }
+  });
 });

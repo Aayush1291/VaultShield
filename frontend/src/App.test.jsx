@@ -247,3 +247,46 @@ it('signs out, clearing the token and returning to the login screen', async () =
   expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
   expect(store.get()).toBeNull();
 });
+
+// --- redesigned shell: drawer and selected-project highlight ---------------
+
+it('toggles the navigation drawer open and closed', async () => {
+  globalThis.fetch = dashboardFetch({ project: PROJECT, run: RUN, detail: RUN_DETAIL });
+
+  render(<App />);
+  // Wait for the dashboard (sidebar project list) to load.
+  await screen.findByRole('button', { name: PROJECT.name });
+
+  const toggle = screen.getByRole('button', { name: 'Open navigation' });
+  expect(toggle).toHaveAttribute('aria-controls', 'vs-sidebar');
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+  await userEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+  // Opening reveals a backdrop that closes the drawer again.
+  await userEvent.click(screen.getByRole('button', { name: 'Close navigation' }));
+  expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+});
+
+it('highlights the selected project in the sidebar', async () => {
+  globalThis.fetch = dashboardFetch({ project: PROJECT, run: RUN, detail: RUN_DETAIL });
+
+  render(<App />);
+  const projectButton = await screen.findByRole('button', { name: PROJECT.name });
+
+  // Nothing selected yet: the card is not marked current.
+  expect(projectButton.closest('[data-testid="project-card"]')).not.toHaveAttribute(
+    'aria-current',
+  );
+
+  await userEvent.click(projectButton);
+
+  // Selecting it marks its card as the current one.
+  expect(
+    screen.getByRole('button', { name: PROJECT.name }).closest('[data-testid="project-card"]'),
+  ).toHaveAttribute('aria-current', 'true');
+});
