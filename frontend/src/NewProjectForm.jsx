@@ -101,15 +101,18 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
     setFormError(error?.message || 'Could not create the project.');
   }
 
+  const inputClass =
+    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-accent';
+
   return (
     <form
       onSubmit={handleSubmit}
       aria-busy={pending}
       aria-label="New project"
-      className="mb-4 space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      className="mb-3 space-y-3 rounded-card border border-border bg-surface-muted p-3"
     >
       <div>
-        <label htmlFor="new-project-name" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="new-project-name" className="block text-xs font-medium text-fg-muted">
           Name
         </label>
         <input
@@ -121,17 +124,17 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
           disabled={pending}
           aria-invalid={Boolean(fieldErrors.name)}
           aria-describedby={fieldErrors.name ? 'new-project-name-error' : undefined}
-          className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+          className={inputClass}
         />
         {fieldErrors.name && (
-          <p id="new-project-name-error" className="mt-1 text-sm text-red-700">
+          <p id="new-project-name-error" className="mt-1 text-xs text-red-600 dark:text-red-400">
             {fieldErrors.name}
           </p>
         )}
       </div>
 
       <div>
-        <label htmlFor="new-project-repo-url" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="new-project-repo-url" className="block text-xs font-medium text-fg-muted">
           Repository URL
         </label>
         <input
@@ -141,13 +144,13 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
           value={repoUrl}
           onChange={(event) => setRepoUrl(event.target.value)}
           disabled={pending}
-          placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git"
+          placeholder="https://… or git@…"
           aria-invalid={Boolean(fieldErrors.repo_url)}
           aria-describedby={fieldErrors.repo_url ? 'new-project-repo-url-error' : undefined}
-          className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
+          className={`${inputClass} font-mono text-xs`}
         />
         {fieldErrors.repo_url && (
-          <p id="new-project-repo-url-error" className="mt-1 text-sm text-red-700">
+          <p id="new-project-repo-url-error" className="mt-1 text-xs text-red-600 dark:text-red-400">
             {fieldErrors.repo_url}
           </p>
         )}
@@ -156,7 +159,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
       {formError !== null && (
         <p
           role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+          className="rounded-card border border-red-200 bg-red-50 p-2 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
         >
           {formError}
         </p>
@@ -166,7 +169,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
         <button
           type="submit"
           disabled={pending}
-          className="rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+          className="rounded-card bg-accent px-3 py-2 text-sm font-medium text-accent-contrast hover:bg-accent-strong disabled:opacity-60"
         >
           {pending ? 'Creating…' : 'Create project'}
         </button>
@@ -174,7 +177,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel }) {
           type="button"
           onClick={onCancel}
           disabled={pending}
-          className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          className="rounded-card border border-border bg-surface px-3 py-2 text-sm font-medium text-fg-muted hover:border-border-strong"
         >
           Cancel
         </button>

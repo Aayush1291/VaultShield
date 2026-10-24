@@ -77,7 +77,7 @@ export function describeLoadFailure(error) {
  *                      created_at?: string },
  *           onSelect?: (project: object) => void }} props
  */
-export function ProjectCard({ project, onSelect }) {
+export function ProjectCard({ project, onSelect, selected = false }) {
   const created = formatDate(project?.created_at);
   const selectable = typeof onSelect === 'function';
 
@@ -85,23 +85,30 @@ export function ProjectCard({ project, onSelect }) {
     <li
       data-testid={PROJECT_CARD_TESTID}
       data-project-id={project?.id}
-      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      aria-current={selected ? 'true' : undefined}
+      className={`rounded-card border p-3 transition-colors ${
+        selected ? 'border-accent bg-accent-soft' : 'border-border bg-surface hover:border-border-strong'
+      }`}
     >
-      <h3 className="text-base font-semibold text-slate-900">
+      <h3 className="text-sm font-semibold">
         {selectable ? (
           <button
             type="button"
             onClick={() => onSelect(project)}
-            className="text-left text-indigo-700 underline-offset-2 hover:underline"
+            className={`block w-full truncate text-left ${
+              selected ? 'text-accent-strong' : 'text-fg hover:text-accent'
+            }`}
           >
             {project?.name}
           </button>
         ) : (
-          project?.name
+          <span className="text-fg">{project?.name}</span>
         )}
       </h3>
-      <p className="mt-1 break-all font-mono text-xs text-slate-600">{project?.repo_url}</p>
-      {created !== '' && <p className="mt-3 text-xs text-slate-500">Created {created}</p>}
+      <p className="mt-1 break-all font-mono text-[11px] leading-snug text-fg-subtle">
+        {project?.repo_url}
+      </p>
+      {created !== '' && <p className="mt-2 text-[11px] text-fg-subtle">Created {created}</p>}
     </li>
   );
 }
@@ -116,19 +123,25 @@ export function ProjectCard({ project, onSelect }) {
  * `role="list"` is set explicitly because Safari drops list semantics from a
  * `<ul>` whose list-style is removed, which Tailwind's reset does.
  *
- * @param {{ projects?: unknown[], onSelectProject?: (project: object) => void }} props
+ * @param {{ projects?: unknown[], onSelectProject?: (project: object) => void,
+ *           selectedProjectId?: number|string|null }} props
  */
-export function ProjectList({ projects, onSelectProject }) {
+export function ProjectList({ projects, onSelectProject, selectedProjectId = null }) {
   const records = Array.isArray(projects) ? projects : [];
 
   if (records.length === 0) {
-    return <p className="text-sm text-slate-500">{EMPTY_PROJECTS_MESSAGE}</p>;
+    return <p className="text-sm text-fg-subtle">{EMPTY_PROJECTS_MESSAGE}</p>;
   }
 
   return (
-    <ul role="list" className="grid gap-4 sm:grid-cols-2">
+    <ul role="list" className="space-y-2">
       {records.map((project, index) => (
-        <ProjectCard key={project?.id ?? index} project={project} onSelect={onSelectProject} />
+        <ProjectCard
+          key={project?.id ?? index}
+          project={project}
+          onSelect={onSelectProject}
+          selected={selectedProjectId != null && project?.id === selectedProjectId}
+        />
       ))}
     </ul>
   );
@@ -147,9 +160,12 @@ export function ProjectList({ projects, onSelectProject }) {
  * retrieved; following `next` is a separate concern from rendering one card
  * per retrieved record, so it is deliberately not done here.
  *
- * @param {{ client?: typeof api, onSelectProject?: (project: object) => void }} props
+ * @param {{ client?: typeof api, onSelectProject?: (project: object) => void,
+ *           selectedProjectId?: number|string|null }} props
+ *   `selectedProjectId` is presentational only — it highlights the open
+ *   Project's card in the sidebar and does not change what is fetched.
  */
-export default function ProjectListView({ client = api, onSelectProject }) {
+export default function ProjectListView({ client = api, onSelectProject, selectedProjectId = null }) {
   // `null` distinguishes "not loaded yet" from the genuinely empty list, so
   // the first paint is a loading line rather than a flash of the empty state.
   const [projects, setProjects] = useState(null);
@@ -201,26 +217,28 @@ export default function ProjectListView({ client = api, onSelectProject }) {
 
   return (
     <section aria-labelledby="project-list-heading">
-      <div className="mb-4 flex items-baseline justify-between">
-        <h2 id="project-list-heading" className="text-base font-semibold text-slate-900">
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <h2
+          id="project-list-heading"
+          className="text-xs font-semibold uppercase tracking-wide text-fg-subtle"
+        >
           Projects
         </h2>
-        <div className="flex items-baseline gap-3">
-          {projects !== null && (
-            <p className="text-xs text-slate-500">
-              {projects.length} {projects.length === 1 ? 'project' : 'projects'}
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowForm((open) => !open)}
-            aria-expanded={showForm}
-            className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
-            New project
-          </button>
-        </div>
+        {projects !== null && (
+          <p className="text-[11px] text-fg-subtle">
+            {projects.length} {projects.length === 1 ? 'project' : 'projects'}
+          </p>
+        )}
       </div>
+
+      <button
+        type="button"
+        onClick={() => setShowForm((open) => !open)}
+        aria-expanded={showForm}
+        className="mb-3 w-full rounded-card border border-border bg-surface px-3 py-2 text-left text-sm font-medium text-fg hover:border-border-strong hover:text-accent"
+      >
+        <span aria-hidden="true" className="mr-1 text-accent">+</span>New project
+      </button>
 
       {showForm && (
         <NewProjectForm
@@ -231,7 +249,7 @@ export default function ProjectListView({ client = api, onSelectProject }) {
       )}
 
       {loading && (
-        <p role="status" className="text-sm text-slate-500">
+        <p role="status" className="text-sm text-fg-subtle">
           Loading projects…
         </p>
       )}
@@ -239,13 +257,13 @@ export default function ProjectListView({ client = api, onSelectProject }) {
       {error !== null && (
         <div
           role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          className="rounded-card border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
         >
           <p>{describeLoadFailure(error)}</p>
           <button
             type="button"
             onClick={() => setReloadCount((count) => count + 1)}
-            className="mt-3 rounded border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100"
+            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
           >
             Try again
           </button>
@@ -253,7 +271,11 @@ export default function ProjectListView({ client = api, onSelectProject }) {
       )}
 
       {projects !== null && (
-        <ProjectList projects={projects} onSelectProject={onSelectProject} />
+        <ProjectList
+          projects={projects}
+          onSelectProject={onSelectProject}
+          selectedProjectId={selectedProjectId}
+        />
       )}
     </section>
   );
