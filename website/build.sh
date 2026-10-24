@@ -1,19 +1,22 @@
 #!/bin/sh
-# Build the VaultShield wheel into website/dist/ so install.sh can fetch it.
+# Build the VaultShield wheel into frontend/public/dist/ so the dashboard can
+# serve it and install.sh can fetch it from the same origin.
 #
 # Uses the cli/.venv's own pip (`pip wheel --no-deps`): the wheel carries no
 # bundled dependencies, and `install.sh` resolves those from PyPI at install
-# time. The built wheel is copied to website/dist/vaultshield-<version>.whl —
-# the exact path install.sh downloads; install.sh re-saves it under the proper
-# wheel filename before `pip install`, so pip is happy either way.
+# time. The built wheel is copied to
+# frontend/public/dist/vaultshield-<version>.whl — the exact path install.sh
+# downloads (served by the dashboard at /dist/...); install.sh re-saves it
+# under the proper wheel filename before `pip install`, so pip is happy either
+# way. The dist dir is git-ignored.
 #
-# Serve the result with:  cd website && python3 -m http.server 8080
+# Serve the result with the dashboard dev server:  cd frontend && npm run dev
 
 set -eu
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CLI="$REPO/cli"
-DIST="$REPO/website/dist"
+DIST="$REPO/frontend/public/dist"
 VENV_PYTHON="$CLI/.venv/bin/python"
 
 if [ ! -x "$VENV_PYTHON" ]; then

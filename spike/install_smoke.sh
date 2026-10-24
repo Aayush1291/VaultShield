@@ -6,8 +6,9 @@
 #
 # It never touches your real install: VAULTSHIELD_HOME and VAULTSHIELD_BIN point
 # at a throw-away /tmp prefix, so your ~/.vaultshield/venv and ~/.local/bin are
-# left alone. It builds the wheel, serves website/ on :8080, runs install.sh the
-# way a user would, checks `vaultshield --version`, then uninstalls and cleans up.
+# left alone. It builds the wheel, serves the dashboard's public dir on :8080,
+# runs install.sh the way a user would, checks `vaultshield --version`, then
+# uninstalls and cleans up.
 # It does not run `secure` or `protect`, so it never writes to your Keychain or
 # any agent config.
 
@@ -36,8 +37,8 @@ cleanup() {
 trap cleanup EXIT
 
 say ""
-say "== serve website/ on :$PORT =="
-( cd "$REPO/website" && "$PY" -m http.server "$PORT" >/dev/null 2>&1 ) &
+say "== serve the dashboard public dir (install.sh + dist/) on :$PORT =="
+( cd "$REPO/frontend/public" && "$PY" -m http.server "$PORT" >/dev/null 2>&1 ) &
 SERVER_PID=$!
 sleep 2
 
@@ -47,7 +48,7 @@ VBIN="$DIR/bin/vaultshield"
 say ""
 say "== install into the temp prefix $DIR =="
 VAULTSHIELD_HOME="$VHOME" VAULTSHIELD_BIN="$VBIN" VAULTSHIELD_BASE="http://localhost:$PORT" \
-    sh "$REPO/website/install.sh"
+    sh "$REPO/frontend/public/install.sh"
 
 say ""
 say "== check the launcher works =="
@@ -55,7 +56,7 @@ say "== check the launcher works =="
 
 say ""
 say "== uninstall (temp prefix only) =="
-VAULTSHIELD_HOME="$VHOME" VAULTSHIELD_BIN="$VBIN" sh "$REPO/website/install.sh" --uninstall
+VAULTSHIELD_HOME="$VHOME" VAULTSHIELD_BIN="$VBIN" sh "$REPO/frontend/public/install.sh" --uninstall
 
 if [ -e "$VHOME" ] || [ -e "$VBIN" ]; then
     say "RESULT: FAIL — the temp venv or launcher was not removed."

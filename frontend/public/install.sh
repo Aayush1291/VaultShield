@@ -1,7 +1,7 @@
 #!/bin/sh
 # VaultShield installer (macOS). One command, one isolated Python, one launcher.
 #
-#   curl -fsSL http://localhost:8080/install.sh | sh
+#   curl -fsSL http://localhost:5173/install.sh | sh
 #
 # It finds a Python >= 3.11, makes a private virtual environment just for
 # VaultShield, installs VaultShield into it, and drops a small launcher on your
@@ -14,7 +14,7 @@
 # Overridable with environment variables:
 #   VAULTSHIELD_HOME  the venv directory      (default ~/.vaultshield/venv)
 #   VAULTSHIELD_BIN   the launcher path        (default ~/.local/bin/vaultshield)
-#   VAULTSHIELD_BASE  where to fetch the wheel (default http://localhost:8080)
+#   VAULTSHIELD_BASE  where to fetch the wheel (default http://localhost:5173, the dashboard origin)
 
 set -eu
 
@@ -24,7 +24,7 @@ VERSION="0.1.0"
 
 VAULTSHIELD_HOME="${VAULTSHIELD_HOME:-$HOME/.vaultshield/venv}"
 VAULTSHIELD_BIN="${VAULTSHIELD_BIN:-$HOME/.local/bin/vaultshield}"
-VAULTSHIELD_BASE="${VAULTSHIELD_BASE:-http://localhost:8080}"
+VAULTSHIELD_BASE="${VAULTSHIELD_BASE:-http://localhost:5173}"
 
 VENV_PYTHON="$VAULTSHIELD_HOME/bin/python"
 
@@ -94,7 +94,7 @@ LOCAL_WHEEL="$WORK/vaultshield-$VERSION-py3-none-any.whl"
 say "Downloading VaultShield from $WHEEL_URL ..."
 if ! curl -fsSL -o "$LOCAL_WHEEL" "$WHEEL_URL"; then
     say "Could not download $WHEEL_URL."
-    say "Is the server running?  cd website && python3 -m http.server 8080"
+    say "Build the wheel and serve the dashboard:  ./website/build.sh  then  cd frontend && npm run dev"
     exit 1
 fi
 

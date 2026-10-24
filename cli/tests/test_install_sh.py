@@ -1,4 +1,4 @@
-"""website/install.sh, exercised offline with fake `python`/`curl`/`uname` shims.
+"""frontend/public/install.sh, exercised offline with fake `python`/`curl`/`uname` shims.
 
 A controlled PATH (the shim dir, then /usr/bin and /bin for real coreutils) lets
 the whole installer run without network and without a real Python: the fake
@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-INSTALL_SH = REPO / "website" / "install.sh"
+INSTALL_SH = REPO / "frontend" / "public" / "install.sh"
 
 pytestmark = pytest.mark.skipif(not INSTALL_SH.exists(), reason="install.sh not present")
 

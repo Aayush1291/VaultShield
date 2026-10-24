@@ -54,9 +54,9 @@ function renderApp(path, { token = null, fetchImpl } = {}) {
 it('renders the landing page at /', () => {
   renderApp('/');
 
-  expect(screen.getByRole('heading', { name: 'VaultShield' })).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: 'Sign up' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Log in' })).toHaveAttribute('href', '/login');
+  expect(screen.getByRole('link', { name: 'Sign up' })).toHaveAttribute('href', '/signup');
+  expect(screen.getByTestId('install-cmd')).toBeInTheDocument();
 });
 
 it('shows a Not Found page with a link home for an unknown route', () => {

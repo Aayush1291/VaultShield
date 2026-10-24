@@ -214,6 +214,17 @@ services:
       # compose network and every browser request stays same-origin — which is
       # what lets the backend run without CORS middleware.
       VITE_API_PROXY_TARGET: http://web:8000
+    volumes:
+      # The landing page's one-line installer and the wheel it downloads are
+      # served from the dashboard's own origin (`/install.sh`, `/dist/...`).
+      # `install.sh` is baked into the image by the Dockerfile's `COPY`, but
+      # the wheel is built on the host AFTER the image (`website/build.sh`
+      # writes `frontend/public/dist/`, which is git-ignored and so never in
+      # the build context). Bind-mounting the public dir read-only is the
+      # least-invasive way to make the host-built wheel reachable in the
+      # container; it does not shadow node_modules (which lives at
+      # /app/node_modules), so the dev server is unaffected.
+      - ./frontend/public:/app/public:ro
     ports:
       - "${FRONTEND_PUBLISHED_PORT:-5173}:5173"
     depends_on:

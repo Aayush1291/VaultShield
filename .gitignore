@@ -28,5 +28,6 @@ eval "$(ssh-agent -s)".pub
 id_rsa
 id_ed25519
 
-# Built wheel served by website/install.sh (website/build.sh writes it here).
-/website/dist/
+# Built wheel served by the dashboard at /dist/ (website/build.sh writes it
+# into the frontend's public dir; the dashboard dev server serves public/).
+/frontend/public/dist/
