@@ -9,38 +9,76 @@ live-streaming path — and it talks to the Django backend over the REST API in
 
 ```
 frontend/
-  index.html            # Vite entry document
+  index.html            # Vite entry document (viewport meta lives here)
   vite.config.js        # React + Tailwind plugins, /api and /media dev proxy
   babel.config.cjs      # Jest-only transform (browser build does not use it)
   jest.config.cjs       # jsdom environment, co-located *.test.js(x)
+  public/
+    install.sh          # the macOS installer, served same-origin at /install.sh
+    dist/               # the built wheel (git-ignored), served at /dist/<wheel>
   src/
-    main.jsx            # browser entry; the only reader of import.meta.env
-    App.jsx             # dashboard shell; mounts the views, holds the selected Project, owns the delete-project dialog
-    ProjectListView.jsx # GET /api/projects/, one card per Project
-    RunHistoryView.jsx  # GET /api/runs/?project=:id, one row per Run with its status
+    main.jsx            # browser entry; wraps <App/> in BrowserRouter; reads import.meta.env
+    App.jsx             # the route table, wrapped in AuthProvider
+    auth.jsx            # AuthProvider/useAuth, guardClient, RequireAuth, RedirectIfSignedIn
+    Landing.jsx         # / marketing page (self-contained styles, origin-built install cmd)
+    Login.jsx / Signup.jsx    # /login (wraps LoginView) and the /signup placeholder
+    NotFound.jsx        # the * friendly 404
+    DashboardLayout.jsx # /dashboard shell: sidebar + top bar + <Outlet/>, New project + delete modals
+    ProjectsOverview.jsx      # /dashboard index: project cards + New project + empty state
+    ProjectRunsPage.jsx       # /dashboard/projects/:projectId: the runs table
+    RunDetailPage.jsx         # .../runs/:runId: run detail, active tab in ?tab=
+    Modal.jsx           # generic accessible modal (role=dialog, focus trap, scroll lock)
+    ProjectListView.jsx # the sidebar project list (GET /api/projects/)
+    RunHistoryView.jsx  # RunStatusBadge + the tab components reused by the pages
+    RunDetailView.jsx   # the four tabs + decision controls (tab controllable via props)
+    NewProjectForm.jsx  # the create-project form (used inside the modal)
     api.js              # backend API client (one function per REST endpoint)
     config.js           # API base URL resolution
     format.js           # display text shared by the views (dates, load failures)
     index.css           # Tailwind v4 entry
 ```
 
-## Views
+## Routes
 
-Each view splits fetching from rendering: the view component owns the request
-and the loading/failed/loaded decision, and a pure component underneath it
-(`ProjectList`/`ProjectCard`, `RunList`/`RunRow`) turns records into markup.
-The pure half takes records as a prop and holds no state, so it renders exactly
-what it was given and can be driven directly by a property test.
+The dashboard is a single-page app with client-side routing
+(`react-router-dom`). `src/main.jsx` provides a `BrowserRouter`; tests mount
+`<App/>` in a `MemoryRouter`.
 
-Views take the API client as a prop defaulting to the shared singleton
-(`<ProjectListView client={...} />`), which is how tests point one at an
-injected transport instead of a live backend.
+| Path | Page |
+|---|---|
+| `/` | Landing (public) |
+| `/login` | Sign in — redirects to `/dashboard` if already signed in |
+| `/signup` | Placeholder (no form yet) — redirects to `/dashboard` if signed in |
+| `/dashboard` | Projects overview |
+| `/dashboard/projects/:projectId` | That project's runs |
+| `/dashboard/projects/:projectId/runs/:runId` | Run detail (active tab in `?tab=`) |
+| anything else | Not Found, with a link home |
 
-Selecting a Project in the list opens its run history. That selection is one
-piece of state in `App.jsx`, not a route — nothing in the requirements calls
-for URL-addressable views yet, so no routing library is pulled in. Both views
-stay mounted, and `RunHistoryView` renders a "select a project" prompt until
-one is picked rather than requesting an unfiltered run list.
+**Guards.** `/dashboard*` requires a stored Dashboard_Auth_Token: with none, the
+Reviewer is sent to `/login` and returned to the page they wanted after signing
+in. A signed-in Reviewer visiting `/login` or `/signup` is sent to `/dashboard`.
+Any request refused as unauthenticated (401/403) clears the token and returns
+to `/login`, and so does Sign out.
+
+**Deep links and refresh** work for every route: the dev server and
+`vite preview` fall back to `index.html` for unknown paths (Vite's SPA default),
+so the Dockerfile (`npm run dev`) and compose need no extra config. Run detail
+reads its tab from `?tab=diff|timeline|screenshots|security` (default `diff`),
+so a deep link or refresh opens on the right tab.
+
+## Views and pages
+
+Each view splits fetching from rendering: the view owns the request and the
+loading/failed/loaded decision, and a pure component underneath it
+(`ProjectList`/`ProjectCard`, the tab components) turns records into markup, so
+it can be driven directly by a property test. Views and pages take the API
+client as a prop defaulting to the shared singleton, which is how tests point
+one at an injected transport instead of a live backend.
+
+The runs page is a full-width table — run id (a link to the run's detail
+route), agent, status, and a relative created time — with status filter chips
+(the backend's `?status=`), a client-side run-id search, and a "Load more"
+button that follows DRF's `next` link page by page.
 
 ## Signing in and creating projects
 
@@ -48,37 +86,35 @@ The dashboard uses **single-user MVP authentication**: one shared account and a
 token, with no sign-up, no password reset, and no multi-user roles. It is
 deliberately minimal and is not a substitute for real multi-user auth.
 
-**Signing in.** With no token stored, the app shows a sign-in screen
-(`LoginView`) instead of the three views. Enter the dashboard account's username
-and password and submit; on success `POST /api/auth/login/` returns a token,
-which the client stores. A wrong username or password shows "Wrong username or
-password" and stores nothing; a backend that cannot be reached shows "Cannot
-reach the VaultShield backend". The password and the token are never logged or
-rendered. This replaces pasting a token into the browser console.
+**Signing in.** With no token stored, `/dashboard*` sends the Reviewer to
+`/login`. Enter the dashboard account's username and password and submit; on
+success `POST /api/auth/login/` returns a token, which the client stores and the
+Reviewer is returned to the page they first asked for (default `/dashboard`). A
+wrong username or password shows "Wrong username or password" and stores
+nothing; a backend that cannot be reached shows "Cannot reach the VaultShield
+backend". The password and the token are never logged or rendered.
 
-Once signed in, a **Sign out** link in the header clears the stored token and
-returns to the sign-in screen. If any view's request is refused as
-unauthenticated (401/403) — typically an expired or cleared token — the token is
-dropped and the sign-in screen returns automatically.
+Once signed in, a **Sign out** control clears the token and returns to `/login`.
+Any request refused as unauthenticated (401/403) — typically an expired token —
+clears the token and returns to `/login` automatically.
 
-**Creating a project.** The project list has a **New project** button that opens
-a small form with Name and Repository URL. The URL field accepts both
-`https://…` and `git@…:…` remotes; both fields are required and trimmed.
-Submitting calls `POST /api/projects/`; on success the form closes, the list
-reloads, and the new project is selected (opening its run history). This
-replaces the old `curl` step. Duplicate names are allowed — the backend decides
-— so a name clash comes back as a `400` shown next to the Name field, alongside
-any other field errors.
+**Signing up.** `/signup` is a placeholder with no form: account creation is a
+later release (`vaultshield signup`); for now you sign in with an account the
+administrator created.
 
-**Deleting a project.** With a Project open, a **Delete project** control in the
-top bar opens a confirmation dialog that names the Project and warns that all of
-its runs are permanently deleted. The dialog is modal (`role="dialog"` +
-`aria-modal`): focus moves into it on open and returns to the control on close,
-Escape cancels, and Tab stays within it. Confirming calls
-`DELETE /api/projects/:id/`, which removes the Project and its whole run history
-on the backend; a failure is shown in the dialog so you can retry or cancel. On
-success the selection clears, the run detail closes, and the sidebar reloads
-without the deleted Project. The control is absent until a Project is selected.
+**Creating a project.** The sidebar and the overview each have a **New project**
+button that opens a modal with Name and Repository URL. The URL field accepts
+both `https://…` and `git@…:…` remotes; both fields are required and trimmed.
+Submitting calls `POST /api/projects/`; on success the modal closes, the sidebar
+reloads, and you land on the new project's runs route. Duplicate names are the
+backend's call, so a clash comes back as a `400` shown next to the Name field.
+
+**Deleting a project.** On a project route, a **Delete project** control in the
+top bar opens a confirm modal that names the Project and warns its runs are
+permanently deleted (`role="dialog"` + `aria-modal`, focus trapped and returned
+to the control, Escape/backdrop cancel). Confirming calls
+`DELETE /api/projects/:id/`; on success the sidebar reloads and you return to the
+overview. A failure is shown in the modal so you can retry or cancel.
 
 **Where the token lives.** The Dashboard_Auth_Token is still kept in
 `localStorage` (key `vaultshield.dashboard_auth_token`), falling back to memory
@@ -109,6 +145,25 @@ The dashboard requests relative paths and the dev server proxies them, so the
 browser only ever makes same-origin requests and the backend needs no CORS
 middleware. Set `VITE_API_BASE_URL` only when the API genuinely lives on
 another origin.
+
+## One origin for the installer
+
+The landing page's one-line installer and the wheel it downloads are served by
+the dashboard itself, from `public/`:
+
+- `public/install.sh` → served at `/install.sh`. The Landing component builds
+  the displayed command from the page's own origin
+  (`curl -fsSL <origin>/install.sh | sh`), so it always points at wherever the
+  page is served. `install.sh` defaults `VAULTSHIELD_BASE` to
+  `http://localhost:5173` (the dashboard origin).
+- `public/dist/vaultshield-<version>.whl` → served at `/dist/<wheel>`. Build it
+  with `./website/build.sh`, which writes the wheel into `public/dist/` (that
+  directory is git-ignored). `install.sh` downloads `$VAULTSHIELD_BASE/dist/…`.
+
+Vite serves everything under `public/` at the site root in both `npm run dev`
+and `vite preview`, so no build step is needed for `install.sh` to be live. In
+compose, the frontend service bind-mounts `frontend/public` read-only so the
+host-built wheel (created after the image) is reachable in the container.
 
 ## API client
 
