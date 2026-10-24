@@ -104,16 +104,22 @@ BUILTIN_ALLOWLISTS: dict[str, tuple[str, ...]] = {
     # `cloud-platform` token can upload to a bucket in the developer's own
     # project without a `violation` event (accepted residual risk).
     #
+    # `antigravity-unleash.goog` (the feature-flag service) and
+    # `lh3.googleusercontent.com` (profile avatars) are now allowlisted too:
+    # the sign-in and dashboard flow contact both, and denying them produced
+    # `violation` noise without blocking anything carrying the model traffic.
+    #
     # Seen and deliberately NOT listed: `storage.googleapis.com` (Cloud Storage
-    # upload), `play.googleapis.com`, `antigravity-unleash.goog` and the
-    # `*.run.app` auto-updater (telemetry, feature flags, updates),
-    # `lh3.googleusercontent.com` (avatars) and the `playwright*.azureedge.net`
-    # CDNs (browser downloads).
+    # upload), `play.googleapis.com` and the `*.run.app` auto-updater
+    # (telemetry, updates), and the `playwright*.azureedge.net` CDNs (browser
+    # downloads).
     "antigravity": (
         "oauth2.googleapis.com",
         "daily-cloudcode-pa.googleapis.com",
         "cloudcode-pa.googleapis.com",
         "www.googleapis.com",
+        "lh3.googleusercontent.com",
+        "antigravity-unleash.goog",
     ),
     # Unverified (API-key mode).
     "codex": ("api.openai.com",),
