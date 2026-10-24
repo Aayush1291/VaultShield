@@ -1,19 +1,39 @@
 /**
  * The `/dashboard/projects/:projectId/runs/:runId` route: one Run's detail.
  *
- * Step 1 wires the existing `RunDetailView` to the URL (the run id is a route
- * param) and adds a back link to the Project's runs. Step 7 lifts the active
- * tab into the URL and gives the page the sticky header treatment.
+ * Wraps the existing `RunDetailView` (sticky header, decision bar for an
+ * awaiting-review Run, and the four tabs) as a full page with a back link to
+ * the Project's runs. The active tab lives in the URL as `?tab=`, so deep
+ * links and refreshes open on the right tab; an unknown or missing value falls
+ * back to the default (diff). Switching tabs replaces the history entry rather
+ * than stacking one per tab.
  */
 
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
-import RunDetailView from './RunDetailView.jsx';
+import RunDetailView, { DEFAULT_TAB_ID, TABS } from './RunDetailView.jsx';
 import { useAuth } from './auth.jsx';
+
+const TAB_IDS = TABS.map((tab) => tab.id);
 
 export default function RunDetailPage() {
   const { projectId, runId } = useParams();
   const { client } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const requested = searchParams.get('tab');
+  const activeTab = TAB_IDS.includes(requested) ? requested : DEFAULT_TAB_ID;
+
+  function onTabChange(id) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', id);
+        return next;
+      },
+      { replace: true },
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -23,7 +43,7 @@ export default function RunDetailPage() {
       >
         <span aria-hidden="true">←</span> Back to runs
       </Link>
-      <RunDetailView client={client} runId={runId} />
+      <RunDetailView client={client} runId={runId} tab={activeTab} onTabChange={onTabChange} />
     </div>
   );
 }

@@ -692,15 +692,27 @@ function comparableNumber(value) {
  * A nullish `runId` does not fetch — there is no Run to ask for — and renders
  * `NO_RUN_SELECTED_MESSAGE`.
  *
- * @param {{ runId?: string|null, client?: typeof api }} props
+ * @param {{ runId?: string|null, client?: typeof api,
+ *           tab?: string, onTabChange?: (id: string) => void }} props
+ *   `tab`/`onTabChange` make the selected tab controllable (the run detail
+ *   page drives it from the URL `?tab=`); omit both to use internal state.
  */
-export default function RunDetailView({ runId = null, client = api }) {
+export default function RunDetailView({ runId = null, client = api, tab, onTabChange }) {
   // `null` distinguishes "not loaded yet" from a loaded Run, so the first paint
   // is a loading line rather than a flash of four empty tabs.
   const [run, setRun] = useState(null);
   const [error, setError] = useState(null);
   const [reloadCount, setReloadCount] = useState(0);
-  const [activeTabId, setActiveTabId] = useState(DEFAULT_TAB_ID);
+  // The selected tab is controllable: when `tab`/`onTabChange` are supplied
+  // (the page drives them from the URL) they win; otherwise it is internal
+  // state, which is the standalone behaviour this component's tests rely on.
+  const tabControlled = tab !== undefined;
+  const [internalTabId, setInternalTabId] = useState(DEFAULT_TAB_ID);
+  const activeTabId = tabControlled ? tab || DEFAULT_TAB_ID : internalTabId;
+  const changeTab = (id) => {
+    if (tabControlled) onTabChange?.(id);
+    else setInternalTabId(id);
+  };
   // The decision currently being posted, or `null`. Both a "which button is
   // busy" flag and the guard that keeps a second decision from being sent while
   // the first is in flight.
@@ -755,11 +767,12 @@ export default function RunDetailView({ runId = null, client = api }) {
     };
   }, [client, runId, reloadCount]);
 
-  // A newly selected Run opens on the diff, rather than on whichever tab the
-  // previous Run happened to be left on.
+  // A newly selected Run opens on the diff — but only when the tab is internal;
+  // a controlled tab is owned by the URL, so a deep link like `?tab=security`
+  // is honoured rather than reset on mount.
   useEffect(() => {
-    setActiveTabId(DEFAULT_TAB_ID);
-  }, [runId]);
+    if (!tabControlled) setInternalTabId(DEFAULT_TAB_ID);
+  }, [runId, tabControlled]);
 
   const selected = runId !== null && runId !== undefined && runId !== '';
   const loading = selected && run === null && error === null;
@@ -821,7 +834,7 @@ export default function RunDetailView({ runId = null, client = api }) {
    * @param {string} id
    */
   function selectAndFocus(id) {
-    setActiveTabId(id);
+    changeTab(id);
     tabRefs.current[id]?.focus();
   }
 
@@ -947,7 +960,7 @@ export default function RunDetailView({ runId = null, client = api }) {
                   ref={(node) => {
                     tabRefs.current[tab.id] = node;
                   }}
-                  onClick={() => setActiveTabId(tab.id)}
+                  onClick={() => changeTab(tab.id)}
                   className={`rounded-card px-3 py-1.5 text-sm font-medium transition-colors ${
                     isActive
                       ? 'bg-surface text-fg shadow-soft'
