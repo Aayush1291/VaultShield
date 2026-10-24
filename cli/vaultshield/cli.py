@@ -156,6 +156,7 @@ from vaultshield.teardown import teardown as teardown_run
 # runs the same flow as `ask` and returns the enriched prompt instead of
 # printing it.
 from vaultshield.orchestrate.commands import run_orchestrator
+from vaultshield.orchestrate.context import LeakError, assert_clean
 
 # Adapter dispatch table for the `run` command (Task 6.4): maps an
 # `--agent` choice to its Agent_Adapter subclass. `run`'s `--agent` option
@@ -807,6 +808,15 @@ def run(
     built = None
     if ask is not None:
         built = run_orchestrator(ask, skip_questions=yes, answers_file=answers)
+        # The SAME final secret check `ask` runs, on the exact text about to
+        # become the agent prompt. Placed before the Run is registered, so a
+        # leak stops the Run with nothing created; the prompt is never mutated
+        # between here and the adapter, so this is the check "right before it is
+        # handed to the adapter".
+        try:
+            assert_clean(built.text, built.secrets)
+        except LeakError as exc:
+            raise click.ClickException(str(exc)) from None
         prompt = built.text
 
     # 2. Run_Directory (Task 8.1). `generate_run_id`'s output is always a
