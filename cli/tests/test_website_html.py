@@ -77,3 +77,27 @@ def test_is_mobile_and_dark_friendly():
     text = html()
     assert 'name="viewport"' in text
     assert "prefers-color-scheme" in text
+
+
+def test_supported_agents_have_honest_status_labels():
+    text = html()
+    # "proven live" is claimed for exactly one agent: Antigravity.
+    assert text.count("proven live") == 1
+    assert re.search(r'Antigravity</span>\s*<span class="badge live">proven live', text), (
+        "Antigravity should be the one agent marked proven live"
+    )
+    # The other three are honestly marked as built-from-docs, not live-tested.
+    assert text.count("built from docs, not live-tested") == 3
+    for agent in ("Claude Code", "Kiro", "Codex"):
+        assert agent in text, f"missing agent: {agent}"
+
+
+def test_is_macos_only_and_shows_the_secure_terminal_mock():
+    text = html()
+    assert "macOS only" in text
+    # The CSS-only terminal mock runs `vaultshield secure` and shows the
+    # placeholder the agent then reads.
+    assert "vaultshield secure" in text
+    assert "vs_protected" in text
+    # The reduced-motion fallback must exist so the mock is not motion-only.
+    assert "prefers-reduced-motion" in text
