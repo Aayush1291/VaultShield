@@ -55,6 +55,18 @@ WORK="$(mktemp -d "/tmp/vs-submit-smoke.XXXXXX")" || { say "Could not make a tem
 say "== clone the scratch repo into $WORK/checkout =="
 git clone "$VS_SCRATCH_REPO" "$WORK/checkout" || { say "Clone failed."; exit 1; }
 
+# A fresh clone of an arbitrary repo has no .vaultshield.yml, so `run` would
+# stop at config load. Drop a minimal one in (a trivial static server as the
+# app; no routes, so browser capture is skipped) unless the repo ships its own.
+if [ ! -f "$WORK/checkout/.vaultshield.yml" ]; then
+    cat > "$WORK/checkout/.vaultshield.yml" <<'EOF'
+agent: mock
+start_command: python3 -m http.server 8000
+port: 8000
+ready_path: /
+EOF
+fi
+
 run_args=(run --agent=mock --prompt="$PROMPT" --repo-url="$VS_SCRATCH_REPO")
 [ -n "${VS_PROJECT:-}" ] && run_args+=(--project "$VS_PROJECT")
 
