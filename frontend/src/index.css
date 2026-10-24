@@ -3,9 +3,144 @@
  * v4 replaced the `@tailwind base/components/utilities` triple and the
  * `tailwind.config.js` content globs with a single import: the
  * `@tailwindcss/vite` plugin in `vite.config.js` scans the project for used
- * class names itself. Custom theme values, when the dashboard needs them,
- * go in an `@theme { ... }` block below this import rather than in a
- * separate config file.
+ * class names itself. Custom theme values go in the `@theme { ... }` block
+ * below rather than in a separate config file.
+ *
+ * ### Design tokens (Phase 2 redesign)
+ *
+ * Colors here are SEMANTIC (`--color-canvas`, `--color-surface`, `--color-fg`,
+ * `--color-accent`, …) rather than raw palette steps, so a component writes
+ * `bg-surface text-fg border-border` once and gets both themes: the dark
+ * values are swapped in by a `prefers-color-scheme` media query that overrides
+ * the same custom properties, so no component needs a `dark:` variant on every
+ * class. Tailwind still generates every palette utility it always did, so the
+ * existing Run_Status chips keep their literal `amber/emerald/red/...` classes
+ * untouched (the task: "Keep the existing status colors").
+ *
+ * Radii target the 16–24px rounded-card look; `--shadow-soft`/`--shadow-card`
+ * are the diffuse, low-contrast shadows; `--text-display` is the hero headline
+ * step. Fonts are the system stacks only — no external/CDN font.
  */
 
 @import 'tailwindcss';
+
+@theme {
+  /* Type: system stacks, no webfont. */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Type scale additions (the defaults cover the rest). */
+  --text-display: 3.25rem;
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.03em;
+  --text-hero: 2.25rem;
+  --text-hero--line-height: 1.1;
+  --text-hero--letter-spacing: -0.02em;
+
+  /* Rounded-card radii (16–24px) plus a pill. */
+  --radius-card: 1rem; /* 16px */
+  --radius-card-lg: 1.25rem; /* 20px */
+  --radius-card-xl: 1.5rem; /* 24px */
+  --radius-pill: 9999px;
+
+  /* Soft, diffuse shadows. */
+  --shadow-soft: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px rgb(15 23 42 / 0.06);
+  --shadow-card: 0 1px 3px rgb(15 23 42 / 0.06), 0 12px 32px rgb(15 23 42 / 0.08);
+  --shadow-glow: 0 24px 80px -24px rgb(99 102 241 / 0.45);
+
+  /* Semantic colors — LIGHT (warm white + indigo→violet accent). */
+  --color-canvas: #fbfaf8; /* warm off-white page */
+  --color-surface: #ffffff; /* cards, sidebar panels */
+  --color-surface-muted: #f4f2ee; /* subtle fills, code wells */
+  --color-fg: #1b1b1f; /* primary text */
+  --color-fg-muted: #5b5b66; /* secondary text */
+  --color-fg-subtle: #83838f; /* tertiary/meta text */
+  --color-border: #e7e3dc; /* hairlines */
+  --color-border-strong: #d7d2c9;
+  --color-accent: #4f46e5; /* indigo-600 */
+  --color-accent-strong: #4338ca; /* indigo-700 (hover) */
+  --color-accent-contrast: #ffffff; /* text on accent */
+  --color-accent-soft: #eef0ff; /* tinted accent fill */
+  --color-violet: #7c3aed; /* gradient end */
+  --color-ring: #6366f1; /* focus ring */
+}
+
+/* Semantic colors — DARK. Only the custom properties flip; every
+ * `bg-surface` / `text-fg` / `border-border` utility follows automatically. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #0d0e12;
+    --color-surface: #16181f;
+    --color-surface-muted: #1d2029;
+    --color-fg: #ecedf1;
+    --color-fg-muted: #a6a8b3;
+    --color-fg-subtle: #7f818d;
+    --color-border: #2a2d38;
+    --color-border-strong: #3a3e4c;
+    --color-accent: #818cf8; /* indigo-400, lifted for dark */
+    --color-accent-strong: #a5b4fc;
+    --color-accent-contrast: #0d0e12;
+    --color-accent-soft: #1e2030;
+    --color-violet: #a78bfa;
+    --color-ring: #818cf8;
+
+    --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.5);
+    --shadow-card: 0 1px 3px rgb(0 0 0 / 0.45), 0 12px 32px rgb(0 0 0 / 0.55);
+    --shadow-glow: 0 24px 80px -24px rgb(129 140 248 / 0.4);
+  }
+}
+
+/* Base: the page adopts the tokens, and controls match the active scheme. */
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Visible focus for keyboard users across the redesigned chrome. Mouse clicks
+ * do not trigger `:focus-visible`, so this is not noise for pointer users. */
+:where(a, button, input, [role='tab'], [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+}
+
+/* Motion only when the user has not asked for less. The redesign's transitions
+ * and the dashboard's animated bits opt in via `.vs-animate`/`.vs-motion-safe`;
+ * here we also hard-stop any animation/transition under reduce. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The hero's soft indigo→violet glow. Decorative, pointer-transparent; the
+ * element sits behind the hero content. */
+.vs-hero-glow {
+  background-image:
+    radial-gradient(60% 55% at 20% 0%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 70%),
+    radial-gradient(55% 55% at 85% 10%, color-mix(in srgb, var(--color-violet) 20%, transparent), transparent 70%);
+}
