@@ -84,21 +84,49 @@ export default function LoginView({ client = api, onSignedIn }) {
     }
   }
 
+  const fieldClass =
+    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-accent';
+
   return (
     <section
       aria-labelledby="login-heading"
-      className="mx-auto mt-16 max-w-sm rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+      className="w-full max-w-sm rounded-card-xl border border-border bg-surface p-8 shadow-card"
     >
-      <h2 id="login-heading" className="text-base font-semibold text-slate-900">
-        Sign in
-      </h2>
-      <p className="mt-1 text-sm text-slate-500">
-        Sign in with your VaultShield dashboard account.
-      </p>
+      <div className="mb-6 flex flex-col items-center text-center">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="h-10 w-10 text-accent" fill="none">
+          <path
+            d="M12 2.5 19 5.2v6.1c0 4.6-3 7.9-7 9.7-4-1.8-7-5.1-7-9.7V5.2L12 2.5Z"
+            fill="currentColor"
+            opacity="0.16"
+          />
+          <path
+            d="M12 2.5 19 5.2v6.1c0 4.6-3 7.9-7 9.7-4-1.8-7-5.1-7-9.7V5.2L12 2.5Z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+          <path
+            d="m9 11.7 2.2 2.2L15 9.8"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-fg-subtle">
+          VaultShield
+        </p>
+        <h2 id="login-heading" className="mt-2 text-2xl font-semibold tracking-tight text-fg">
+          Sign in
+        </h2>
+        <p className="mt-1 text-sm text-fg-muted">
+          Review your agent runs and approve what ships.
+        </p>
+      </div>
 
-      <form onSubmit={handleSubmit} aria-busy={pending} className="mt-6 space-y-4">
+      <form onSubmit={handleSubmit} aria-busy={pending} className="space-y-4">
         <div>
-          <label htmlFor="login-username" className="block text-sm font-medium text-slate-700">
+          <label htmlFor="login-username" className="block text-sm font-medium text-fg-muted">
             Username
           </label>
           <input
@@ -110,12 +138,12 @@ export default function LoginView({ client = api, onSignedIn }) {
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             disabled={pending}
-            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            className={fieldClass}
           />
         </div>
 
         <div>
-          <label htmlFor="login-password" className="block text-sm font-medium text-slate-700">
+          <label htmlFor="login-password" className="block text-sm font-medium text-fg-muted">
             Password
           </label>
           <input
@@ -127,14 +155,14 @@ export default function LoginView({ client = api, onSignedIn }) {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={pending}
-            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            className={fieldClass}
           />
         </div>
 
         {error !== null && (
           <p
             role="alert"
-            className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+            className="rounded-card border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
           >
             {error}
           </p>
@@ -143,11 +171,18 @@ export default function LoginView({ client = api, onSignedIn }) {
         <button
           type="submit"
           disabled={pending}
-          className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60"
+          className="w-full rounded-card bg-accent px-3 py-2.5 text-sm font-semibold text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-60"
         >
           {pending ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
+
+      {/*
+        Reserved for a later phase: a divider and "Continue with GitHub" /
+        "Continue with Google" buttons mount here, below the credential form.
+        They are deliberately NOT rendered yet — this comment marks the slot so
+        adding them is a drop-in, not a re-layout.
+      */}
     </section>
   );
 }
