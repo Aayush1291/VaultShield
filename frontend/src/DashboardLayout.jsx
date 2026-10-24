@@ -58,8 +58,10 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
 
   // Records the sidebar loaded, lifted here so the breadcrumb and delete
-  // dialog can name the open Project without a second request.
-  const [projects, setProjects] = useState([]);
+  // dialog can name the open Project without a second request. `null` until
+  // the sidebar's first load reports in, so the overview can tell loading from
+  // genuinely empty.
+  const [projects, setProjects] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Bumped to remount the sidebar's `ProjectListView`, which re-runs its
   // fetch — how a create and a delete refresh the list.
@@ -77,7 +79,7 @@ export default function DashboardLayout() {
   const [creating, setCreating] = useState(false);
   const newProjectButtonRef = useRef(null);
 
-  const currentProject = projects.find((p) => String(p?.id) === String(projectId)) ?? null;
+  const currentProject = (projects ?? []).find((p) => String(p?.id) === String(projectId)) ?? null;
 
   function selectProject(project) {
     setDrawerOpen(false);
@@ -247,7 +249,14 @@ export default function DashboardLayout() {
           </header>
 
           <main className="w-full flex-1 px-4 py-8 md:px-8">
-            <Outlet context={{ projects, currentProject, reloadProjects }} />
+            <Outlet
+              context={{
+                projects,
+                currentProject,
+                reloadProjects,
+                openNewProject: () => setNewProjectOpen(true),
+              }}
+            />
           </main>
         </div>
       </div>

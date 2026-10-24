@@ -62,7 +62,10 @@ function renderDashboard(fetchImpl) {
 it('opens an accessible New project modal from the sidebar and moves focus into it', async () => {
   renderDashboard(dashFetch());
 
-  const trigger = await screen.findByRole('button', { name: 'New project' });
+  // The sidebar and the overview each have a New project button; use the
+  // sidebar's (first in DOM order), which owns the focus-return ref.
+  await screen.findByRole('button', { name: 'Sign out' });
+  const trigger = screen.getAllByRole('button', { name: 'New project' })[0];
   await userEvent.click(trigger);
 
   const dialog = screen.getByRole('dialog', { name: 'New project' });
@@ -75,7 +78,8 @@ it('closes the modal on Escape and returns focus to the opener, without creating
   const fetchImpl = dashFetch();
   renderDashboard(fetchImpl);
 
-  const trigger = await screen.findByRole('button', { name: 'New project' });
+  await screen.findByRole('button', { name: 'Sign out' });
+  const trigger = screen.getAllByRole('button', { name: 'New project' })[0];
   await userEvent.click(trigger);
   await userEvent.keyboard('{Escape}');
 
@@ -88,7 +92,8 @@ it('creates a project, closes the modal, reloads the sidebar, and opens the new 
   const fetchImpl = dashFetch();
   renderDashboard(fetchImpl);
 
-  await userEvent.click(await screen.findByRole('button', { name: 'New project' }));
+  await screen.findByRole('button', { name: 'Sign out' });
+  await userEvent.click(screen.getAllByRole('button', { name: 'New project' })[0]);
   await userEvent.type(screen.getByLabelText('Name'), 'new-service');
   await userEvent.type(screen.getByLabelText('Repository URL'), 'git@github.com:acme/new-service.git');
   await userEvent.click(screen.getByRole('button', { name: 'Create project' }));
@@ -111,7 +116,8 @@ it('creates a project, closes the modal, reloads the sidebar, and opens the new 
 it('surfaces a backend 400 inside the still-open modal', async () => {
   renderDashboard(dashFetch({ createStatus: 400 }));
 
-  await userEvent.click(await screen.findByRole('button', { name: 'New project' }));
+  await screen.findByRole('button', { name: 'Sign out' });
+  await userEvent.click(screen.getAllByRole('button', { name: 'New project' })[0]);
   await userEvent.type(screen.getByLabelText('Name'), 'dupe');
   await userEvent.type(screen.getByLabelText('Repository URL'), 'git@github.com:acme/dupe.git');
   await userEvent.click(screen.getByRole('button', { name: 'Create project' }));

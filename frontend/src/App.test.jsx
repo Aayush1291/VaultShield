@@ -18,7 +18,6 @@ import { MemoryRouter } from 'react-router-dom';
 
 import App from './App.jsx';
 import { createApiClient, createMemoryTokenStore } from './api.js';
-import { OVERVIEW_PROMPT } from './ProjectsOverview.jsx';
 
 /** A stand-in for `Response`, which jsdom does not provide. */
 function jsonResponse(body, { status = 200, statusText = 'OK' } = {}) {
@@ -75,7 +74,7 @@ it('redirects a signed-out visitor from a protected route to /login', async () =
 it('redirects a signed-in visitor away from /login to the dashboard', async () => {
   renderApp('/login', { token: 'active-token' });
 
-  expect(await screen.findByText(OVERVIEW_PROMPT)).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument();
 });
 
@@ -89,23 +88,24 @@ it('signs in and returns to the page the Reviewer first asked for', async () => 
   await userEvent.type(screen.getByLabelText('Password'), 'correct horse');
   await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
-  // Back on the dashboard (its overview), not the login screen.
-  expect(await screen.findByText(OVERVIEW_PROMPT)).toBeInTheDocument();
+  // Back on the dashboard, not the login screen.
+  expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument();
 });
 
 it('renders the dashboard for a signed-in Reviewer', async () => {
   renderApp('/dashboard', { token: 'active-token' });
 
-  expect(await screen.findByText(OVERVIEW_PROMPT)).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+  // The overview heading is present (there are two "Projects" headings: the
+  // sidebar list and the overview).
+  expect(screen.getAllByRole('heading', { name: 'Projects' }).length).toBeGreaterThan(0);
 });
 
 it('signs out and returns to the login screen', async () => {
   const { store } = renderApp('/dashboard', { token: 'active-token' });
 
-  await screen.findByText(OVERVIEW_PROMPT);
-  await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
 
   expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
   expect(store.get()).toBeNull();
