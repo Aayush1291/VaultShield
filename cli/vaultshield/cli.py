@@ -816,6 +816,17 @@ def run(
     run_dir = create_run_dir(repo_root, run_id)
     click.echo(f"Run {run_id}: artifacts in {run_dir}")
 
+    # 2c. With --ask, make the Run_Directory self-explanatory: copy the enriched
+    #     prompt to `prompt.md` and this run's orchestrator call-log lines to
+    #     `orchestrator.jsonl` (verbatim, so only the ledger's existing fields,
+    #     never any prompt or reply content). Nothing new is uploaded to the
+    #     backend.
+    if built is not None:
+        prompt_file = run_dir / "prompt.md"
+        prompt_file.write_text(built.text, encoding="utf-8")
+        (run_dir / "orchestrator.jsonl").write_bytes(built.ledger_delta)
+        click.echo(f"Enriched prompt saved to {prompt_file}")
+
     # 2b. Backend: register the Run before any Sandbox exists, so the upload
     #     at the end has a Run to address and a failure in between can be
     #     recorded against it. Unreachable, unauthenticated, or refused: abort
