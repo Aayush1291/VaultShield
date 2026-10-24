@@ -611,8 +611,37 @@ def login(backend_url: str, username: str | None) -> None:
 )
 @click.option(
     "--prompt",
-    required=True,
-    help="Prompt passed to the selected Agent_Adapter's launch(prompt, workdir).",
+    default=None,
+    help=(
+        "Prompt passed to the selected Agent_Adapter's launch(prompt, workdir). "
+        "Give exactly one of --prompt or --ask."
+    ),
+)
+@click.option(
+    "--ask",
+    default=None,
+    help=(
+        "Instead of --prompt: build the agent prompt with the VaultShield "
+        "orchestrator from this task description. It scans the current directory "
+        "as the project (run it from a checkout of the repo, as with `submit`), "
+        "asks a few clarifying questions, and uses the enriched result as the "
+        "prompt. Give exactly one of --prompt or --ask."
+    ),
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    default=False,
+    help="With --ask: skip the clarifying questions (for scripts).",
+)
+@click.option(
+    "--answers",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "With --ask: read answers from a JSON file, {\"question id\": \"answer\"}, "
+        "instead of asking."
+    ),
 )
 @click.option(
     "--repo-url",
@@ -679,7 +708,8 @@ def login(backend_url: str, username: str | None) -> None:
 @_backend_url_option("VaultShield backend this Run's artifacts are uploaded to")
 def run(
     agent: str,
-    prompt: str,
+    prompt: str | None,
+    ask: str | None,
     repo_url: str,
     base_image: str,
     env_file: Path | None,
@@ -687,6 +717,8 @@ def run(
     interactive_auth: bool,
     project: str | None,
     egress_mode: str | None,
+    yes: bool,
+    answers: Path | None,
     backend_url: str,
 ) -> None:
     """Execute one sandboxed, monitored Run and write its Event_Log.
@@ -725,12 +757,25 @@ def run(
      11. Backend            mark the Run awaiting_review; on any failure
                             after 2b the Run is marked failed
 
+    The agent prompt comes from exactly one of `--prompt` (a literal prompt,
+    as before) or `--ask "<task>"`. With `--ask`, the VaultShield orchestrator
+    runs first — at the very start, before anything is created on disk — and
+    builds an enriched prompt from the current directory's project context and
+    your answers (reuses `vaultshield ask`; `--yes` and `--answers` behave as
+    they do there). The enriched prompt is saved under `.vaultshield/context/`
+    and copied into the Run_Directory as `prompt.md`.
+
     Requires a running Docker daemon, a reachable backend, and a
     `vaultshield login` before anything runs. Every failure is reported as a
     one-line error; when the Event_Log has already been written, the message
     names the Run_Directory it was preserved in. A failed upload leaves the
     Run_Directory exactly as the Run wrote it, so the artifacts stay on disk.
     """
+    # The agent prompt comes from exactly one of `--prompt` or `--ask`. This is
+    # an argument-only check, so it stops before any config read or side effect.
+    if (prompt is None) == (ask is None):
+        raise click.UsageError("Give exactly one of --prompt or --ask.")
+
     repo_root = Path.cwd()
 
     # 1. Config_Module. Before anything else, and before anything is
