@@ -9,6 +9,7 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 
 import App from './App.jsx';
 import api from './api.js';
@@ -24,6 +25,10 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    {/* The browser history Router. Tests wrap `<App />` in a `MemoryRouter`
+        instead, so `App` itself declares no Router. */}
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </StrictMode>,
 );

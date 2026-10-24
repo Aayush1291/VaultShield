@@ -140,7 +140,7 @@ export function ProjectList({ projects, onSelectProject, selectedProjectId = nul
           key={project?.id ?? index}
           project={project}
           onSelect={onSelectProject}
-          selected={selectedProjectId != null && project?.id === selectedProjectId}
+          selected={selectedProjectId != null && String(project?.id) === String(selectedProjectId)}
         />
       ))}
     </ul>
@@ -165,7 +165,12 @@ export function ProjectList({ projects, onSelectProject, selectedProjectId = nul
  *   `selectedProjectId` is presentational only — it highlights the open
  *   Project's card in the sidebar and does not change what is fetched.
  */
-export default function ProjectListView({ client = api, onSelectProject, selectedProjectId = null }) {
+export default function ProjectListView({
+  client = api,
+  onSelectProject,
+  selectedProjectId = null,
+  onProjectsLoaded,
+}) {
   // `null` distinguishes "not loaded yet" from the genuinely empty list, so
   // the first paint is a loading line rather than a flash of the empty state.
   const [projects, setProjects] = useState(null);
@@ -184,7 +189,14 @@ export default function ProjectListView({ client = api, onSelectProject, selecte
     (async () => {
       try {
         const payload = await client.listProjects({ signal: controller.signal });
-        if (active) setProjects(unwrapResults(payload));
+        const records = unwrapResults(payload);
+        if (active) {
+          setProjects(records);
+          // Hand the loaded records up so a routed layout can resolve the
+          // current Project for its breadcrumb and delete dialog without a
+          // second request. `onProjectsLoaded` is a stable setter in practice.
+          if (typeof onProjectsLoaded === 'function') onProjectsLoaded(records);
+        }
       } catch (cause) {
         // The client wraps an aborted request as a status-0 `ApiError` like
         // any other transport failure, so the signal is what tells the two
