@@ -2129,3 +2129,38 @@ class TestProjectDeletion:
 
         assert response.status_code == 401
         assert Project.objects.filter(pk=project.pk).exists()
+
+
+# --- 13. the screenshot URL is same-origin ---------------------------------
+
+
+@pytest.mark.django_db
+class TestScreenshotUrlIsSameOrigin:
+    """`Screenshot.image` serializes to a root-relative `/media/...` path.
+
+    The dashboard loads a screenshot as a plain `<img src>` and reaches the
+    backend through Vite's `changeOrigin` proxy, so an absolute URL built from
+    the request host points at the backend host the proxy forwarded to
+    (`web:8000` in compose), which the browser cannot resolve — the broken
+    image. A root-relative path is loaded from the dashboard's own origin and
+    proxied, which works in both dev and compose.
+    """
+
+    def test_image_is_root_relative_and_carries_no_host(self, settings, tmp_path):
+        settings.MEDIA_ROOT = str(tmp_path)
+        client, _, _ = _authenticated_client()
+        run = _run()
+        _screenshot(run, "root.png")
+
+        # `HTTP_HOST` stands in for what the `changeOrigin` proxy sends the
+        # backend: the internal service host, not the dashboard's origin.
+        response = client.get(f"/api/runs/{run.run_id}/", HTTP_HOST="web:8000")
+
+        assert response.status_code == 200
+        image = response.data["screenshots"][0]["image"]
+        # Root-relative, same-origin: no scheme, no host, not nested under the
+        # `/api/runs/:id/` request path.
+        assert image.startswith("/media/")
+        assert "://" not in image
+        assert "web:8000" not in image
+        assert "/api/runs/" not in image

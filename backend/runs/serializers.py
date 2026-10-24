@@ -165,16 +165,50 @@ class RunDiffSerializer(serializers.ModelSerializer):
 class ScreenshotSerializer(serializers.ModelSerializer):
     """One `Screenshot` as it appears nested in the run detail response.
 
-    `image` renders as a URL under `MEDIA_URL`, absolute when the
-    serializer has the request in its context (which it does when built by
-    a viewset), so the dashboard's Screenshots tab (Requirement 20.4) can
-    load it directly. That URL is what makes an uploaded Screenshot
-    "retrievable through the Run detail endpoint" per Requirement 13.3.
+    `image` renders as a **root-relative** `MEDIA_URL` path
+    (`/media/screenshots/<name>`), not an absolute URL. That is what makes an
+    uploaded Screenshot "retrievable through the Run detail endpoint"
+    (Requirement 13.3) *from the dashboard's own origin*.
+
+    ### Why not DRF's default absolute URL
+
+    A `ModelSerializer`'s `ImageField` renders `request.build_absolute_uri`
+    when the request is in context (it is, under a viewset), so it used to
+    return e.g. `http://web:8000/media/screenshots/root.png`. The host is the
+    bug: the dashboard reaches this API through Vite's `changeOrigin` proxy
+    (`vite.config.js`), so `request.get_host()` is the *backend* host the proxy
+    forwarded to — `web:8000` inside the compose network, `localhost:8000` on a
+    host — not the dashboard's origin. The browser then loads the `<img>`
+    directly against that host, which it cannot resolve (`web:8000`) or which
+    is a different origin, so every screenshot shows a broken-image icon.
+
+    A root-relative path sidesteps the host entirely: the browser requests
+    `/media/...` from the dashboard's own origin, and Vite's `/media` proxy
+    (and Django's `static()` media serving under `DEBUG`) forwards it to the
+    backend. Same request works unchanged in dev and in compose.
     """
+
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Screenshot
         fields = ["id", "route", "image"]
+
+    def get_image(self, obj: Screenshot) -> str | None:
+        """The stored image as a root-relative URL, or `None` when unset.
+
+        `obj.image.url` is the `MEDIA_URL`-prefixed path; it is forced to a
+        single leading slash so the browser treats it as same-origin
+        (`/media/...`) rather than relative to the current page. An absolute
+        `MEDIA_URL` (a CDN, say) is already same-origin-agnostic and is
+        returned unchanged.
+        """
+        if not obj.image:
+            return None
+        url = obj.image.url
+        if url.startswith(("http://", "https://")):
+            return url
+        return "/" + url.lstrip("/")
 
 
 class SecurityFindingSerializer(serializers.ModelSerializer):
