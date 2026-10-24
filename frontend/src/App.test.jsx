@@ -18,7 +18,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import App from './App.jsx';
-import { TOKEN_STORAGE_KEY } from './api.js';
+import { TOKEN_STORAGE_KEY, createApiClient, createMemoryTokenStore } from './api.js';
 import { EMPTY_PROJECTS_MESSAGE } from './ProjectListView.jsx';
 import { DIFF_FILE_TESTID, NO_RUN_SELECTED_MESSAGE } from './RunDetailView.jsx';
 import { NO_PROJECT_SELECTED_MESSAGE, RUN_ROW_TESTID } from './RunHistoryView.jsx';
@@ -169,4 +169,81 @@ it('closes the open Run when a different Project is selected', async () => {
   // under the new Project's run list.
   expect(await screen.findByText(NO_RUN_SELECTED_MESSAGE)).toBeInTheDocument();
   expect(screen.queryAllByTestId(DIFF_FILE_TESTID)).toHaveLength(0);
+});
+
+// --- authentication gate (single-user MVP auth) ----------------------------
+//
+// These inject a client built on a memory token store, so the signed-in state
+// is controlled by the test and the beforeEach's seeded localStorage token is
+// irrelevant to them. Every token/credential here is invented.
+
+/** A stand-in for `Response`, which jsdom does not provide. */
+function authJsonResponse(body, { status = 200, statusText = 'OK' } = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText,
+    headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'application/json' : null) },
+    text: async () => (body === undefined ? '' : JSON.stringify(body)),
+  };
+}
+
+it('shows the login screen with no token, then the dashboard after signing in', async () => {
+  const fetchImpl = jest.fn(async (url) => {
+    if (url === '/api/auth/login/') return authJsonResponse({ token: 'tok-after-login' });
+    return authJsonResponse({ count: 0, next: null, previous: null, results: [] });
+  });
+  const client = createApiClient({ fetchImpl, tokenStore: createMemoryTokenStore() });
+
+  render(<App client={client} />);
+
+  // No token: the login screen, not the three views.
+  expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Projects' })).not.toBeInTheDocument();
+
+  await userEvent.type(screen.getByLabelText('Username'), 'reviewer');
+  await userEvent.type(screen.getByLabelText('Password'), 'correct horse');
+  await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+  // The dashboard replaces the login screen, with a Sign out control.
+  expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument();
+  expect(client.getToken()).toBe('tok-after-login');
+});
+
+it('returns to the login screen and clears the token when a view is refused (401)', async () => {
+  const fetchImpl = jest.fn(async () =>
+    authJsonResponse(
+      { detail: 'Authentication credentials were not provided.' },
+      { status: 401, statusText: 'Unauthorized' },
+    ),
+  );
+  const store = createMemoryTokenStore();
+  store.set('stale-token');
+  const client = createApiClient({ fetchImpl, tokenStore: store });
+
+  render(<App client={client} />);
+
+  // A stored token means the dashboard renders first; the project fetch is
+  // then refused as unauthenticated, which sends the Reviewer back to login.
+  expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+  expect(store.get()).toBeNull();
+});
+
+it('signs out, clearing the token and returning to the login screen', async () => {
+  const fetchImpl = jest.fn(async () =>
+    authJsonResponse({ count: 0, next: null, previous: null, results: [] }),
+  );
+  const store = createMemoryTokenStore();
+  store.set('active-token');
+  const client = createApiClient({ fetchImpl, tokenStore: store });
+
+  render(<App client={client} />);
+
+  await screen.findByRole('heading', { name: 'Projects' });
+  await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+  expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+  expect(store.get()).toBeNull();
 });
