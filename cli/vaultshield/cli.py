@@ -151,6 +151,11 @@ from vaultshield.submit import submit as submit_run
 # `submit.resolve_git_credential`.
 from vaultshield.teardown import TeardownError, sync_rejected_branch, teardown_sandbox
 from vaultshield.teardown import teardown as teardown_run
+# The orchestrator behind `vaultshield ask`, reused by `run --ask` to build the
+# agent prompt from the project and the developer's answers. `run_orchestrator`
+# runs the same flow as `ask` and returns the enriched prompt instead of
+# printing it.
+from vaultshield.orchestrate.commands import run_orchestrator
 
 # Adapter dispatch table for the `run` command (Task 6.4): maps an
 # `--agent` choice to its Agent_Adapter subclass. `run`'s `--agent` option
@@ -790,6 +795,19 @@ def run(
     project_id = _resolve_project(project, config)
     # Still step 1 (Batch 3 FR3): an invalid egress policy stops the Run here.
     policy = _resolve_egress(agent, config, egress_mode)
+
+    # 1b. Orchestrator (--ask): build the enriched agent prompt from the
+    #     project (the current directory) and the developer's answers, at the
+    #     very start — before the run id, the Run_Directory, the backend
+    #     registration, or any Docker call exist. A missing model key, a bad
+    #     config, an unreadable project, or a leaked secret stops here with
+    #     nothing created; a Ctrl-C during the questions likewise leaves nothing
+    #     behind. With `--prompt`, this is skipped and the literal prompt is used
+    #     exactly as before.
+    built = None
+    if ask is not None:
+        built = run_orchestrator(ask, skip_questions=yes, answers_file=answers)
+        prompt = built.text
 
     # 2. Run_Directory (Task 8.1). `generate_run_id`'s output is always a
     #    valid single path component, so `create_run_dir` cannot raise

@@ -300,6 +300,112 @@ def ask_command(task: str, skip_questions: bool, answers_file: Path | None, copy
     click.echo(prompt)
 
 
+# --- run --ask: the same ask flow, returned instead of printed --------------------
+
+
+@dataclass
+class BuiltPrompt:
+    """What `vaultshield run --ask` gets back from the orchestrator.
+
+    `text` is the enriched prompt (already saved under `.vaultshield/context/`
+    as `ask` saves it, at `saved`). `secrets` is the project's vault values, so
+    `run` can repeat the same final `assert_clean` right before the adapter.
+    `root` is the scanned project (the current directory). `ledger_delta` is the
+    exact bytes this build appended to `.vaultshield/orchestrator.jsonl`, so
+    `run` can copy this run's call-log lines into the Run_Directory verbatim."""
+
+    text: str
+    saved: Path
+    secrets: Secrets
+    root: Path
+    ledger_delta: bytes
+
+
+def _ledger_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _ledger_delta(path: Path, since: int) -> bytes:
+    """The bytes appended to the append-only ledger after offset `since`."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(since)
+            return handle.read()
+    except OSError:
+        return b""
+
+
+def run_orchestrator(
+    task: str, *, skip_questions: bool = False, answers_file: Path | None = None
+) -> BuiltPrompt:
+    """The `ask` flow for `vaultshield run --ask`: build the enriched prompt and
+    return it, rather than printing it.
+
+    Uses the same helpers and the same final `assert_clean` as `ask_command`.
+    The project scanned is always the CURRENT directory (run `vaultshield run
+    --ask` from a checkout of the repo, as with `submit`); unlike `ask`, it does
+    not walk up to an ancestor manifest root, because `run` operates on the
+    current directory throughout. `--yes`/`--answers` behave exactly as `ask`
+    treats them, and the fallback-to-generic-questions and dropped-approach
+    notes are echoed to stderr the same way.
+
+    Raises `click.UsageError` for the `--yes`/`--answers` conflict or an empty
+    task, and `click.ClickException` for a missing model key, a bad config file,
+    an unreadable project, or a secret caught by the final check — each before
+    the caller creates anything on disk.
+    """
+    if skip_questions and answers_file is not None:
+        raise click.UsageError("Use either --yes or --answers, not both.")
+    if not task.strip():
+        raise click.UsageError("The task is empty.")
+
+    given = read_answers_file(answers_file) if answers_file is not None else None  # fail before any model call
+    root = Path.cwd().resolve()
+    try:
+        key = keys.require_key(keys.PROVIDER_GEMINI)
+        provider = model_provider.build_provider(key=key, recorder=model_provider.ledger_recorder(root))
+        secrets = project_context.load_secrets(root, always=[key.value])
+    except (keys.ModelKeyError, model_provider.ConfigFileError, ContextError) as exc:
+        raise click.ClickException(str(exc)) from None
+
+    ledger = model_provider.ledger_path(root)
+    ledger_start = _ledger_size(ledger)
+    try:
+        summary = project_context.scan_project(root, secrets).render()
+        task_text = sanitize(task.strip(), secrets)
+
+        questions: list[Question] = []
+        answers: dict[str, str] = {}
+        if not skip_questions:
+            result = question_step.generate_questions(provider, secrets, task_text, summary)
+            questions = result.questions
+            if result.note:
+                click.echo(result.note, err=True)
+            if given is not None:
+                answers = {q.id: given[q.id] for q in questions if q.id in given}
+                ignored = len(given) - len(answers)
+                if ignored:
+                    click.echo(f"Note: {ignored} answer{'s' if ignored != 1 else ''} in the file matched no question and {'were' if ignored != 1 else 'was'} ignored.", err=True)
+            else:
+                answers = ask_in_terminal(questions)
+            answers = {k: sanitize(v, secrets)[:MAX_ANSWER_CHARS] for k, v in answers.items()}
+
+        approach = suggest_approach(provider, secrets, task_text, summary, format_answers(questions, answers))
+        if approach is None:
+            click.echo("Note: the suggested approach was left out (the model call failed).", err=True)
+
+        prompt = sanitize(build_prompt(task_text, summary, questions, answers, approach, questions_skipped=skip_questions), secrets)
+        assert_clean(prompt, secrets)
+    except (LeakError, ContextError) as exc:
+        raise click.ClickException(str(exc)) from None
+
+    saved = save_prompt(root, prompt)
+    return BuiltPrompt(prompt, saved, secrets, root, _ledger_delta(ledger, ledger_start))
+
+
 def register_orchestrate_commands(group: click.Group) -> None:
     """Adds every Orchestrate command to `group`."""
     group.add_command(config_group)
