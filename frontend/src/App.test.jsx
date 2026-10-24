@@ -18,11 +18,17 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import App from './App.jsx';
+import { TOKEN_STORAGE_KEY } from './api.js';
 import { EMPTY_PROJECTS_MESSAGE } from './ProjectListView.jsx';
 import { DIFF_FILE_TESTID, NO_RUN_SELECTED_MESSAGE } from './RunDetailView.jsx';
 import { NO_PROJECT_SELECTED_MESSAGE, RUN_ROW_TESTID } from './RunHistoryView.jsx';
 
 beforeEach(() => {
+  // The shell now shows the login screen when no Dashboard_Auth_Token is
+  // stored. These tests assert on the signed-in dashboard, so a fake token is
+  // seeded first; it is never a real credential and never sent anywhere (the
+  // transport is the stub below). Cleared in afterEach.
+  globalThis.localStorage?.setItem(TOKEN_STORAGE_KEY, 'fake-test-token');
   globalThis.fetch = jest.fn(async () => ({
     ok: true,
     status: 200,
@@ -34,6 +40,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete globalThis.fetch;
+  globalThis.localStorage?.clear();
 });
 
 it('renders the dashboard shell', async () => {
