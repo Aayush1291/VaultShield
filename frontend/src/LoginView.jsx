@@ -85,46 +85,26 @@ export default function LoginView({ client = api, onSignedIn }) {
   }
 
   const fieldClass =
-    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-ring';
+    'mt-1.5 w-full rounded-control border border-border-strong bg-surface px-3.5 py-2.5 text-[15px] text-fg placeholder:text-fg-subtle focus:border-ring';
 
   return (
     <section
       aria-labelledby="login-heading"
-      className="w-full max-w-sm rounded-card-xl border border-border bg-surface p-8 shadow-card"
+      className="w-full max-w-md rounded-card-xl border border-border bg-surface p-8 shadow-card sm:p-10"
     >
-      <div className="mb-6 flex flex-col items-center text-center">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="h-10 w-10 text-accent-text" fill="none">
-          <path
-            d="M12 2.5 19 5.2v6.1c0 4.6-3 7.9-7 9.7-4-1.8-7-5.1-7-9.7V5.2L12 2.5Z"
-            fill="currentColor"
-            opacity="0.16"
-          />
-          <path
-            d="M12 2.5 19 5.2v6.1c0 4.6-3 7.9-7 9.7-4-1.8-7-5.1-7-9.7V5.2L12 2.5Z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinejoin="round"
-          />
-          <path
-            d="m9 11.7 2.2 2.2L15 9.8"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-fg-subtle">
+      <div className="mb-8">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-fg-subtle">
           VaultShield
         </p>
         <h2 id="login-heading" className="mt-2 font-display text-page font-normal text-fg">
           Sign in
         </h2>
-        <p className="mt-1 text-sm text-fg-muted">
+        <p className="mt-2 text-[15px] leading-relaxed text-fg-muted">
           Review your agent runs and approve what ships.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} aria-busy={pending} className="space-y-4">
+      <form onSubmit={handleSubmit} aria-busy={pending} className="space-y-5">
         <div>
           <label htmlFor="login-username" className="block text-sm font-medium text-fg-muted">
             Username
@@ -171,7 +151,7 @@ export default function LoginView({ client = api, onSignedIn }) {
         <button
           type="submit"
           disabled={pending}
-          className="w-full rounded-card bg-accent px-3 py-2.5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
+          className="w-full rounded-pill bg-accent px-4 py-3 text-[15px] font-semibold text-accent-fg shadow-soft transition-colors hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
         >
           {pending ? 'Signing in…' : 'Sign in'}
         </button>

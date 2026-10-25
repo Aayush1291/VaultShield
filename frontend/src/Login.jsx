@@ -13,6 +13,7 @@
 
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
+import AuthLayout from './AuthLayout.jsx';
 import LoginView from './LoginView.jsx';
 import { useAuth } from './auth.jsx';
 
@@ -24,7 +25,16 @@ export default function Login() {
   const from = location.state?.from?.pathname ?? '/dashboard';
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 py-10">
+    <AuthLayout
+      footer={
+        <p className="mt-6 text-sm text-fg-muted">
+          Need an account?{' '}
+          <Link to="/signup" className="font-medium text-accent-text underline-offset-4 hover:underline">
+            Sign up
+          </Link>
+        </p>
+      }
+    >
       <LoginView
         client={rawClient}
         onSignedIn={() => {
@@ -32,12 +42,6 @@ export default function Login() {
           navigate(from, { replace: true });
         }}
       />
-      <p className="mt-6 text-sm text-fg-muted">
-        Need an account?{' '}
-        <Link to="/signup" className="font-medium text-accent-text hover:underline">
-          Sign up
-        </Link>
-      </p>
-    </div>
+    </AuthLayout>
   );
 }

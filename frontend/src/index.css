@@ -294,6 +294,13 @@ body {
   color: var(--color-fg);
 }
 
+/* The auth pages' editorial panel: a warm lavender/peach wash over surface-2. */
+.vs-auth-wash {
+  background-image:
+    radial-gradient(70% 60% at 0% 0%, color-mix(in srgb, var(--color-accent) 40%, transparent), transparent 70%),
+    radial-gradient(60% 50% at 100% 100%, color-mix(in srgb, #e8b98a 24%, transparent), transparent 70%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
