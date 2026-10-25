@@ -27,7 +27,7 @@ export default function ProjectsOverview() {
         <button
           type="button"
           onClick={openNewProject}
-          className="rounded-card bg-accent px-3 py-2 text-sm font-semibold text-accent-contrast hover:bg-accent-strong"
+          className="rounded-card bg-accent px-3 py-2 text-sm font-semibold text-accent-fg hover:bg-accent-hover hover:text-accent-hover-fg"
         >
           New project
         </button>

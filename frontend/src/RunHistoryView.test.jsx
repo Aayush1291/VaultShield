@@ -120,10 +120,10 @@ it('renders a failed Run with its own neutral badge rather than the unknown-stat
   const badge = screen.getByTestId(RUN_STATUS_TESTID);
   expect(badge).toHaveTextContent('failed');
   expect(badge).toHaveAttribute('data-status', 'failed');
-  // `gray` is the explicit `failed` entry; `slate` would mean the badge fell
-  // through to the unknown-status style.
-  expect(badge).toHaveClass('bg-gray-100');
-  expect(badge).not.toHaveClass('bg-slate-100');
+  // `status-failed` is the explicit `failed` entry; `status-unknown` would mean
+  // the badge fell through to the unknown-status style.
+  expect(badge).toHaveClass('bg-status-failed-bg');
+  expect(badge).not.toHaveClass('bg-status-unknown-bg');
 });
 
 it('renders a protect Run like any other row: its agent name and status, no new badge', async () => {

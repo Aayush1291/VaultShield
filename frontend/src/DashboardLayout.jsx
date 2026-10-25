@@ -154,7 +154,7 @@ export default function DashboardLayout() {
           }`}
         >
           <Link to="/dashboard" className="flex items-center gap-2 px-5 py-5">
-            <ShieldGlyph className="h-7 w-7 text-accent" />
+            <ShieldGlyph className="h-7 w-7 text-accent-text" />
             <span className="text-lg font-semibold tracking-tight text-fg">VaultShield</span>
           </Link>
 
@@ -175,7 +175,7 @@ export default function DashboardLayout() {
             <button
               type="button"
               onClick={handleSignOut}
-              className="mt-1 text-sm font-medium text-accent hover:text-accent-strong hover:underline"
+              className="mt-1 text-sm font-medium text-accent-text hover:text-accent-text hover:underline"
             >
               Sign out
             </button>
@@ -241,7 +241,7 @@ export default function DashboardLayout() {
                 ref={deleteButtonRef}
                 type="button"
                 onClick={openDeleteDialog}
-                className="ml-auto inline-flex shrink-0 items-center rounded-card border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/40"
+                className="ml-auto inline-flex shrink-0 items-center rounded-pill border border-danger px-4 py-1.5 text-sm font-medium text-danger-fg hover:bg-danger-soft"
               >
                 Delete project
               </button>
@@ -363,7 +363,7 @@ function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, ret
         {error !== null && error !== undefined && (
           <p
             role="alert"
-            className="mt-4 rounded-card border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+            className="mt-4 rounded-card border border-danger/30 bg-danger-soft p-3 text-sm text-danger-fg"
           >
             Could not delete the project. Please try again.
           </p>
@@ -383,7 +383,7 @@ function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, ret
             type="button"
             onClick={onConfirm}
             disabled={pending}
-            className="rounded-card border border-red-600 bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-pill border border-danger bg-danger px-4 py-2 text-sm font-medium text-danger-on hover:bg-danger-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             {pending ? 'Deleting…' : 'Delete'}
           </button>

@@ -110,7 +110,7 @@ export default function ProjectRunsPage() {
   const chipClass = (active) =>
     `rounded-pill border px-3 py-1 text-xs font-medium ${
       active
-        ? 'border-accent bg-accent-soft text-accent-strong'
+        ? 'border-accent bg-accent-soft text-accent-text'
         : 'border-border bg-surface text-fg-muted hover:border-border-strong'
     }`;
 
@@ -154,7 +154,7 @@ export default function ProjectRunsPage() {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search by run id…"
-          className="w-full max-w-sm rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-accent"
+          className="w-full max-w-sm rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-ring"
         />
       </div>
 
@@ -162,18 +162,18 @@ export default function ProjectRunsPage() {
         <div role="status" aria-busy="true" className="space-y-2">
           <span className="sr-only">Loading runs…</span>
           {[0, 1, 2].map((row) => (
-            <div key={row} aria-hidden="true" className="h-12 animate-pulse rounded-card-lg border border-border bg-surface-muted" />
+            <div key={row} aria-hidden="true" className="h-12 animate-pulse rounded-card-lg border border-border bg-surface-2" />
           ))}
         </div>
       )}
 
       {error !== null && (
-        <div role="alert" className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
+        <div role="alert" className="rounded-card-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger-fg">
           <p>{describeLoadFailure(error, { subject: 'runs' })}</p>
           <button
             type="button"
             onClick={() => setReloadKey((key) => key + 1)}
-            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
+            className="mt-3 rounded-pill border border-danger bg-surface px-3 py-1 text-xs font-medium text-danger-fg hover:bg-danger-soft"
           >
             Try again
           </button>
@@ -212,18 +212,18 @@ export default function ProjectRunsPage() {
                     key={run?.run_id ?? run?.id ?? index}
                     data-testid={RUN_ROW_TESTID}
                     data-run-id={run?.run_id}
-                    className="border-b border-border last:border-b-0 hover:bg-surface-muted"
+                    className="border-b border-border last:border-b-0 hover:bg-surface-2"
                   >
                     <td className="px-4 py-3">
                       <Link
                         to={`runs/${encodeURIComponent(run?.run_id ?? '')}`}
-                        className="break-all font-mono text-sm text-accent underline-offset-2 hover:underline"
+                        className="break-all font-mono text-sm text-accent-text underline-offset-2 hover:underline"
                       >
                         {run?.run_id}
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="rounded-pill border border-border bg-surface-muted px-2 py-0.5 text-xs text-fg-muted">
+                      <span className="rounded-pill border border-border bg-surface-2 px-2 py-0.5 text-xs text-fg-muted">
                         {run?.agent}
                       </span>
                     </td>

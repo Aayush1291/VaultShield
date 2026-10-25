@@ -28,7 +28,7 @@ export default function Signup() {
         </h1>
         <p className="mt-3 text-sm text-fg-muted">
           Account creation is coming in the next release, with{' '}
-          <code className="rounded bg-surface-muted px-1 py-0.5 font-mono text-xs text-fg">
+          <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-xs text-fg">
             vaultshield signup
           </code>
           .
@@ -37,7 +37,7 @@ export default function Signup() {
           For now, sign in with an account your administrator created for you.
         </p>
         <p className="mt-6 text-sm">
-          <Link to="/login" className="font-medium text-accent hover:underline">
+          <Link to="/login" className="font-medium text-accent-text hover:underline">
             Back to sign in
           </Link>
         </p>

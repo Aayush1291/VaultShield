@@ -1,99 +1,219 @@
-/* Tailwind CSS v4 entry point.
+/* Tailwind CSS v4 entry point and the VaultShield design tokens.
  *
- * v4 replaced the `@tailwind base/components/utilities` triple and the
- * `tailwind.config.js` content globs with a single import: the
- * `@tailwindcss/vite` plugin in `vite.config.js` scans the project for used
- * class names itself. Custom theme values go in the `@theme { ... }` block
- * below rather than in a separate config file.
+ * ### Two complete themes, switched by `data-theme` on <html>
  *
- * ### Design tokens (Phase 2 redesign)
+ *   PAPER (light, the default)  warm cream paper, warm near-black ink
+ *   INK   (dark)                warm dark, never blue-black
  *
- * Colors here are SEMANTIC (`--color-canvas`, `--color-surface`, `--color-fg`,
- * `--color-accent`, …) rather than raw palette steps, so a component writes
- * `bg-surface text-fg border-border` once and gets both themes: the dark
- * values are swapped in by a `prefers-color-scheme` media query that overrides
- * the same custom properties, so no component needs a `dark:` variant on every
- * class. Tailwind still generates every palette utility it always did, so the
- * existing Run_Status chips keep their literal `amber/emerald/red/...` classes
- * untouched (the task: "Keep the existing status colors").
+ * `<html data-theme="light">` forces Paper, `<html data-theme="dark">` forces
+ * Ink, and no attribute follows `prefers-color-scheme`. `index.html` sets the
+ * attribute from localStorage before first paint (see `src/theme.js`).
  *
- * Radii target the 16–24px rounded-card look; `--shadow-soft`/`--shadow-card`
- * are the diffuse, low-contrast shadows; `--text-display` is the hero headline
- * step. Fonts are the system stacks only — no external/CDN font.
+ * Colors are SEMANTIC (`canvas`, `surface`, `fg`, `accent`, ...), so a
+ * component writes `bg-surface text-fg` once and gets both themes. No
+ * component uses Tailwind's `dark:` variant: that follows the OS only and would
+ * ignore a Light/Dark override.
+ *
+ * `@theme static` emits every variable even when no utility uses it, because
+ * the landing page's scoped stylesheet reads several of them directly.
+ *
+ * ### Contrast
+ *
+ * `src/contrast.test.js` parses the hex values in this file and fails if any
+ * text/background pair the app uses drops below WCAG 4.5:1, or a UI boundary
+ * (control borders, the focus ring) below 3:1. `--color-border` is the
+ * decorative hairline (dividers, card edges) and is deliberately low-contrast;
+ * anything a user must perceive to operate a control uses `--color-border-strong`.
+ * Text/background tokens are therefore plain 6-digit hex; only the hairline
+ * and the shadows use rgba.
  */
 
 @import 'tailwindcss';
 
-@theme {
-  /* Type: system stacks, no webfont. */
-  --font-sans:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+/* PAPER — the light theme and the defaults. */
+@theme static {
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
-  /* Type scale additions (the defaults cover the rest). */
-  --text-display: 3.25rem;
-  --text-display--line-height: 1.05;
-  --text-display--letter-spacing: -0.03em;
-  --text-hero: 2.25rem;
-  --text-hero--line-height: 1.1;
-  --text-hero--letter-spacing: -0.02em;
-
-  /* Rounded-card radii (16–24px) plus a pill. */
-  --radius-card: 1rem; /* 16px */
-  --radius-card-lg: 1.25rem; /* 20px */
-  --radius-card-xl: 1.5rem; /* 24px */
+  /* Radius scale */
+  --radius-control: 0.75rem; /* 12px: inputs, small controls */
+  --radius-card: 1.25rem; /* 20px */
+  --radius-card-lg: 1.5rem; /* 24px */
+  --radius-card-xl: 1.75rem; /* 28px: modals, hero artifacts */
   --radius-pill: 9999px;
 
-  /* Soft, diffuse shadows. */
-  --shadow-soft: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px rgb(15 23 42 / 0.06);
-  --shadow-card: 0 1px 3px rgb(15 23 42 / 0.06), 0 12px 32px rgb(15 23 42 / 0.08);
-  --shadow-glow: 0 24px 80px -24px rgb(99 102 241 / 0.45);
+  /* Spacing rhythm and layout */
+  --spacing-gutter: clamp(1.25rem, 4vw, 2.5rem);
+  --spacing-section: clamp(4.5rem, 3rem + 6vw, 10rem); /* 96-160px on desktop */
+  --spacing-section-slim: clamp(3rem, 2rem + 3vw, 4.5rem);
+  --container-page: 77.5rem; /* 1240px */
+  --container-prose: 68ch;
+  --container-sidebar: 17rem; /* 272px */
 
-  /* Semantic colors — LIGHT (warm white + indigo→violet accent). */
-  --color-canvas: #fbfaf8; /* warm off-white page */
-  --color-surface: #ffffff; /* cards, sidebar panels */
-  --color-surface-muted: #f4f2ee; /* subtle fills, code wells */
-  --color-fg: #1b1b1f; /* primary text */
-  --color-fg-muted: #5b5b66; /* secondary text */
-  --color-fg-subtle: #83838f; /* tertiary/meta text */
-  --color-border: #e7e3dc; /* hairlines */
-  --color-border-strong: #d7d2c9;
-  --color-accent: #4f46e5; /* indigo-600 */
-  --color-accent-strong: #4338ca; /* indigo-700 (hover) */
-  --color-accent-contrast: #ffffff; /* text on accent */
-  --color-accent-soft: #eef0ff; /* tinted accent fill */
-  --color-violet: #7c3aed; /* gradient end */
-  --color-ring: #6366f1; /* focus ring */
+  /* Surfaces and ink */
+  --color-canvas: #fbf9ef;
+  --color-surface: #fffefa;
+  --color-surface-2: #f3f0e2;
+  --color-fg: #1c1b14;
+  --color-fg-muted: #66655a;
+  --color-fg-subtle: #6b6a5e;
+  --color-border: rgba(28, 27, 20, 0.12);
+  --color-border-strong: #858275;
+
+  /* Accent: a soft lavender pill with ink text; a darker violet for links,
+   * text accents, and the pill's hover. */
+  --color-accent: #cbc0f7;
+  --color-accent-hover: #5b45c4;
+  --color-accent-fg: #1c1b14;
+  --color-accent-hover-fg: #fffdf7;
+  --color-accent-text: #5b45c4;
+  --color-accent-soft: #ebe6fb;
+  --color-ring: #6a55d6;
+
+  /* Earthy feedback colors */
+  --color-success-fg: #2e6233;
+  --color-success-soft: #e2eedb;
+  --color-warn-fg: #6e5110;
+  --color-warn-soft: #f5ead0;
+  --color-danger: #a3412f;
+  --color-danger-hover: #8a3424;
+  --color-danger-on: #fffaf4;
+  --color-danger-fg: #933a29;
+  --color-danger-soft: #f7e3dc;
+
+  /* Run_Status chips: pastel background, deep text of the same hue. */
+  --color-status-running-fg: #2b5870;
+  --color-status-running-bg: #e1ebf1;
+  --color-status-awaiting-fg: #6b4f0f;
+  --color-status-awaiting-bg: #f6ebcd;
+  --color-status-approved-fg: #2e6233;
+  --color-status-approved-bg: #e1edda;
+  --color-status-rejected-fg: #8e3323;
+  --color-status-rejected-bg: #f5ded7;
+  --color-status-submitted-fg: #4e3aa6;
+  --color-status-submitted-bg: #e9e3fa;
+  --color-status-failed-fg: #55544a;
+  --color-status-failed-bg: #ebe8de;
+  --color-status-unknown-fg: #43423a;
+  --color-status-unknown-bg: #e4e1d6;
+
+  /* Terminal artifacts are dark in both themes. */
+  --color-term-bg: #1d1c17;
+  --color-term-fg: #ece6d6;
+  --color-term-muted: #a6a08e;
+  --color-term-danger: #f2a08f;
+  --color-term-ok: #a9d6a1;
+  --color-term-accent: #c9bcf8;
+  --color-term-border: rgba(255, 250, 235, 0.08);
+
+  /* Shadows: warm ink tint, never pure black. */
+  --shadow-soft: 0 1px 2px rgba(28, 27, 20, 0.05), 0 8px 24px rgba(28, 27, 20, 0.06);
+  --shadow-card: 0 1px 3px rgba(28, 27, 20, 0.06), 0 18px 48px -12px rgba(28, 27, 20, 0.14);
+  --shadow-lift: 0 2px 6px rgba(28, 27, 20, 0.06), 0 36px 90px -28px rgba(28, 27, 20, 0.32);
 }
 
-/* Semantic colors — DARK. Only the custom properties flip; every
- * `bg-surface` / `text-fg` / `border-border` utility follows automatically. */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-canvas: #0d0e12;
-    --color-surface: #16181f;
-    --color-surface-muted: #1d2029;
-    --color-fg: #ecedf1;
-    --color-fg-muted: #a6a8b3;
-    --color-fg-subtle: #7f818d;
-    --color-border: #2a2d38;
-    --color-border-strong: #3a3e4c;
-    --color-accent: #818cf8; /* indigo-400, lifted for dark */
-    --color-accent-strong: #a5b4fc;
-    --color-accent-contrast: #0d0e12;
-    --color-accent-soft: #1e2030;
-    --color-violet: #a78bfa;
-    --color-ring: #818cf8;
+/* INK — the dark theme. The same declarations appear twice: once for an
+ * explicit `data-theme="dark"`, once for the system preference when no
+ * override is set. `src/contrast.test.js` asserts the two blocks are identical,
+ * so they cannot drift. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-canvas: #14130f;
+  --color-surface: #1d1c16;
+  --color-surface-2: #25241d;
+  --color-fg: #efebdf;
+  --color-fg-muted: #b5b1a2;
+  --color-fg-subtle: #a29e8f;
+  --color-border: rgba(239, 235, 223, 0.12);
+  --color-border-strong: #77736a;
+  --color-accent: #b9aaf6;
+  --color-accent-hover: #d6ccfb;
+  --color-accent-fg: #14130f;
+  --color-accent-hover-fg: #14130f;
+  --color-accent-text: #cbbffb;
+  --color-accent-soft: #2e2944;
+  --color-ring: #b9aaf6;
+  --color-success-fg: #a3d3a3;
+  --color-success-soft: #1f2f21;
+  --color-warn-fg: #e6c77a;
+  --color-warn-soft: #342a15;
+  --color-danger: #d9826f;
+  --color-danger-hover: #e89b8a;
+  --color-danger-on: #14130f;
+  --color-danger-fg: #f0a493;
+  --color-danger-soft: #3a221c;
+  --color-status-running-fg: #9fcbe2;
+  --color-status-running-bg: #1e2c34;
+  --color-status-awaiting-fg: #e6c77a;
+  --color-status-awaiting-bg: #342a15;
+  --color-status-approved-fg: #a3d3a3;
+  --color-status-approved-bg: #1f2f21;
+  --color-status-rejected-fg: #f0a493;
+  --color-status-rejected-bg: #3a221c;
+  --color-status-submitted-fg: #cbc0fa;
+  --color-status-submitted-bg: #2c2643;
+  --color-status-failed-fg: #bebaab;
+  --color-status-failed-bg: #2b2a23;
+  --color-status-unknown-fg: #d2cebf;
+  --color-status-unknown-bg: #302f27;
+  --color-term-bg: #0e0d0a;
+  --color-term-border: rgba(255, 250, 235, 0.1);
+  --shadow-soft: 0 1px 2px rgba(6, 5, 2, 0.4), 0 8px 24px rgba(6, 5, 2, 0.35);
+  --shadow-card: 0 1px 3px rgba(6, 5, 2, 0.45), 0 18px 48px -12px rgba(6, 5, 2, 0.55);
+  --shadow-lift: 0 2px 6px rgba(6, 5, 2, 0.5), 0 36px 90px -28px rgba(6, 5, 2, 0.7);
+}
 
-    --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.5);
-    --shadow-card: 0 1px 3px rgb(0 0 0 / 0.45), 0 12px 32px rgb(0 0 0 / 0.55);
-    --shadow-glow: 0 24px 80px -24px rgb(129 140 248 / 0.4);
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --color-canvas: #14130f;
+    --color-surface: #1d1c16;
+    --color-surface-2: #25241d;
+    --color-fg: #efebdf;
+    --color-fg-muted: #b5b1a2;
+    --color-fg-subtle: #a29e8f;
+    --color-border: rgba(239, 235, 223, 0.12);
+    --color-border-strong: #77736a;
+    --color-accent: #b9aaf6;
+    --color-accent-hover: #d6ccfb;
+    --color-accent-fg: #14130f;
+    --color-accent-hover-fg: #14130f;
+    --color-accent-text: #cbbffb;
+    --color-accent-soft: #2e2944;
+    --color-ring: #b9aaf6;
+    --color-success-fg: #a3d3a3;
+    --color-success-soft: #1f2f21;
+    --color-warn-fg: #e6c77a;
+    --color-warn-soft: #342a15;
+    --color-danger: #d9826f;
+    --color-danger-hover: #e89b8a;
+    --color-danger-on: #14130f;
+    --color-danger-fg: #f0a493;
+    --color-danger-soft: #3a221c;
+    --color-status-running-fg: #9fcbe2;
+    --color-status-running-bg: #1e2c34;
+    --color-status-awaiting-fg: #e6c77a;
+    --color-status-awaiting-bg: #342a15;
+    --color-status-approved-fg: #a3d3a3;
+    --color-status-approved-bg: #1f2f21;
+    --color-status-rejected-fg: #f0a493;
+    --color-status-rejected-bg: #3a221c;
+    --color-status-submitted-fg: #cbc0fa;
+    --color-status-submitted-bg: #2c2643;
+    --color-status-failed-fg: #bebaab;
+    --color-status-failed-bg: #2b2a23;
+    --color-status-unknown-fg: #d2cebf;
+    --color-status-unknown-bg: #302f27;
+    --color-term-bg: #0e0d0a;
+    --color-term-border: rgba(255, 250, 235, 0.1);
+    --shadow-soft: 0 1px 2px rgba(6, 5, 2, 0.4), 0 8px 24px rgba(6, 5, 2, 0.35);
+    --shadow-card: 0 1px 3px rgba(6, 5, 2, 0.45), 0 18px 48px -12px rgba(6, 5, 2, 0.55);
+    --shadow-lift: 0 2px 6px rgba(6, 5, 2, 0.5), 0 36px 90px -28px rgba(6, 5, 2, 0.7);
   }
 }
 
-/* Base: the page adopts the tokens, and controls match the active scheme. */
+/* Base */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 html,
@@ -109,23 +229,23 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Never let one wide element give the whole page a horizontal scrollbar. */
+  overflow-x: clip;
 }
 
-/* Visible focus for keyboard users across the redesigned chrome. Mouse clicks
- * do not trigger `:focus-visible`, so this is not noise for pointer users. */
-:where(a, button, input, [role='tab'], [tabindex]):focus-visible {
+/* One focus ring everywhere: 2px accent ring with an offset, visible on both
+ * themes (the ring token meets 3:1 against every surface). Mouse clicks do not
+ * trigger :focus-visible. */
+:where(a, button, input, select, textarea, summary, [role='tab'], [tabindex]):focus-visible {
   outline: 2px solid var(--color-ring);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-fg);
 }
 
-/* Motion only when the user has not asked for less. The redesign's transitions
- * and the dashboard's animated bits opt in via `.vs-animate`/`.vs-motion-safe`;
- * here we also hard-stop any animation/transition under reduce. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -135,12 +255,4 @@ body {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* The hero's soft indigo→violet glow. Decorative, pointer-transparent; the
- * element sits behind the hero content. */
-.vs-hero-glow {
-  background-image:
-    radial-gradient(60% 55% at 20% 0%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 70%),
-    radial-gradient(55% 55% at 85% 10%, color-mix(in srgb, var(--color-violet) 20%, transparent), transparent 70%);
 }

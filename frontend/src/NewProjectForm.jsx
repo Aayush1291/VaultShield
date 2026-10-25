@@ -110,14 +110,14 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
   }
 
   const inputClass =
-    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-accent';
+    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-ring';
 
   return (
     <form
       onSubmit={handleSubmit}
       aria-busy={pending}
       aria-label="New project"
-      className="mb-3 space-y-3 rounded-card border border-border bg-surface-muted p-3"
+      className="mb-3 space-y-3 rounded-card border border-border bg-surface-2 p-3"
     >
       <div>
         <label htmlFor="new-project-name" className="block text-xs font-medium text-fg-muted">
@@ -135,7 +135,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
           className={inputClass}
         />
         {fieldErrors.name && (
-          <p id="new-project-name-error" className="mt-1 text-xs text-red-600 dark:text-red-400">
+          <p id="new-project-name-error" className="mt-1 text-xs text-danger-fg">
             {fieldErrors.name}
           </p>
         )}
@@ -158,7 +158,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
           className={`${inputClass} font-mono text-xs`}
         />
         {fieldErrors.repo_url && (
-          <p id="new-project-repo-url-error" className="mt-1 text-xs text-red-600 dark:text-red-400">
+          <p id="new-project-repo-url-error" className="mt-1 text-xs text-danger-fg">
             {fieldErrors.repo_url}
           </p>
         )}
@@ -167,7 +167,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
       {formError !== null && (
         <p
           role="alert"
-          className="rounded-card border border-red-200 bg-red-50 p-2 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+          className="rounded-card border border-danger/30 bg-danger-soft p-2 text-xs text-danger-fg"
         >
           {formError}
         </p>
@@ -177,7 +177,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
         <button
           type="submit"
           disabled={pending}
-          className="rounded-card bg-accent px-3 py-2 text-sm font-medium text-accent-contrast hover:bg-accent-strong disabled:opacity-60"
+          className="rounded-card bg-accent px-3 py-2 text-sm font-medium text-accent-fg hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
         >
           {pending ? 'Creating…' : 'Create project'}
         </button>

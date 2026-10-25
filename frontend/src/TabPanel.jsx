@@ -129,7 +129,7 @@ export default function TabPanel({
   return (
     <div id={id} role="tabpanel" aria-labelledby={labelledBy}>
       {items.length === 0 ? (
-        <p className="text-sm text-slate-500">{emptyMessage}</p>
+        <p className="text-sm text-fg-subtle">{emptyMessage}</p>
       ) : (
         <ul role="list" className={listClassName}>
           {items.map((record, index) => (

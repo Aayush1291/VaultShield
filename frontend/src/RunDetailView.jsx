@@ -252,13 +252,13 @@ export function DiffTab({ diff, id, labelledBy }) {
             {file?.path}
           </span>
           <span
-            className="font-mono text-xs text-emerald-700"
+            className="font-mono text-xs text-success-fg"
             aria-label={`${file?.additions ?? 0} additions`}
           >
             +{file?.additions ?? 0}
           </span>
           <span
-            className="font-mono text-xs text-red-700"
+            className="font-mono text-xs text-danger-fg"
             aria-label={`${file?.deletions ?? 0} deletions`}
           >
             -{file?.deletions ?? 0}
@@ -304,7 +304,7 @@ export function TimelineTab({ events, id, labelledBy }) {
           <div className="px-4 py-2">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-mono text-xs text-fg-subtle">{at}</span>
-              <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs text-fg-muted">
+              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-fg-muted">
                 {event?.event_type}
               </span>
             </div>
@@ -354,7 +354,7 @@ export function ScreenshotsTab({ screenshots, id, labelledBy }) {
             // Lazy because a Run can have a screenshot per configured route and
             // they are only worth fetching once this tab is on screen.
             loading="lazy"
-            className="block w-full bg-surface-muted object-cover"
+            className="block w-full bg-surface-2 object-cover"
           />
           <figcaption className="break-all border-t border-border px-3 py-2 font-mono text-xs text-fg-muted">
             {screenshot?.route}
@@ -389,16 +389,16 @@ export function SecurityTab({ findings, id, labelledBy }) {
       itemTestId={SECURITY_FINDING_TESTID}
       emptyMessage={EMPTY_SECURITY_MESSAGE}
       renderItem={(finding) => (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+        <div className="rounded-card-lg border border-warn-fg/25 bg-warn-soft p-4">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="rounded bg-amber-200 px-1.5 py-0.5 font-mono text-xs text-amber-900">
+            <span className="rounded-pill bg-surface px-2 py-0.5 font-mono text-xs text-warn-fg">
               {finding?.rule_id}
             </span>
-            <span className="break-all font-mono text-xs text-slate-700">
+            <span className="break-all font-mono text-xs text-fg-muted">
               {formatFindingLocation(finding)}
             </span>
           </div>
-          <p className="mt-2 text-sm text-slate-800">{finding?.description}</p>
+          <p className="mt-2 text-sm text-fg">{finding?.description}</p>
         </div>
       )}
     />
@@ -431,13 +431,13 @@ const DECISIONS = [
     value: 'approved',
     label: 'Approve',
     className:
-      'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-300 disabled:border-emerald-300',
+      'border-accent bg-accent text-accent-fg hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60',
   },
   {
     value: 'rejected',
     label: 'Reject',
     className:
-      'border-red-300 bg-white text-red-800 hover:bg-red-50 disabled:text-red-300 disabled:border-red-200',
+      'border-danger bg-surface text-danger-fg hover:bg-danger-soft disabled:opacity-60',
   },
 ];
 
@@ -528,8 +528,8 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
       )}
 
       {submitCommand !== '' && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-          <p className="text-sm text-emerald-900">
+        <div className="rounded-card-lg border border-success-fg/25 bg-success-soft p-4">
+          <p className="text-sm text-success-fg">
             No pull request has been opened yet. Run this from the machine that holds the repository
             credentials:
           </p>
@@ -537,7 +537,7 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
               the whole thing without picking the sentence up with it. */}
           <code
             data-testid={SUBMIT_COMMAND_TESTID}
-            className="mt-2 block break-all font-mono text-sm text-emerald-900"
+            className="mt-2 block break-all font-mono text-sm text-success-fg"
           >
             {submitCommand}
           </code>
@@ -547,7 +547,7 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
       {error !== null && (
         <div
           role="alert"
-          className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+          className="rounded-card-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger-fg"
         >
           {describeDecisionFailure(error)}
         </div>
@@ -879,7 +879,7 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
         {run !== null && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className="break-all font-mono text-sm text-fg">{run.run_id}</span>
-            <span className="rounded-pill border border-border bg-surface-muted px-2 py-0.5 text-xs text-fg-muted">
+            <span className="rounded-pill border border-border bg-surface-2 px-2 py-0.5 text-xs text-fg-muted">
               {run.agent}
             </span>
             {/* Requirement 21.4's copy replaces the badge's text for an approved
@@ -896,10 +896,10 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
       {loading && (
         <div role="status" aria-busy="true" className="space-y-3">
           <span className="sr-only">Loading run…</span>
-          <div aria-hidden="true" className="h-8 w-40 animate-pulse rounded-card bg-surface-muted" />
+          <div aria-hidden="true" className="h-8 w-40 animate-pulse rounded-card bg-surface-2" />
           <div
             aria-hidden="true"
-            className="h-40 animate-pulse rounded-card-lg border border-border bg-surface-muted"
+            className="h-40 animate-pulse rounded-card-lg border border-border bg-surface-2"
           />
         </div>
       )}
@@ -907,13 +907,13 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
       {error !== null && (
         <div
           role="alert"
-          className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+          className="rounded-card-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger-fg"
         >
           <p>{describeLoadFailure(error, { subject: 'run details' })}</p>
           <button
             type="button"
             onClick={() => setReloadCount((count) => count + 1)}
-            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
+            className="mt-3 rounded-pill border border-danger bg-surface px-3 py-1 text-xs font-medium text-danger-fg hover:bg-danger-soft"
           >
             Try again
           </button>
@@ -941,7 +941,7 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
             role="tablist"
             aria-label="Run artifacts"
             onKeyDown={onTabListKeyDown}
-            className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-card border border-border bg-surface-muted p-1"
+            className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-card border border-border bg-surface-2 p-1"
           >
             {TABS.map((tab) => {
               const isActive = tab.id === activeTab.id;

@@ -34,7 +34,7 @@ export default function Login() {
       />
       <p className="mt-6 text-sm text-fg-muted">
         Need an account?{' '}
-        <Link to="/signup" className="font-medium text-accent hover:underline">
+        <Link to="/signup" className="font-medium text-accent-text hover:underline">
           Sign up
         </Link>
       </p>

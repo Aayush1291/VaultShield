@@ -39,7 +39,7 @@ export default function RunDetailPage() {
     <div className="space-y-4">
       <Link
         to={`/dashboard/projects/${encodeURIComponent(projectId)}`}
-        className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline"
+        className="inline-flex items-center gap-1 text-sm font-medium text-accent-text hover:underline"
       >
         <span aria-hidden="true">←</span> Back to runs
       </Link>

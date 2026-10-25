@@ -62,23 +62,24 @@ export const NO_PROJECT_SELECTED_MESSAGE = 'Select a project to see its run hist
  * Badge styling per Run_Status.
  *
  * Keyed by the six literal values in `Run.STATUS_CHOICES` (Requirement
- * 11.2). `failed` is neutral grey rather than a warning colour because
- * nothing is pending on a reviewer: the Run ended before it could be
- * reviewed. It uses Tailwind's `gray` so it stays distinct from the `slate`
- * unknown-status fallback. A status outside that set — which only a backend
- * that grew a seventh value could produce — still renders, in the neutral
- * style, because dropping or blanking it would hide a Run's real state.
+ * 11.2). Each maps onto a pastel status token pair in `index.css`
+ * (`--color-status-*-bg` / `-fg`), defined for both themes and covered by
+ * `contrast.test.js`. `failed` is neutral rather than a warning colour because
+ * nothing is pending on a reviewer: the Run ended before it could be reviewed.
+ * A status outside that set — which only a backend that grew a seventh value
+ * could produce — still renders, in the `unknown` style, because dropping or
+ * blanking it would hide a Run's real state.
  */
 const STATUS_STYLES = {
-  running: 'border-sky-200 bg-sky-50 text-sky-700',
-  awaiting_review: 'border-amber-200 bg-amber-50 text-amber-800',
-  approved: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  rejected: 'border-red-200 bg-red-50 text-red-700',
-  submitted: 'border-violet-200 bg-violet-50 text-violet-700',
-  failed: 'border-gray-300 bg-gray-100 text-gray-600',
+  running: 'bg-status-running-bg text-status-running-fg',
+  awaiting_review: 'bg-status-awaiting-bg text-status-awaiting-fg',
+  approved: 'bg-status-approved-bg text-status-approved-fg',
+  rejected: 'bg-status-rejected-bg text-status-rejected-fg',
+  submitted: 'bg-status-submitted-bg text-status-submitted-fg',
+  failed: 'bg-status-failed-bg text-status-failed-fg',
 };
 
-const UNKNOWN_STATUS_STYLE = 'border-slate-300 bg-slate-100 text-slate-700';
+const UNKNOWN_STATUS_STYLE = 'bg-status-unknown-bg text-status-unknown-fg';
 
 /**
  * A Run's status, as a badge.
@@ -110,7 +111,7 @@ export function RunStatusBadge({ status, label }) {
       // The stored Run_Status, regardless of what is rendered, so a test or a
       // stylesheet reads the machine value rather than the human copy.
       data-status={status}
-      className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 font-mono text-xs ${style}`}
+      className={`inline-flex shrink-0 items-center rounded-pill px-2.5 py-0.5 font-mono text-xs font-medium ${style}`}
     >
       {label ?? status}
     </span>
@@ -146,20 +147,20 @@ export function RunRow({ run, onSelect }) {
     <li
       data-testid={RUN_ROW_TESTID}
       data-run-id={run?.run_id}
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-surface-muted"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-surface-2"
     >
       {selectable ? (
         <button
           type="button"
           onClick={() => onSelect(run)}
-          className="min-w-0 grow break-all text-left font-mono text-sm text-accent underline-offset-2 hover:underline"
+          className="min-w-0 grow break-all text-left font-mono text-sm text-accent-text underline-offset-2 hover:underline"
         >
           {run?.run_id}
         </button>
       ) : (
         <span className="min-w-0 grow break-all font-mono text-sm text-fg">{run?.run_id}</span>
       )}
-      <span className="rounded-pill border border-border bg-surface-muted px-2 py-0.5 text-xs text-fg-muted">
+      <span className="rounded-pill border border-border bg-surface-2 px-2 py-0.5 text-xs text-fg-muted">
         {run?.agent}
       </span>
       <RunStatusBadge status={run?.status} />
@@ -206,7 +207,7 @@ function CopyCommand({ command }) {
 
   return (
     <div className="mt-4 flex items-stretch gap-2 text-left">
-      <code className="min-w-0 grow overflow-x-auto rounded-card bg-surface-muted px-3 py-2 font-mono text-xs text-fg">
+      <code className="min-w-0 grow overflow-x-auto rounded-card bg-surface-2 px-3 py-2 font-mono text-xs text-fg">
         {command}
       </code>
       <button
@@ -346,7 +347,7 @@ export default function RunHistoryView({
             <div
               key={row}
               aria-hidden="true"
-              className="h-12 animate-pulse rounded-card-lg border border-border bg-surface-muted"
+              className="h-12 animate-pulse rounded-card-lg border border-border bg-surface-2"
             />
           ))}
         </div>
@@ -355,13 +356,13 @@ export default function RunHistoryView({
       {error !== null && (
         <div
           role="alert"
-          className="rounded-card-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+          className="rounded-card-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger-fg"
         >
           <p>{describeLoadFailure(error, { subject: 'runs' })}</p>
           <button
             type="button"
             onClick={() => setReloadCount((count) => count + 1)}
-            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
+            className="mt-3 rounded-pill border border-danger bg-surface px-3 py-1 text-xs font-medium text-danger-fg hover:bg-danger-soft"
           >
             Try again
           </button>

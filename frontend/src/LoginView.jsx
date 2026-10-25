@@ -85,7 +85,7 @@ export default function LoginView({ client = api, onSignedIn }) {
   }
 
   const fieldClass =
-    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-accent';
+    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-ring';
 
   return (
     <section
@@ -93,7 +93,7 @@ export default function LoginView({ client = api, onSignedIn }) {
       className="w-full max-w-sm rounded-card-xl border border-border bg-surface p-8 shadow-card"
     >
       <div className="mb-6 flex flex-col items-center text-center">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="h-10 w-10 text-accent" fill="none">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="h-10 w-10 text-accent-text" fill="none">
           <path
             d="M12 2.5 19 5.2v6.1c0 4.6-3 7.9-7 9.7-4-1.8-7-5.1-7-9.7V5.2L12 2.5Z"
             fill="currentColor"
@@ -162,7 +162,7 @@ export default function LoginView({ client = api, onSignedIn }) {
         {error !== null && (
           <p
             role="alert"
-            className="rounded-card border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+            className="rounded-card border border-danger/30 bg-danger-soft p-3 text-sm text-danger-fg"
           >
             {error}
           </p>
@@ -171,7 +171,7 @@ export default function LoginView({ client = api, onSignedIn }) {
         <button
           type="submit"
           disabled={pending}
-          className="w-full rounded-card bg-accent px-3 py-2.5 text-sm font-semibold text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-60"
+          className="w-full rounded-card bg-accent px-3 py-2.5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
         >
           {pending ? 'Signing in…' : 'Sign in'}
         </button>

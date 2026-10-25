@@ -95,7 +95,7 @@ export function ProjectCard({ project, onSelect, selected = false }) {
             type="button"
             onClick={() => onSelect(project)}
             className={`block w-full truncate text-left ${
-              selected ? 'text-accent-strong' : 'text-fg hover:text-accent'
+              selected ? 'text-accent-text' : 'text-fg hover:text-accent-text'
             }`}
           >
             {project?.name}
@@ -234,9 +234,9 @@ export default function ProjectListView({
         ref={newProjectButtonRef}
         type="button"
         onClick={onNewProject}
-        className="mb-3 w-full rounded-card border border-border bg-surface px-3 py-2 text-left text-sm font-medium text-fg hover:border-border-strong hover:text-accent"
+        className="mb-3 w-full rounded-card border border-border bg-surface px-3 py-2 text-left text-sm font-medium text-fg hover:border-border-strong hover:text-accent-text"
       >
-        <span aria-hidden="true" className="mr-1 text-accent">+</span>New project
+        <span aria-hidden="true" className="mr-1 text-accent-text">+</span>New project
       </button>
 
       {loading && (
@@ -248,13 +248,13 @@ export default function ProjectListView({
       {error !== null && (
         <div
           role="alert"
-          className="rounded-card border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+          className="rounded-card border border-danger/30 bg-danger-soft p-3 text-sm text-danger-fg"
         >
           <p>{describeLoadFailure(error)}</p>
           <button
             type="button"
             onClick={() => setReloadCount((count) => count + 1)}
-            className="mt-3 rounded border border-red-300 bg-surface px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/60 dark:text-red-200"
+            className="mt-3 rounded-pill border border-danger bg-surface px-3 py-1 text-xs font-medium text-danger-fg hover:bg-danger-soft"
           >
             Try again
           </button>
