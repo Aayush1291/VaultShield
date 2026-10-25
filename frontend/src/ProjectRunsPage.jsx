@@ -108,14 +108,14 @@ export default function ProjectRunsPage() {
   const firstLoad = runs === null && error === null;
 
   const chipClass = (active) =>
-    `rounded-pill border px-3 py-1 text-xs font-medium ${
+    `rounded-pill border px-3.5 py-1.5 font-mono text-xs transition-colors ${
       active
-        ? 'border-accent bg-accent-soft text-accent-text'
-        : 'border-border bg-surface text-fg-muted hover:border-border-strong'
+        ? 'border-transparent bg-accent text-accent-fg'
+        : 'border-border-strong bg-surface text-fg-muted hover:text-fg'
     }`;
 
   return (
-    <section aria-labelledby="runs-heading" className="space-y-4">
+    <section aria-labelledby="runs-heading" className="space-y-6">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 id="runs-heading" className="font-display text-page font-normal text-fg">
           {heading}
@@ -154,7 +154,7 @@ export default function ProjectRunsPage() {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search by run id…"
-          className="w-full max-w-sm rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-ring"
+          className="w-full max-w-sm rounded-control border border-border-strong bg-surface px-3.5 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:border-ring"
         />
       </div>
 
@@ -162,7 +162,7 @@ export default function ProjectRunsPage() {
         <div role="status" aria-busy="true" className="space-y-2">
           <span className="sr-only">Loading runs…</span>
           {[0, 1, 2].map((row) => (
-            <div key={row} aria-hidden="true" className="h-12 animate-pulse rounded-card-lg border border-border bg-surface-2" />
+            <div key={row} aria-hidden="true" className="h-14 animate-pulse rounded-card bg-surface-2" />
           ))}
         </div>
       )}
@@ -181,26 +181,30 @@ export default function ProjectRunsPage() {
       )}
 
       {runs !== null && error === null && loaded.length === 0 && (
-        <div className="rounded-card-lg border border-dashed border-border bg-surface p-6 text-center">
-          <p className="text-sm text-fg-muted">{status === '' ? EMPTY_RUNS_MESSAGE : FILTERED_EMPTY_MESSAGE}</p>
+        <div className="rounded-card-xl border border-border bg-surface px-6 py-12 text-center shadow-soft">
+          <h3 className="font-display text-[1.75rem] leading-tight font-normal text-fg">
+            {status === '' ? 'No runs yet' : 'Nothing matches'}
+          </h3>
+          <p className="mx-auto mt-2 max-w-prose text-sm text-fg-muted">{status === '' ? EMPTY_RUNS_MESSAGE : FILTERED_EMPTY_MESSAGE}</p>
         </div>
       )}
 
       {runs !== null && error === null && loaded.length > 0 && visible.length === 0 && (
-        <div className="rounded-card-lg border border-dashed border-border bg-surface p-6 text-center">
-          <p className="text-sm text-fg-muted">{FILTERED_EMPTY_MESSAGE}</p>
+        <div className="rounded-card-xl border border-border bg-surface px-6 py-12 text-center shadow-soft">
+          <h3 className="font-display text-[1.75rem] leading-tight font-normal text-fg">Nothing matches</h3>
+          <p className="mx-auto mt-2 max-w-prose text-sm text-fg-muted">{FILTERED_EMPTY_MESSAGE}</p>
         </div>
       )}
 
       {visible.length > 0 && (
-        <div className="overflow-hidden rounded-card-lg border border-border bg-surface shadow-soft">
+        <div className="overflow-x-auto rounded-card-lg border border-border bg-surface shadow-soft">
           <table className="w-full border-collapse text-left text-sm">
             <thead>
-              <tr className="border-b border-border text-xs uppercase tracking-wide text-fg-subtle">
-                <th scope="col" className="px-4 py-2 font-medium">Run</th>
-                <th scope="col" className="px-4 py-2 font-medium">Agent</th>
-                <th scope="col" className="px-4 py-2 font-medium">Status</th>
-                <th scope="col" className="px-4 py-2 font-medium">Created</th>
+              <tr className="border-b border-border text-[11px] uppercase tracking-[0.12em] text-fg-muted">
+                <th scope="col" className="h-11 px-5 font-semibold">Run</th>
+                <th scope="col" className="h-11 px-5 font-semibold">Agent</th>
+                <th scope="col" className="h-11 px-5 font-semibold">Status</th>
+                <th scope="col" className="h-11 px-5 font-semibold">Created</th>
               </tr>
             </thead>
             <tbody>
@@ -212,27 +216,27 @@ export default function ProjectRunsPage() {
                     key={run?.run_id ?? run?.id ?? index}
                     data-testid={RUN_ROW_TESTID}
                     data-run-id={run?.run_id}
-                    className="border-b border-border last:border-b-0 hover:bg-surface-2"
+                    className="h-14 border-b border-border transition-colors last:border-b-0 hover:bg-surface-2"
                   >
-                    <td className="px-4 py-3">
+                    <td className="px-5 py-2">
                       <Link
                         to={`runs/${encodeURIComponent(run?.run_id ?? '')}`}
-                        className="break-all font-mono text-sm text-accent-text underline-offset-2 hover:underline"
+                        className="break-all font-mono text-sm font-medium text-accent-text underline-offset-4 hover:underline"
                       >
                         {run?.run_id}
                       </Link>
                     </td>
-                    <td className="px-4 py-3">
-                      <span className="rounded-pill border border-border bg-surface-2 px-2 py-0.5 text-xs text-fg-muted">
+                    <td className="px-5 py-2">
+                      <span className="rounded-pill bg-surface-2 px-2.5 py-0.5 font-mono text-xs text-fg-muted">
                         {run?.agent}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-5 py-2">
                       <RunStatusBadge status={run?.status} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-5 py-2">
                       {relative !== '' && (
-                        <time dateTime={run?.created_at} title={exact} className="text-xs text-fg-subtle">
+                        <time dateTime={run?.created_at} title={exact} className="text-sm text-fg-muted">
                           {relative}
                         </time>
                       )}
@@ -251,7 +255,7 @@ export default function ProjectRunsPage() {
             type="button"
             onClick={loadMore}
             disabled={loadingMore}
-            className="rounded-card border border-border bg-surface px-4 py-2 text-sm font-medium text-fg hover:border-border-strong disabled:opacity-60"
+            className="rounded-pill border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface-2 disabled:opacity-60"
           >
             {loadingMore ? 'Loading…' : 'Load more'}
           </button>

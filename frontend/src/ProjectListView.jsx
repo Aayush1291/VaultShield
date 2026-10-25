@@ -85,8 +85,8 @@ export function ProjectCard({ project, onSelect, selected = false }) {
       data-testid={PROJECT_CARD_TESTID}
       data-project-id={project?.id}
       aria-current={selected ? 'true' : undefined}
-      className={`rounded-card border p-3 transition-colors ${
-        selected ? 'border-accent bg-accent-soft' : 'border-border bg-surface hover:border-border-strong'
+      className={`rounded-card px-3.5 py-3 transition-colors ${
+        selected ? 'bg-accent-soft' : 'hover:bg-surface'
       }`}
     >
       <h3 className="text-sm font-semibold">
@@ -94,9 +94,7 @@ export function ProjectCard({ project, onSelect, selected = false }) {
           <button
             type="button"
             onClick={() => onSelect(project)}
-            className={`block w-full truncate text-left ${
-              selected ? 'text-accent-text' : 'text-fg hover:text-accent-text'
-            }`}
+            className="block w-full truncate text-left text-fg"
           >
             {project?.name}
           </button>
@@ -104,7 +102,7 @@ export function ProjectCard({ project, onSelect, selected = false }) {
           <span className="text-fg">{project?.name}</span>
         )}
       </h3>
-      <p className="mt-1 break-all font-mono text-[11px] leading-snug text-fg-subtle">
+      <p className="mt-1 break-all font-mono text-[11px] leading-snug text-fg-muted">
         {project?.repo_url}
       </p>
       {created !== '' && <p className="mt-2 text-[11px] text-fg-subtle">Created {created}</p>}
@@ -129,11 +127,11 @@ export function ProjectList({ projects, onSelectProject, selectedProjectId = nul
   const records = Array.isArray(projects) ? projects : [];
 
   if (records.length === 0) {
-    return <p className="text-sm text-fg-subtle">{EMPTY_PROJECTS_MESSAGE}</p>;
+    return <p className="px-2 text-sm leading-relaxed text-fg-muted">{EMPTY_PROJECTS_MESSAGE}</p>;
   }
 
   return (
-    <ul role="list" className="space-y-2">
+    <ul role="list" className="space-y-1">
       {records.map((project, index) => (
         <ProjectCard
           key={project?.id ?? index}
@@ -216,7 +214,7 @@ export default function ProjectListView({
 
   return (
     <section aria-labelledby="project-list-heading">
-      <div className="mb-3 flex items-baseline justify-between gap-2">
+      <div className="mb-3 flex items-baseline justify-between gap-2 px-2">
         <h2
           id="project-list-heading"
           className="text-xs font-semibold uppercase tracking-wide text-fg-subtle"
@@ -234,9 +232,9 @@ export default function ProjectListView({
         ref={newProjectButtonRef}
         type="button"
         onClick={onNewProject}
-        className="mb-3 w-full rounded-card border border-border bg-surface px-3 py-2 text-left text-sm font-medium text-fg hover:border-border-strong hover:text-accent-text"
+        className="mb-4 inline-flex w-full items-center justify-center gap-1 rounded-pill bg-accent px-4 py-2 text-sm font-semibold text-accent-fg shadow-soft transition-colors hover:bg-accent-hover hover:text-accent-hover-fg"
       >
-        <span aria-hidden="true" className="mr-1 text-accent-text">+</span>New project
+        <span aria-hidden="true">+</span>New project
       </button>
 
       {loading && (

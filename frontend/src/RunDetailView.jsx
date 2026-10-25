@@ -245,9 +245,9 @@ export function DiffTab({ diff, id, labelledBy }) {
       records={files}
       itemTestId={DIFF_FILE_TESTID}
       emptyMessage={EMPTY_DIFF_MESSAGE}
-      listClassName="divide-y divide-border rounded-card-lg border border-border bg-surface"
+      listClassName="divide-y divide-border overflow-hidden rounded-card-lg border border-border bg-surface shadow-soft"
       renderItem={(file) => (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
+        <div className="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
           <span className="min-w-0 grow break-all font-mono text-sm text-fg">
             {file?.path}
           </span>
@@ -296,22 +296,22 @@ export function TimelineTab({ events, id, labelledBy }) {
       records={ordered}
       itemTestId={TIMELINE_EVENT_TESTID}
       emptyMessage={EMPTY_TIMELINE_MESSAGE}
-      listClassName="divide-y divide-border rounded-card-lg border border-border bg-surface"
+      listClassName="divide-y divide-border overflow-hidden rounded-card-lg border border-border bg-surface shadow-soft"
       renderItem={(event) => {
         const at = formatTimestamp(event?.timestamp);
 
         return (
-          <div className="px-4 py-2">
+          <div className="px-5 py-3">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-mono text-xs text-fg-subtle">{at}</span>
-              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-fg-muted">
+              <span className="rounded-pill bg-surface-2 px-2 py-0.5 font-mono text-xs text-fg-muted">
                 {event?.event_type}
               </span>
             </div>
             {/* `whitespace-pre-wrap`: a `payload` is a captured line of
                 terminal output, so its own line breaks and indentation are
                 part of what the Reviewer needs to read. */}
-            <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-fg-muted">
+            <p className="mt-1.5 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-fg-muted">
               {event?.payload}
             </p>
           </div>
@@ -347,7 +347,7 @@ export function ScreenshotsTab({ screenshots, id, labelledBy }) {
       emptyMessage={EMPTY_SCREENSHOTS_MESSAGE}
       listClassName="grid gap-4 sm:grid-cols-2"
       renderItem={(screenshot) => (
-        <figure className="overflow-hidden rounded-card-lg border border-border bg-surface">
+        <figure className="overflow-hidden rounded-card-lg border border-border bg-surface shadow-soft">
           <img
             src={screenshot?.image}
             alt={`Screenshot of ${screenshot?.route ?? 'an unnamed route'}`}
@@ -500,7 +500,7 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
   return (
     <div className="mb-4 space-y-3">
       {decidable && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-card-lg border border-border bg-accent-soft p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-card-lg bg-accent-soft px-5 py-4">
           <p className="text-sm font-medium text-fg">This run is awaiting your review.</p>
           <div className="flex flex-wrap items-center gap-3">
             {DECISIONS.map((decision) => (
@@ -513,7 +513,7 @@ export function DecisionControls({ status, agent, runId, pending = null, error =
                 // rather than only on the status line below.
                 aria-busy={pending === decision.value}
                 onClick={() => onDecide?.(decision.value)}
-                className={`rounded-card border px-4 py-1.5 text-sm font-medium disabled:cursor-not-allowed ${decision.className}`}
+                className={`rounded-pill border px-5 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed ${decision.className}`}
               >
                 {decision.label}
               </button>
@@ -872,14 +872,14 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
     <section aria-labelledby="run-detail-heading">
       {/* Sticky under the top bar, so the Run's id and status stay in view
           while a long diff or timeline scrolls. */}
-      <div className="sticky top-14 z-10 -mx-4 mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 border-b border-border bg-canvas/85 px-4 py-3 backdrop-blur md:-mx-8 md:px-8">
+      <div className="sticky top-16 z-10 -mx-6 mb-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 border-b border-border bg-canvas/80 px-6 py-4 backdrop-blur-md md:-mx-8 md:px-8">
         <h2 id="run-detail-heading" className="font-display text-page font-normal text-fg">
           Run detail
         </h2>
         {run !== null && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className="break-all font-mono text-sm text-fg">{run.run_id}</span>
-            <span className="rounded-pill border border-border bg-surface-2 px-2 py-0.5 text-xs text-fg-muted">
+            <span className="rounded-pill bg-surface-2 px-2.5 py-0.5 font-mono text-xs text-fg-muted">
               {run.agent}
             </span>
             {/* Requirement 21.4's copy replaces the badge's text for an approved
@@ -941,7 +941,7 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
             role="tablist"
             aria-label="Run artifacts"
             onKeyDown={onTabListKeyDown}
-            className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-card border border-border bg-surface-2 p-1"
+            className="mb-6 inline-flex max-w-full flex-wrap gap-1 rounded-pill border border-border bg-surface-2 p-1"
           >
             {TABS.map((tab) => {
               const isActive = tab.id === activeTab.id;
@@ -961,7 +961,7 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
                     tabRefs.current[tab.id] = node;
                   }}
                   onClick={() => changeTab(tab.id)}
-                  className={`rounded-card px-3 py-1.5 text-sm font-medium transition-colors ${
+                  className={`rounded-pill px-4 py-1.5 text-sm font-medium transition-colors ${
                     isActive
                       ? 'bg-surface text-fg shadow-soft'
                       : 'text-fg-muted hover:text-fg'

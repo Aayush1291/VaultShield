@@ -78,7 +78,7 @@ export default function Modal({ title, onClose, closeDisabled = false, returnFoc
         aria-label="Close dialog"
         tabIndex={-1}
         onClick={requestClose}
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 bg-fg/35 backdrop-blur-[2px]"
       />
       <div
         ref={panelRef}
@@ -87,12 +87,12 @@ export default function Modal({ title, onClose, closeDisabled = false, returnFoc
         aria-labelledby={titleId}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className="relative z-10 w-full max-w-md rounded-card-lg border border-border bg-surface p-6 shadow-card"
+        className="relative z-10 max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-card-xl border border-border bg-surface p-7 shadow-lift"
       >
-        <h2 id={titleId} className="text-lg font-semibold text-fg">
+        <h2 id={titleId} className="font-display text-[1.75rem] leading-tight font-normal text-fg">
           {title}
         </h2>
-        <div className="mt-4">{children}</div>
+        <div className="mt-5">{children}</div>
       </div>
     </div>
   );

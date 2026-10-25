@@ -110,17 +110,17 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
   }
 
   const inputClass =
-    'mt-1 w-full rounded-card border border-border bg-canvas px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:border-ring';
+    'mt-1.5 w-full rounded-control border border-border-strong bg-surface px-3.5 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:border-ring';
 
   return (
     <form
       onSubmit={handleSubmit}
       aria-busy={pending}
       aria-label="New project"
-      className="mb-3 space-y-3 rounded-card border border-border bg-surface-2 p-3"
+      className="space-y-5"
     >
       <div>
-        <label htmlFor="new-project-name" className="block text-xs font-medium text-fg-muted">
+        <label htmlFor="new-project-name" className="block text-sm font-medium text-fg">
           Name
         </label>
         <input
@@ -142,7 +142,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
       </div>
 
       <div>
-        <label htmlFor="new-project-repo-url" className="block text-xs font-medium text-fg-muted">
+        <label htmlFor="new-project-repo-url" className="block text-sm font-medium text-fg">
           Repository URL
         </label>
         <input
@@ -155,7 +155,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
           placeholder="https://… or git@…"
           aria-invalid={Boolean(fieldErrors.repo_url)}
           aria-describedby={fieldErrors.repo_url ? 'new-project-repo-url-error' : undefined}
-          className={`${inputClass} font-mono text-xs`}
+          className={`${inputClass} font-mono text-[13px]`}
         />
         {fieldErrors.repo_url && (
           <p id="new-project-repo-url-error" className="mt-1 text-xs text-danger-fg">
@@ -173,11 +173,11 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
         </p>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap justify-end gap-3 pt-1">
         <button
           type="submit"
           disabled={pending}
-          className="rounded-card bg-accent px-3 py-2 text-sm font-medium text-accent-fg hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
+          className="rounded-pill bg-accent px-4 py-2 text-sm font-semibold text-accent-fg shadow-soft transition-colors hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
         >
           {pending ? 'Creating…' : 'Create project'}
         </button>
@@ -185,7 +185,7 @@ export default function NewProjectForm({ client = api, onCreated, onCancel, onPe
           type="button"
           onClick={onCancel}
           disabled={pending}
-          className="rounded-card border border-border bg-surface px-3 py-2 text-sm font-medium text-fg-muted hover:border-border-strong"
+          className="rounded-pill border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface-2 disabled:opacity-60"
         >
           Cancel
         </button>

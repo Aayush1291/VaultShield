@@ -19,7 +19,7 @@ export default function ProjectsOverview() {
   const { projects, openNewProject } = useOutletContext();
 
   return (
-    <section aria-labelledby="overview-heading" className="space-y-4">
+    <section aria-labelledby="overview-heading" className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="overview-heading" className="font-display text-page font-normal text-fg">
           Projects
@@ -27,7 +27,7 @@ export default function ProjectsOverview() {
         <button
           type="button"
           onClick={openNewProject}
-          className="rounded-card bg-accent px-3 py-2 text-sm font-semibold text-accent-fg hover:bg-accent-hover hover:text-accent-hover-fg"
+          className="rounded-pill bg-accent px-4 py-2 text-sm font-semibold text-accent-fg shadow-soft transition-colors hover:bg-accent-hover hover:text-accent-hover-fg disabled:opacity-60"
         >
           New project
         </button>
@@ -40,27 +40,28 @@ export default function ProjectsOverview() {
       )}
 
       {projects !== null && projects.length === 0 && (
-        <div className="rounded-card-lg border border-dashed border-border bg-surface p-6 text-center">
-          <p className="text-sm text-fg-muted">{EMPTY_PROJECTS_MESSAGE}</p>
+        <div className="rounded-card-xl border border-border bg-surface px-6 py-14 text-center shadow-soft">
+          <h3 className="font-display text-[1.75rem] leading-tight font-normal text-fg">Nothing here yet</h3>
+          <p className="mx-auto mt-2 max-w-prose text-sm text-fg-muted">{EMPTY_PROJECTS_MESSAGE}</p>
         </div>
       )}
 
       {projects !== null && projects.length > 0 && (
-        <ul role="list" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <ul role="list" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {projects.map((project, index) => {
             const created = formatCreatedAt(project?.created_at);
             return (
               <li key={project?.id ?? index} data-testid={OVERVIEW_CARD_TESTID}>
                 <Link
                   to={`/dashboard/projects/${encodeURIComponent(project?.id)}`}
-                  className="block rounded-card-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong"
+                  className="block h-full rounded-card-lg border border-border bg-surface p-5 shadow-soft transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-card"
                 >
-                  <h3 className="truncate text-sm font-semibold text-fg">{project?.name}</h3>
-                  <p className="mt-1 break-all font-mono text-[11px] leading-snug text-fg-subtle">
+                  <h3 className="truncate font-display text-[1.4rem] leading-tight font-normal text-fg">{project?.name}</h3>
+                  <p className="mt-2 break-all font-mono text-xs leading-snug text-fg-muted">
                     {project?.repo_url}
                   </p>
                   {created !== '' && (
-                    <p className="mt-2 text-[11px] text-fg-subtle">Created {created}</p>
+                    <p className="mt-4 text-xs text-fg-subtle">Created {created}</p>
                   )}
                 </Link>
               </li>

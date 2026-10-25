@@ -143,23 +143,23 @@ export default function DashboardLayout() {
           type="button"
           aria-label="Close navigation"
           onClick={() => setDrawerOpen(false)}
-          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          className="fixed inset-0 z-30 bg-fg/30 md:hidden"
         />
       )}
 
       <div className="flex min-h-screen w-full">
         <aside
           id="vs-sidebar"
-          className={`fixed inset-y-0 left-0 z-40 flex w-[272px] flex-col border-r border-border bg-surface transition-transform duration-200 md:static md:z-auto md:translate-x-0 ${
+          className={`fixed inset-y-0 left-0 z-40 flex w-[272px] flex-col border-r border-border bg-surface-2 transition-transform duration-200 md:static md:z-auto md:translate-x-0 ${
             drawerOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
-          <Link to="/dashboard" className="flex items-center gap-2 px-5 py-5">
+          <Link to="/dashboard" className="flex h-16 items-center gap-2 px-5">
             <ShieldGlyph className="h-7 w-7 text-accent-text" />
-            <span className="text-lg font-semibold tracking-tight text-fg">VaultShield</span>
+            <span className="text-[17px] font-semibold tracking-tight text-fg">VaultShield</span>
           </Link>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2 pb-4">
             <ProjectListView
               key={sidebarReloadKey}
               client={client}
@@ -187,14 +187,14 @@ export default function DashboardLayout() {
         </aside>
 
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-surface/85 px-4 py-3 backdrop-blur md:px-8">
+          <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-canvas/80 px-4 backdrop-blur-md md:px-8">
             <button
               type="button"
               aria-label="Open navigation"
               aria-controls="vs-sidebar"
               aria-expanded={drawerOpen}
               onClick={() => setDrawerOpen(true)}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-card border border-border text-fg-muted md:hidden"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-pill border border-border-strong text-fg-muted hover:text-fg md:hidden"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5" fill="none">
                 <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -252,7 +252,7 @@ export default function DashboardLayout() {
             )}
           </header>
 
-          <main className="w-full flex-1 px-6 py-8 md:px-8">
+          <main className="w-full flex-1 px-6 py-8 md:px-8 md:py-10">
             <Outlet
               context={{
                 projects,
@@ -345,7 +345,7 @@ function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, ret
         onClick={() => {
           if (!pending) onCancel();
         }}
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 bg-fg/35 backdrop-blur-[2px]"
       />
       <div
         ref={panelRef}
@@ -354,9 +354,9 @@ function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, ret
         aria-labelledby="delete-project-title"
         aria-describedby="delete-project-description"
         onKeyDown={handleKeyDown}
-        className="relative z-10 w-full max-w-md rounded-card-lg border border-border bg-surface p-6 shadow-soft"
+        className="relative z-10 w-full max-w-md rounded-card-xl border border-border bg-surface p-7 shadow-lift"
       >
-        <h2 id="delete-project-title" className="text-lg font-semibold text-fg">
+        <h2 id="delete-project-title" className="font-display text-[1.75rem] leading-tight font-normal text-fg">
           Delete {project.name}?
         </h2>
         <p id="delete-project-description" className="mt-2 text-sm text-fg-muted">
@@ -379,7 +379,7 @@ function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, ret
             type="button"
             onClick={onCancel}
             disabled={pending}
-            className="rounded-card border border-border bg-surface px-4 py-2 text-sm font-medium text-fg-muted hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-pill border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-fg hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Cancel
           </button>
