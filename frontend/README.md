@@ -21,6 +21,13 @@ frontend/
     App.jsx             # the route table, wrapped in AuthProvider
     auth.jsx            # AuthProvider/useAuth, guardClient, RequireAuth, RedirectIfSignedIn
     Landing.jsx         # / editorial landing (scoped styles on the tokens, origin-built install cmd)
+    SeeItWork.jsx       # the landing's four-scene "See it work" demo and its state machine
+    useScrollProgress.js      # scroll progress as a --p CSS variable; flowPosition()
+    handoff.js          # plans the hero pieces' route onto the demo window
+    useRouteViewTransition.js # 180ms cross-fade between routes (View Transitions API)
+    motion.js           # useMediaQuery, useReducedMotion, usePageVisible
+    charMorph.js        # the scramble-then-settle character morph
+    fakeValues.js       # the one obviously fake key the landing shows
     Login.jsx / Signup.jsx    # /login (wraps LoginView) and the /signup placeholder
     AuthLayout.jsx      # two-column frame for the auth pages
     theme.js / ThemeSwitch.jsx  # System / Light / Dark preference and its control
@@ -92,6 +99,75 @@ Both use `font-display: swap`. Metric-compatible fallback faces (`EB Garamond
 Fallback` over Georgia, `Inter Fallback` over Arial, with `size-adjust` and
 ascent/descent overrides computed from Capsize's published metrics) keep text
 from jumping when the webfonts arrive.
+
+## Landing motion
+
+No animation library: CSS, IntersectionObserver, `requestAnimationFrame` and a
+few small hooks. Everything that moves is decoration on a page that is
+complete without it.
+
+| | Reduced motion | Below 900px | 900–1199px | 1200px and up |
+|---|---|---|---|---|
+| Section reveal (fade + 24px rise, cards 60ms apart) | off, shown | on | on | on |
+| Route cross-fade (180ms) | off | on | on | on |
+| Hero terminal morph into "With" | off, toggle only | on | on | on |
+| See it work demo | scene 3, static | plays on its own | pinned, scroll walks the scenes | pinned |
+| Hero pieces settling onto the demo window | off | off | off | on, if the route fits |
+
+No dashboard screen moves beyond the route cross-fade.
+
+**`useScrollProgress(ref, options)`** (`src/useScrollProgress.js`) sets `--p`,
+0 to 1, on the element, and CSS turns it into `transform` and `opacity` only.
+Modes: `travel` (0 as the element enters at the bottom, 1 as it leaves at the
+top), `pin` (for a tall track with a sticky child: 0 when the track's top hits
+the viewport top, 1 when its bottom reaches the bottom) and `handoff` (0 at
+the page top, 1 when a `target` has scrolled up to where it pins). The cost is
+kept small on purpose: one passive `scroll` and one `resize` listener; each
+event schedules at most one animation frame; a frame does one read (a rect,
+or in `handoff` mode just `scrollY`) and one style write, and skips the write
+if nothing changed. Nothing runs while the tab is hidden; it catches up on
+`visibilitychange`. Listeners and any pending frame go on unmount.
+`enabled: false` attaches nothing and leaves `--p` at `restValue`, the final
+state. `onProgress(p)` gives the number to JS from the same frame.
+`flowPosition(el)` is the measure-time helper: an element's place in the flow
+from the offset chain, ignoring a reveal's transform and a stuck sticky
+ancestor (Chromium reports that one where it is stuck).
+
+**See it work** (`src/SeeItWork.jsx`) shows four scenes, with invented values:
+Without (the agent repeats the fake live key), The transformation (the key
+scrambles into `vs_protected` and a Keychain badge), With (the read is
+refused, `cat` shows the placeholder, `printenv` is blocked) and
+`vaultshield exec` (the command gets the real value; its output shows `***`).
+`demoReducer` is a small state machine (`start`, `tick`, `jump`, `replay`,
+`reduce`) over the frames in `DEMO_FRAMES`; one timeout at a time drives it,
+cleared on every change and on unmount. It starts when the stage enters view,
+plays once, pauses while hovered, focused or the tab is hidden, and has
+Replay and four focusable scene buttons (`aria-pressed`). The animated stage
+is `aria-hidden`; an `sr-only` paragraph describes all four scenes, and the
+caption reads "Illustration of a real test on Antigravity, with invented
+values." Under reduced motion it shows scene 3's final frame and the scene
+buttons switch final frames instantly. From 900px with motion, the section is
+a 260vh track with a sticky stage: each quarter of the scroll picks a scene
+and its caption (`scrollScene`), and between scroll changes the clock plays.
+
+**The hero pieces** (a `.env` card, a key chip with the fake key, a shield)
+start in the hero's right margin beside its terminal and settle onto the top
+edge of the See it work window as it scrolls into place, where docked copies
+then ride the pinned stage. `planHandoff` (`src/handoff.js`) plans the route
+from measured layout, on mount, resize and font load, never per scroll frame:
+a shared descent down a column clear of every hero and See it work line,
+lagging the scroll (the parallax; never against it), queued so the gaps only
+shrink; then one piece at a time drops and slides into its spot. It checks
+the route against the text and the other pieces, and where none fits (today
+below about 1275px) the docked badges just sit on the window. CSS runs the
+legs from `--p` with smoothstep easing.
+
+**Route cross-fade.** `useRouteViewTransition` (mounted by `App.jsx`) catches
+plain left clicks on same-origin links to another path and wraps the
+navigation in `document.startViewTransition()`; `index.css` gives it a 180ms
+cross-fade. It is a no-op where the API is missing and under reduced motion.
+Programmatic navigations (sign-in redirects) and back/forward are not wrapped.
+`BrowserRouter` and the test mounting are unchanged.
 
 ## Routes
 
@@ -283,13 +359,18 @@ It serves the build with `vite preview` on a free port, answers every
 dashboard pages a fake token. PNGs land in `ui-shots/` (git-ignored): the
 landing, login and signup pages, the overview, a project's runs, a run detail
 on each tab, the New project modal and the delete dialog, at 390, 1280 and
-1920 wide in light and dark, plus the full landing page at 1440. Shots use
-reduced motion, so scroll fade-ups never leave blank sections.
+1920 wide in light and dark, plus the full landing page at 1440 and the FAQ
+(tools item open) at 1440 and 1920. Those use reduced motion, so scroll
+fade-ups never leave blank sections. A second set runs with motion on: the
+landing at 0/25/50/75/100% scroll at 1440, and the See it work demo about
+0.5, 3, 6, 9 and 12s after it enters view. Screenshots are single frames:
+they cannot show whether the motion feels smooth.
 
 It also checks layout at 390, 768, 1024, 1280, 1440, 1920 and 2560 wide (no
 horizontal scroll, landing content within its 1240px container, the dashboard
-filling the viewport), writes `ui-shots/layout-report.json`, and exits 1 if a
-check fails.
+filling the viewport) and that the How it works cards and their terminal
+boxes are equal height (within 1px) at 1280, 1440 and 1920, writes
+`ui-shots/layout-report.json`, and exits 1 if a check fails.
 
 ## Building
 
