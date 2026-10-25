@@ -292,6 +292,59 @@ MEASURE = """() => {
 }"""
 
 
+STEP_WIDTHS = (1280, 1440, 1920)
+STEP_TOLERANCE_PX = 1.0
+
+MEASURE_STEPS = """() => {
+  const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top + window.scrollY, height: r.height }; };
+  const cards = [...document.querySelectorAll('.lp-step')].map(box);
+  const terms = [...document.querySelectorAll('.lp-step .lp-snippet')].map((el) => ({
+    ...box(el),
+    scrolls: el.scrollHeight > el.clientHeight + 1 && getComputedStyle(el).overflowY !== 'hidden',
+  }));
+  return { cards, terms };
+}"""
+
+
+def check_steps(browser, base: str) -> list[dict]:
+    """The three How-it-works cards, and their three terminal boxes, must be the
+    same height (within 1px) and the boxes must start on the same line."""
+    rows = []
+    for width in STEP_WIDTHS:
+        ctx = new_context(browser, width, "light", signed_in=False)
+        page = ctx.new_page()
+        page.goto(base + "/")
+        settle(page)
+        m = page.evaluate(MEASURE_STEPS)
+        ctx.close()
+
+        def spread(values):
+            return max(values) - min(values) if values else 0.0
+
+        card_h = [c["height"] for c in m["cards"]]
+        term_h = [t["height"] for t in m["terms"]]
+        term_top = [t["top"] for t in m["terms"]]
+        problems = []
+        if len(card_h) != 3 or len(term_h) != 3:
+            problems.append(f"expected 3 cards and 3 terminals, found {len(card_h)} and {len(term_h)}")
+        if spread(card_h) > STEP_TOLERANCE_PX:
+            problems.append(f"card heights differ by {spread(card_h):.1f}px")
+        if spread(term_h) > STEP_TOLERANCE_PX:
+            problems.append(f"terminal heights differ by {spread(term_h):.1f}px")
+        if spread(term_top) > STEP_TOLERANCE_PX:
+            problems.append(f"terminal tops differ by {spread(term_top):.1f}px")
+        if any(t["scrolls"] for t in m["terms"]):
+            problems.append("a terminal box scrolls")
+        rows.append({
+            "width": width,
+            "card_heights": [round(h, 2) for h in card_h],
+            "terminal_heights": [round(h, 2) for h in term_h],
+            "terminal_tops": [round(t, 2) for t in term_top],
+            "problems": problems,
+        })
+    return rows
+
+
 def check_layout(browser, base: str) -> list[dict]:
     rows = []
     for width in CHECK_WIDTHS:
@@ -328,18 +381,27 @@ def main() -> int:
         try:
             files = [] if args.layout_only else shoot(browser, base)
             rows = check_layout(browser, base)
+            steps = check_steps(browser, base)
         finally:
             browser.close()
 
-    (OUT / "layout-report.json").write_text(json.dumps(rows, indent=2))
+    (OUT / "layout-report.json").write_text(json.dumps({"layout": rows, "steps": steps}, indent=2))
     failures = [r for r in rows if r["problems"]]
+    step_failures = [r for r in steps if r["problems"]]
     print(f"{len(files)} screenshots in {OUT.relative_to(REPO)}/")
     for r in rows:
         status = "FAIL " + "; ".join(r["problems"]) if r["problems"] else "ok"
         extra = f" container={r['containerMax']:.0f}" if r["containerMax"] else ""
         print(f"  {r['width']:>4} {r['page']:<20} overflow={r['overflow']:>3}{extra}  {status}")
     print(f"layout: {len(rows) - len(failures)}/{len(rows)} checks passed")
-    return 1 if failures else 0
+    for r in steps:
+        status = "FAIL " + "; ".join(r["problems"]) if r["problems"] else "ok"
+        print(
+            f"  steps {r['width']:>4} cards={r['card_heights']} terminals={r['terminal_heights']} "
+            f"tops={r['terminal_tops']}  {status}"
+        )
+    print(f"steps: {len(steps) - len(step_failures)}/{len(steps)} equal-height checks passed")
+    return 1 if failures or step_failures else 0
 
 
 if __name__ == "__main__":

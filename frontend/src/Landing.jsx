@@ -256,13 +256,28 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-claim.yes .mark { background: var(--color-success-soft); color: var(--color-success-fg); }
 .lp-claim.pending .mark { background: var(--color-warn-soft); color: var(--color-warn-fg); }
 
-.lp-steps { display: grid; gap: 3rem; grid-template-columns: minmax(0, 1fr); list-style: none; margin: 3.5rem 0 0; padding: 0; }
-@media (min-width:1024px) { .lp-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem; } }
-.lp-step { display: flex; flex-direction: column; gap: .9rem; min-width: 0; }
-.lp-numeral { font-family: var(--font-display); font-size: clamp(4.5rem, 3rem + 4vw, 7.5rem); line-height: .9; color: var(--color-accent-text); }
-.lp-step h3 { margin: .25rem 0 0; font-size: 1.35rem; font-weight: 600; letter-spacing: -.01em; }
+.lp-steps { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); align-items: stretch; list-style: none; margin: 3.5rem 0 0; padding: 0; }
+.lp-step { display: flex; flex-direction: column; gap: 1rem; min-width: 0; padding: 1.75rem 1.5rem; border-radius: var(--radius-card-lg); background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: var(--shadow-soft); }
+.lp-numeral { display: block; font-family: var(--font-display); font-size: 6rem; line-height: .9; color: var(--color-accent-text); }
+.lp-step h3 { margin: 0; font-size: 1.35rem; font-weight: 600; letter-spacing: -.01em; }
 .lp-step p { margin: 0; color: var(--color-fg-muted); line-height: 1.6; font-size: 1.02rem; }
-.lp-snippet { margin: .5rem 0 0; border-radius: var(--radius-card); background: var(--color-term-bg); color: var(--color-term-fg); font: .82rem/1.8 var(--font-mono); padding: 1rem 1.15rem; white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: var(--shadow-soft); }
+/* All three terminal boxes are one fixed height, text top-aligned, wrapped,
+   never scrolled. */
+.lp-snippet { margin: 0; height: 9rem; overflow: hidden; border-radius: var(--radius-card); background: var(--color-term-bg); color: var(--color-term-fg); font: .8rem/1.7 var(--font-mono); padding: .9rem 1.1rem; white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: var(--shadow-soft); }
+/* From 1024px: three equal cards. Grid rows are shared through subgrid, so the
+   numerals, titles, copy and terminal boxes sit on the same lines across the
+   row; without subgrid, the boxes are pushed to the bottom of equal-height
+   cards, which puts them on the same line too. */
+@media (min-width:1024px) {
+  .lp-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto 1fr auto; column-gap: 1.5rem; row-gap: 0; }
+  .lp-step { padding: 2rem 1.75rem; }
+  .lp-step .lp-snippet { margin-top: auto; }
+}
+@supports (grid-template-rows: subgrid) {
+  @media (min-width:1024px) {
+    .lp-step { display: grid; grid-row: span 4; grid-template-rows: subgrid; row-gap: 1rem; }
+  }
+}
 
 .lp-split { display: grid; gap: 3rem; grid-template-columns: minmax(0, 1fr); align-items: center; }
 @media (min-width:1024px) { .lp-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5rem; } .lp-split.flip > :first-child { order: 2; } }
@@ -466,7 +481,7 @@ export default function Landing() {
                 <pre className="lp-snippet">
                   <span className="t-prompt">$</span> {installCommand}
                   {'\n'}
-                  <span className="t-dim">Installed the launcher at ~/.local/bin/vaultshield.</span>
+                  <span className="t-dim">Installed: ~/.local/bin/vaultshield</span>
                 </pre>
               </li>
               <li className="lp-step">
