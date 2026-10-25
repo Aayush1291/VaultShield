@@ -1,7 +1,0 @@
-{
-  "task_id": "task-batch2-run-lifecycle",
-  "task_description": "Batch 2: register the backend Run at `vaultshield run` start (POST /api/runs/ after pipeline step 2, --project option), add the terminal `failed` Run status with migration 0002, gate PATCH status=failed|awaiting_review to `running` (409 otherwise, apply_decision-style conditional atomic update), duplicate run_id -> 400 incl. the IntegrityError race, run_id grammar validator, explicit CLI PATCH awaiting_review after the last upload, exactly one best-effort PATCH failed on every error path after registration (after sandbox teardown), carried items 6(a)-(d), dashboard `failed` pill, README docs. Implements the signed-off design /Users/aayush/Codes/VaultShield/.agents/tasks/batch2-design.md; ordered plan in /Users/aayush/Codes/VaultShield/.agents/tasks/batch2-plan.md. Everything stays UNCOMMITTED.",
-  "status": "pending",
-  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
-  "blocked_reason": null
-}
