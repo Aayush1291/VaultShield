@@ -270,7 +270,7 @@ function Line({ line }) {
  *   changes, the demo jumps there, so the captions and the stage follow the
  *   scroll; when it does not change, the demo plays on its own.
  */
-export default function SeeItWork({ scrollScene = null }) {
+export default function SeeItWork({ scrollScene = null, frameDecoration = null }) {
   const reduced = useReducedMotion();
   const visible = usePageVisible();
   const [state, dispatch] = useReducer(demoReducer, reduced, initialDemoState);
@@ -369,6 +369,9 @@ export default function SeeItWork({ scrollScene = null }) {
               <Line key={line.id} line={line} />
             ))}
           </div>
+          {/* Optional decoration on the window frame (the landing page docks
+              its hero pieces here). Decorative and aria-hidden by contract. */}
+          {frameDecoration}
         </div>
 
         <div className="lp-demo-controls">

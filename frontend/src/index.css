@@ -304,7 +304,20 @@ body {
     radial-gradient(60% 50% at 100% 100%, color-mix(in srgb, #e8b98a 24%, transparent), transparent 70%);
 }
 
+/* Route cross-fade (useRouteViewTransition): 180ms, opacity only. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+
   *,
   *::before,
   *::after {

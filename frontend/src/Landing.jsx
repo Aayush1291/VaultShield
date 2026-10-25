@@ -31,7 +31,8 @@ import ThemeSwitch from './ThemeSwitch.jsx';
 import { useAuth } from './auth.jsx';
 import { morphText, scramble } from './charMorph.js';
 import { FAKE_STRIPE_KEY } from './fakeValues.js';
-import { usePageVisible } from './motion.js';
+import { useMediaQuery, usePageVisible, useReducedMotion } from './motion.js';
+import useScrollProgress from './useScrollProgress.js';
 
 /**
  * The install command, built from the page's own origin — the single place
@@ -226,6 +227,232 @@ function HeroTerminal() {
   );
 }
 
+/**
+ * Where each hero piece starts (fractions of the handoff layer) and where it
+ * docks (fractions of the See it work window's free space). `speed` > 1
+ * arrives early, < 1 arrives late: that difference is the parallax.
+ */
+const PIECES = [
+  { key: 'env', start: [0.05, 0.16], dock: [0.02, 0.04], speed: 1.12 },
+  { key: 'key', start: [0.8, 0.12], dock: [0.6, 0.03], speed: 1.0 },
+  { key: 'shield', start: [0.86, 0.3], dock: [0.97, 0.9], speed: 0.9 },
+];
+
+/**
+ * The hero's decorative pieces: a .env card, a key chip with the fake key,
+ * and a shield. As the visitor scrolls from the hero into See it work they
+ * drift down at different speeds and settle on the demo window's frame,
+ * where they stay as part of it.
+ *
+ * Each piece sits at its start point. Its offset to its dock point is
+ * measured once, on mount and on resize — never per scroll frame — into
+ * --dx/--dy. Scroll progress --p (0 at the top of the page, 1 when the window
+ * has scrolled to its resting place) comes from useScrollProgress on the
+ * layer, and CSS turns it into translate() and rotate(). So the browser
+ * animates only transform, and no layout is read while scrolling.
+ *
+ * @param {{ layerRef: { current: HTMLElement|null } }} props
+ */
+function HeroPieces({ layerRef }) {
+  const pieceRefs = useRef({});
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return undefined;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const target = document.querySelector('.lp-demo-window');
+      if (!target) return;
+      // Every read first: the layer, the window, each piece's resting box,
+      // all in layer coordinates. --p reaches 1 when the window arrives at
+      // HANDOFF_REST_TOP (before its stage pins), so the dock is where the
+      // window will be at that moment: its current place in the layer. At
+      // 1 the flying piece hands over to the docked copy rendered inside the
+      // window (.lp-docked), which then rides the sticky stage natively.
+      const layerBox = layer.getBoundingClientRect();
+      const targetBox = target.getBoundingClientRect();
+      // Where the window will be at --p = 1, in layer coordinates: it pins at
+      // its stage's sticky `top`, after the page has scrolled
+      // (targetDocTop - restTop). The layer scrolls with the page, so in the
+      // layer the window's top at arrival is just its layout position.
+      let targetDocTop = 0;
+      for (let el = target; el; el = el.offsetParent) targetDocTop += el.offsetTop;
+      const layerDocTop = layerBox.top + window.scrollY;
+      const targetInLayerTop = targetDocTop - layerDocTop;
+      const sizes = PIECES.map(({ key }) => {
+        const el = pieceRefs.current[key];
+        return el ? [el.offsetWidth, el.offsetHeight] : null;
+      });
+      // Then every write.
+      PIECES.forEach(({ key, start, dock }, index) => {
+        const el = pieceRefs.current[key];
+        if (!el || !sizes[index]) return;
+        const [w, h] = sizes[index];
+        const startX = start[0] * layerBox.width;
+        const startY = start[1] * layerBox.height;
+        const dockX = targetBox.left - layerBox.left + dock[0] * (targetBox.width - w);
+        const dockY = targetInLayerTop + dock[1] * (targetBox.height - h);
+        el.style.setProperty('--dx', `${Math.round(dockX - startX)}px`);
+        el.style.setProperty('--dy', `${Math.round(dockY - startY)}px`);
+      });
+    };
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(measure);
+    };
+    schedule();
+    window.addEventListener('resize', schedule, { passive: true });
+    // Fonts change line heights, so re-measure once they are in.
+    document.fonts?.ready?.then(schedule);
+    return () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [layerRef]);
+
+  const place = (key) => {
+    const { start, speed } = PIECES.find((entry) => entry.key === key);
+    return {
+      ref: (node) => {
+        pieceRefs.current[key] = node;
+      },
+      style: { left: `${start[0] * 100}%`, top: `${start[1] * 100}%`, '--speed': speed },
+    };
+  };
+
+  return (
+    <>
+      {PIECES.map(({ key }) => (
+        <PieceFace key={key} name={key} className="lp-piece" {...place(key)} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * One piece's face — identical whether it is flying (in the layer) or docked
+ * (in the demo window), so the handoff swaps two pixel-identical copies.
+ */
+function PieceFace({ name, className, ...rest }) {
+  if (name === 'env') {
+    return (
+      <div className={`${className} lp-piece-env`} {...rest}>
+        <span className="lp-piece-tag">.env</span>
+        <span>STRIPE_KEY=…</span>
+        <span>DATABASE_URL=…</span>
+      </div>
+    );
+  }
+  if (name === 'key') {
+    return (
+      <div className={`${className} lp-piece-key`} {...rest}>
+        <span className="lp-piece-dot" />
+        {FAKE_STRIPE_KEY.slice(0, 14)}…
+      </div>
+    );
+  }
+  return (
+    <div className={`${className} lp-piece-shield`} {...rest}>
+      <Shield />
+    </div>
+  );
+}
+
+/**
+ * The docked copies, rendered inside the See it work window. They are only
+ * meaningful with the handoff running; they appear as the flying pieces
+ * arrive (--handoff from HandoffRun) and then ride the sticky window.
+ */
+export function DockedPieces() {
+  return (
+    <div className="lp-docked-set" aria-hidden="true">
+      {PIECES.map(({ key, dock }) => (
+        <PieceFace
+          key={key}
+          name={key}
+          className="lp-docked"
+          style={{ '--fx': dock[0], '--fy': dock[1] }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The hero and See it work, sharing one decorative layer for the handoff.
+ *
+ * The layer spans both sections, so pieces can travel from one into the
+ * next, and clips to the page width, so nothing can cause a horizontal
+ * scrollbar. Progress uses `handoff` mode: 0 at the top of the page, 1 when
+ * the window reaches its resting place, which is where the pieces land.
+ * `motion` is false under reduced motion and on narrow screens; then no
+ * pieces render and both sections are exactly the static page.
+ */
+function HandoffRun({ motion, children }) {
+  const layerRef = useRef(null);
+  const runRef = useRef(null);
+  useScrollProgress(layerRef, {
+    enabled: motion,
+    mode: 'handoff',
+    restValue: 1,
+    target: '.lp-demo-window',
+    restSelector: '.lp-pinned .lp-stage',
+    // Mirror the same progress onto the run wrapper, so the docked copies
+    // inside the demo window (outside the layer) fade in on the same clock.
+    // One extra style write, in the frame that is already running.
+    onProgress: (p) => runRef.current?.style.setProperty('--handoff', p.toFixed(4)),
+  });
+  return (
+    <div ref={runRef} className="lp-handoff-run" data-handoff={motion ? 'on' : 'off'}>
+      {motion && (
+        <div ref={layerRef} className="lp-pieces" aria-hidden="true">
+          <HeroPieces layerRef={layerRef} />
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * See it work, pinned: from 900px up (and with motion), the section is tall
+ * and the demo is `position: sticky`, so it stays in view while the visitor
+ * scrolls through it; each quarter of the scroll selects the next scene and
+ * its caption. Below 900px, or under reduced motion, it is an ordinary
+ * section and the demo plays (or sits) on its own.
+ */
+function SeeItWorkSection({ pinned, after, children }) {
+  const ref = useRef(null);
+  const trackRef = useRef(null);
+  const [scene, setScene] = useState(null);
+  useScrollProgress(trackRef, {
+    enabled: pinned,
+    mode: 'pin',
+    restValue: 0,
+    onProgress: (p) => setScene(Math.min(3, Math.floor(p * 4))),
+  });
+  return (
+    <section
+      ref={ref}
+      id="see"
+      className={`lp-band alt${pinned ? ' lp-pinned' : ''}`}
+      aria-labelledby="see-title"
+    >
+      <div className="lp-container lp-reveal">
+        {children}
+        {/* The track the sticky stage rides in: tall when pinned, so the
+            scroll has room to walk four scenes. */}
+        <div ref={trackRef} className="lp-stage-track">
+          <div className="lp-stage">
+            <SeeItWork scrollScene={pinned ? scene : null} frameDecoration={pinned ? <DockedPieces /> : null} />
+          </div>
+        </div>
+        {after}
+      </div>
+    </section>
+  );
+}
+
 const LANDING_CSS = `
 html:has(.vs-landing) { scroll-behavior: smooth; }
 .vs-landing { background: var(--color-canvas); color: var(--color-fg); font-family: var(--font-sans); min-height: 100vh; }
@@ -313,7 +540,7 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-see-captions li[aria-current="step"] strong { color: var(--color-fg); }
 .lp-see-copy { display: block; margin-top: .25rem; color: var(--color-fg-subtle); font-size: .97rem; line-height: 1.55; }
 .lp-demo-figure { margin: 0; min-width: 0; }
-.lp-demo-window { border-radius: 24px; background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); box-shadow: var(--shadow-lift); overflow: hidden; }
+.lp-demo-window { position: relative; border-radius: 24px; background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); box-shadow: var(--shadow-lift); overflow: hidden; }
 .lp-demo-window:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
 .lp-demo-bar { display: flex; align-items: center; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--color-term-border); }
 .lp-demo-title { font: .8rem var(--font-mono); color: var(--color-term-muted); }
@@ -440,18 +667,66 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-footer-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem 2rem; color: var(--color-fg-muted); font-size: .92rem; }
 .lp-footer-inner p { margin: 0; }
 
-.lp-motion .lp-reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+/* (c) Reveal: a short fade and 24px rise as a section enters; cards in a
+   row follow 60ms apart (--stagger is set per card). */
+.lp-motion .lp-reveal { opacity: 0; transform: translateY(24px); transition: opacity .5s ease, transform .5s ease; }
 .lp-motion .lp-reveal.is-in { opacity: 1; transform: none; }
+.lp-motion .lp-stagger > * { opacity: 0; transform: translateY(24px); transition: opacity .5s ease, transform .5s ease; transition-delay: calc(var(--stagger, 0) * 60ms + 120ms); }
+.lp-motion .lp-reveal.is-in .lp-stagger > * { opacity: 1; transform: none; }
+
+/* (a) Hero handoff: one layer over the hero and See it work, clipped to the
+   page width. Each piece moves from its start point by its measured dock
+   offset (--dx, --dy) as --p goes 0 -> 1, eased, each at its own --speed
+   (parallax), and lands exactly on the demo window's frame at 1, where it
+   stays. Transform only; the pieces never fade or leave the page. */
+.lp-handoff-run { position: relative; }
+.lp-pieces { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: clip; }
+.lp-piece { position: absolute; will-change: transform;
+  --e: clamp(0, var(--p, 0) * var(--speed, 1), 1);
+  --ease: calc(1 - (1 - var(--e)) * (1 - var(--e)));
+  transform: translate3d(calc(var(--dx, 0px) * var(--ease)), calc(var(--dy, 0px) * var(--ease)), 0) rotate(calc((1 - var(--ease)) * var(--tilt, 0deg)));
+  /* Hand over to the docked copy over the last few percent. */
+  opacity: calc(1 - clamp(0, (var(--p, 0) - .96) * 25, 1)); }
+/* The docked copies live in the demo window (SeeItWork renders them when
+   given dockedPieces) and appear as the flying ones arrive. Same 0-1 --p,
+   read from the page root, so both halves of the handoff share one clock. */
+/* Positioned with the same dock fractions (--fx, --fy) the flight measures
+   against: a fraction of the window's free space, so the handoff lands on
+   the identical pixel. translate(-x%) subtracts the piece's own size. */
+.lp-docked { position: absolute; z-index: 2; pointer-events: none;
+  left: calc(var(--fx) * 100%); top: calc(var(--fy) * 100%);
+  transform: translate(calc(var(--fx) * -100%), calc(var(--fy) * -100%));
+  opacity: clamp(0, (var(--handoff, 1) - .96) * 25, 1); }
+.lp-piece-env { --tilt: -6deg; display: grid; gap: .2rem; padding: .85rem 1rem; border-radius: var(--radius-card); background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); font: .74rem/1.5 var(--font-mono); box-shadow: var(--shadow-card); }
+.lp-piece-tag { font: 600 .62rem/1.4 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--color-term-muted); }
+.lp-piece-key { --tilt: 5deg; display: inline-flex; align-items: center; gap: .5rem; padding: .5rem .9rem; border-radius: var(--radius-pill); background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-danger-fg); font: .78rem var(--font-mono); white-space: nowrap; box-shadow: var(--shadow-card); }
+.lp-piece-dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--color-danger); }
+.lp-piece-shield { --tilt: -10deg; display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 1.25rem; background: var(--color-accent-soft); color: var(--color-accent-text); border: 1px solid var(--color-border); box-shadow: var(--shadow-card); }
+.lp-piece-shield svg { width: 2.2rem; height: 2.2rem; }
+
+/* (b) Pinned stage: the track is tall and the demo sticks inside it, so the
+   scroll walks the captions and scenes. Only from 900px up, only with
+   motion (the .lp-pinned class is only set then). */
+.lp-pinned .lp-stage-track { height: 260vh; }
+.lp-pinned .lp-stage { position: sticky; top: calc(68px + max(1.5rem, (100vh - 68px - 37rem) / 2)); }
 @media (prefers-reduced-motion: reduce) {
   html:has(.vs-landing) { scroll-behavior: auto; }
   .lp-typed { animation: none; width: auto; border-right: 0; }
-  .lp-motion .lp-reveal { opacity: 1; transform: none; transition: none; }
+  .lp-motion .lp-reveal, .lp-motion .lp-stagger > * { opacity: 1; transform: none; transition: none; }
+  .lp-pieces { display: none; }
+  .lp-pinned .lp-stage { position: static; }
+  .d-ch, .d-vault { transition: none; animation: none; }
 }
 `;
 
 export default function Landing() {
   const { signedIn } = useAuth();
   const rootRef = useRef(null);
+  const reduced = useReducedMotion();
+  // Scroll-linked motion (handoff and pinning) only on wide screens; mobile
+  // keeps just the reveals and the route cross-fade.
+  const wide = useMediaQuery('(min-width: 900px)', false);
+  const scrollMotion = wide && !reduced;
   const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : '';
   const installCommand = buildInstallCommand(origin);
 
@@ -515,6 +790,7 @@ export default function Landing() {
       </header>
 
       <main>
+        <HandoffRun motion={scrollMotion}>
         <section className="lp-hero" aria-labelledby="hero-title">
           <div className="lp-container">
             <span className="lp-eyebrow">macOS only · for AI coding agents</span>
@@ -538,8 +814,39 @@ export default function Landing() {
           </div>
         </section>
 
-        <section id="see" className="lp-band alt" aria-labelledby="see-title">
-          <div className="lp-container lp-reveal">
+        <SeeItWorkSection
+          pinned={scrollMotion}
+          after={
+            <>
+                <div className="lp-measured">
+                  <div className="lp-slim-head">
+                    <h3 id="measured-title">Measured so far</h3>
+                    <p>
+                      No invented numbers. These are the outcomes of the spike and the live tests that
+                      were run; the rest is honestly marked as not yet tested.
+                    </p>
+                  </div>
+                  <ul className="lp-claims lp-stagger">
+                    <li style={{ '--stagger': 0 }} className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
+                      <span className="mark">✓</span>
+                      <span>
+                        Placeholders held in the Antigravity CLI and App: an agent that got past the rules
+                        read the placeholder, not the secret.
+                      </span>
+                    </li>
+                    <li style={{ '--stagger': 1 }} className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
+                      <span className="mark">✓</span>
+                      <span>The command hook blocked printenv live in Antigravity.</span>
+                    </li>
+                    <li style={{ '--stagger': 2 }} className="lp-claim claim pending" data-testid={MEASURED_CLAIM_TESTID}>
+                      <span className="mark">○</span>
+                      <span>Claude Code, Kiro and Codex backstops are built from docs, not yet live-tested.</span>
+                    </li>
+                  </ul>
+                </div>
+            </>
+          }
+        >
             <div className="lp-head">
               <p className="lp-kicker">See it work</p>
               <h2 id="see-title" className="lp-h2">
@@ -549,36 +856,8 @@ export default function Landing() {
                 The same request, before and after VaultShield, replayed from a real test.
               </p>
             </div>
-            <SeeItWork />
-            <div className="lp-measured">
-              <div className="lp-slim-head">
-                <h3 id="measured-title">Measured so far</h3>
-                <p>
-                  No invented numbers. These are the outcomes of the spike and the live tests that
-                  were run; the rest is honestly marked as not yet tested.
-                </p>
-              </div>
-              <ul className="lp-claims">
-                <li className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
-                  <span className="mark">✓</span>
-                  <span>
-                    Placeholders held in the Antigravity CLI and App: an agent that got past the rules
-                    read the placeholder, not the secret.
-                  </span>
-                </li>
-                <li className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
-                  <span className="mark">✓</span>
-                  <span>The command hook blocked printenv live in Antigravity.</span>
-                </li>
-                <li className="lp-claim claim pending" data-testid={MEASURED_CLAIM_TESTID}>
-                  <span className="mark">○</span>
-                  <span>Claude Code, Kiro and Codex backstops are built from docs, not yet live-tested.</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
+        </SeeItWorkSection>
+        </HandoffRun>
         <section id="how" className="lp-band" aria-labelledby="how-title">
           <div className="lp-container lp-reveal">
             <div className="lp-head">
@@ -587,8 +866,8 @@ export default function Landing() {
                 Three steps, all in your terminal.
               </h2>
             </div>
-            <ol className="lp-steps">
-              <li className="lp-step">
+            <ol className="lp-steps lp-stagger">
+              <li style={{ '--stagger': 0 }} className="lp-step">
                 <span className="lp-numeral" aria-hidden="true">
                   1
                 </span>
@@ -603,7 +882,7 @@ export default function Landing() {
                   <span className="t-dim">Installed: ~/.local/bin/vaultshield</span>
                 </pre>
               </li>
-              <li className="lp-step">
+              <li style={{ '--stagger': 1 }} className="lp-step">
                 <span className="lp-numeral" aria-hidden="true">
                   2
                 </span>
@@ -619,7 +898,7 @@ export default function Landing() {
                   <span className="t-dim">Moved 1 value to the Keychain, left a placeholder.</span>
                 </pre>
               </li>
-              <li className="lp-step">
+              <li style={{ '--stagger': 2 }} className="lp-step">
                 <span className="lp-numeral" aria-hidden="true">
                   3
                 </span>

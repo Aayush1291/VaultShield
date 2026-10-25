@@ -32,6 +32,13 @@ import RunDetailPage from './RunDetailPage.jsx';
 import Signup from './Signup.jsx';
 import api from './api.js';
 import { AuthProvider, RedirectIfSignedIn, RequireAuth } from './auth.jsx';
+import useRouteViewTransition from './useRouteViewTransition.js';
+
+/** Renders nothing; wires the route cross-fade (a no-op where unsupported). */
+function RouteTransitions() {
+  useRouteViewTransition();
+  return null;
+}
 
 /**
  * @param {{ client?: typeof api }} props `client` defaults to the shared
@@ -40,6 +47,7 @@ import { AuthProvider, RedirectIfSignedIn, RequireAuth } from './auth.jsx';
 export default function App({ client = api }) {
   return (
     <AuthProvider client={client}>
+      <RouteTransitions />
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route

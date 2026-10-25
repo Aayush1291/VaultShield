@@ -366,7 +366,9 @@ describe('FAQ', () => {
 describe('See it work', () => {
   it('follows the hero, before How it works', () => {
     const { container } = renderLanding();
-    const ids = [...container.querySelectorAll('main > section')].map(
+    // Any depth: the hero and See it work share a wrapper for the scroll
+    // handoff, but they are still the first two bands, in this order.
+    const ids = [...container.querySelectorAll('main section')].map(
       (section) => section.id || section.getAttribute('aria-labelledby'),
     );
     expect(ids).toEqual(['hero-title', 'see', 'how', 'protect-title', 'review-title', 'faq', 'cta-title']);
