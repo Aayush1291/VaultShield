@@ -28,11 +28,59 @@
  * and the shadows use rgba.
  */
 
+@import '@fontsource/eb-garamond/latin-400.css';
+@import '@fontsource/eb-garamond/latin-500.css';
+@import '@fontsource/eb-garamond/latin-400-italic.css';
+@import '@fontsource-variable/inter/wght.css';
 @import 'tailwindcss';
+
+/* Metric-compatible fallbacks, so text does not jump when the webfont swaps in
+ * (both packages use `font-display: swap`). Values computed from Capsize's
+ * published font metrics: size-adjust matches average glyph width, the
+ * overrides match the webfont's vertical metrics. */
+@font-face {
+  font-family: 'EB Garamond Fallback';
+  src: local('Georgia');
+  size-adjust: 86.36%;
+  ascent-override: 116.6%;
+  descent-override: 34.51%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial');
+  size-adjust: 107.12%;
+  ascent-override: 90.44%;
+  descent-override: 22.52%;
+  line-gap-override: 0%;
+}
 
 /* PAPER — the light theme and the defaults. */
 @theme static {
+  /* Type */
+  --font-sans:
+    'Inter Variable', 'Inter Fallback', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-display:
+    'EB Garamond', 'EB Garamond Fallback', 'Iowan Old Style', 'Palatino Linotype', Palatino,
+    Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Type scale. `display` is the landing hero (about 116px wide, 48px on a
+   * phone); `section` is landing section titles (40-64px); `page` is a
+   * dashboard page title; `body-lg` is landing prose. */
+  --text-display: clamp(3rem, 1.2rem + 7vw, 7.25rem);
+  --text-display--line-height: 1;
+  --text-display--letter-spacing: -0.02em;
+  --text-section: clamp(2.5rem, 1.6rem + 2.6vw, 4rem);
+  --text-section--line-height: 1.05;
+  --text-section--letter-spacing: -0.015em;
+  --text-page: clamp(1.75rem, 1.4rem + 1vw, 2.25rem);
+  --text-page--line-height: 1.1;
+  --text-page--letter-spacing: -0.01em;
+  --text-body-lg: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --text-body-lg--line-height: 1.6;
 
   /* Radius scale */
   --radius-control: 0.75rem; /* 12px: inputs, small controls */

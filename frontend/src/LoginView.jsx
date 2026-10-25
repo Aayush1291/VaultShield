@@ -116,7 +116,7 @@ export default function LoginView({ client = api, onSignedIn }) {
         <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-fg-subtle">
           VaultShield
         </p>
-        <h2 id="login-heading" className="mt-2 text-2xl font-semibold tracking-tight text-fg">
+        <h2 id="login-heading" className="mt-2 font-display text-page font-normal text-fg">
           Sign in
         </h2>
         <p className="mt-1 text-sm text-fg-muted">

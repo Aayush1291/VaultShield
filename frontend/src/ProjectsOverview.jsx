@@ -21,7 +21,7 @@ export default function ProjectsOverview() {
   return (
     <section aria-labelledby="overview-heading" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="overview-heading" className="text-xl font-semibold tracking-tight text-fg">
+        <h2 id="overview-heading" className="font-display text-page font-normal text-fg">
           Projects
         </h2>
         <button

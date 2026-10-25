@@ -117,7 +117,7 @@ export default function ProjectRunsPage() {
   return (
     <section aria-labelledby="runs-heading" className="space-y-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 id="runs-heading" className="text-xl font-semibold tracking-tight text-fg">
+        <h2 id="runs-heading" className="font-display text-page font-normal text-fg">
           {heading}
         </h2>
         {runs !== null && (

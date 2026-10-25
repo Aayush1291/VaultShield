@@ -873,7 +873,7 @@ export default function RunDetailView({ runId = null, client = api, tab, onTabCh
       {/* Sticky under the top bar, so the Run's id and status stay in view
           while a long diff or timeline scrolls. */}
       <div className="sticky top-14 z-10 -mx-4 mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 border-b border-border bg-canvas/85 px-4 py-3 backdrop-blur md:-mx-8 md:px-8">
-        <h2 id="run-detail-heading" className="text-xl font-semibold tracking-tight text-fg">
+        <h2 id="run-detail-heading" className="font-display text-page font-normal text-fg">
           Run detail
         </h2>
         {run !== null && (

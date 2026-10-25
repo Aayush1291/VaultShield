@@ -23,7 +23,7 @@ export default function Signup() {
         aria-labelledby="signup-heading"
         className="w-full max-w-sm rounded-card-xl border border-border bg-surface p-8 text-center shadow-card"
       >
-        <h1 id="signup-heading" className="text-2xl font-semibold tracking-tight text-fg">
+        <h1 id="signup-heading" className="font-display text-page font-normal text-fg">
           Sign up
         </h1>
         <p className="mt-3 text-sm text-fg-muted">
