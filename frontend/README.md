@@ -20,8 +20,10 @@ frontend/
     main.jsx            # browser entry; wraps <App/> in BrowserRouter; reads import.meta.env
     App.jsx             # the route table, wrapped in AuthProvider
     auth.jsx            # AuthProvider/useAuth, guardClient, RequireAuth, RedirectIfSignedIn
-    Landing.jsx         # / marketing page (self-contained styles, origin-built install cmd)
+    Landing.jsx         # / editorial landing (scoped styles on the tokens, origin-built install cmd)
     Login.jsx / Signup.jsx    # /login (wraps LoginView) and the /signup placeholder
+    AuthLayout.jsx      # two-column frame for the auth pages
+    theme.js / ThemeSwitch.jsx  # System / Light / Dark preference and its control
     NotFound.jsx        # the * friendly 404
     DashboardLayout.jsx # /dashboard shell: sidebar + top bar + <Outlet/>, New project + delete modals
     ProjectsOverview.jsx      # /dashboard index: project cards + New project + empty state
@@ -35,8 +37,61 @@ frontend/
     api.js              # backend API client (one function per REST endpoint)
     config.js           # API base URL resolution
     format.js           # display text shared by the views (dates, load failures)
-    index.css           # Tailwind v4 entry
+    index.css           # Tailwind v4 entry, fonts, and the Paper/Ink theme tokens
+    contrast.test.js    # WCAG contrast check over the tokens in index.css
 ```
+
+## Theme tokens
+
+`src/index.css` defines two complete themes as Tailwind v4 `@theme static`
+tokens, switched by `data-theme` on `<html>`:
+
+- **Paper** (light, default): warm cream canvas `#fbf9ef`, a slightly whiter
+  surface, warm near-black ink `#1c1b14`, muted `#66655a`.
+- **Ink** (dark): warm dark canvas `#14130f`, surface `#1d1c16`, never blue-black.
+
+`data-theme="light"` or `"dark"` forces a theme; no attribute follows
+`prefers-color-scheme`. Components only use semantic utilities — `bg-canvas`,
+`bg-surface`, `bg-surface-2`, `text-fg`, `text-fg-muted`, `text-fg-subtle`,
+`border-border`, `border-border-strong`, `bg-accent`/`text-accent-fg`,
+`hover:bg-accent-hover`, `text-accent-text`, `bg-accent-soft`, `ring`,
+`success`/`warn`/`danger` soft and fg pairs, per-status chip pairs
+(`bg-status-<name>-bg text-status-<name>-fg`), an always-dark `term-*`
+palette, `bg-scrim`, and the warm `shadow-soft`/`shadow-card`/`shadow-lift`.
+Radii: `rounded-pill`, `rounded-card` (20px) to `rounded-card-xl` (28px),
+`rounded-control` (12px). No component uses Tailwind's `dark:` variant, which
+would follow the OS and ignore a Light/Dark override.
+
+`--color-border` is a decorative 12% ink hairline (row dividers, card edges).
+Anything a user must see to operate a control — input and outline-button
+borders — uses `--color-border-strong`, which meets 3:1.
+
+`src/contrast.test.js` parses the hex values out of `index.css` and fails if
+any text/background pair the app uses is under 4.5:1, or a UI boundary
+(control borders, the focus ring, the danger outline) is under 3:1. It also
+checks that the two dark blocks (explicit and system) are identical and that
+shadows are never pure black. It logs the lowest ratios on each run.
+
+**Theme switch.** The System / Light / Dark control sits in the dashboard's
+account area and the landing header. The choice is stored under
+`vaultshield.theme` (every access in try/catch) and applied before first paint
+by a tiny inline script in `index.html`, so there is no flash.
+
+## Fonts and licenses
+
+All fonts are self-hosted from npm packages and bundled by Vite; the page makes
+no external font request.
+
+| Role | Font | Package (pinned) | License |
+|---|---|---|---|
+| Display serif (landing, auth and page titles) | EB Garamond 400, 500, 400 italic, latin | `@fontsource/eb-garamond` 5.3.0 | SIL OFL 1.1 |
+| UI sans (everything else) | Inter, variable `wght` axis | `@fontsource-variable/inter` 5.3.0 | SIL OFL 1.1 |
+| Commands and ids | system monospace stack | — | — |
+
+Both use `font-display: swap`. Metric-compatible fallback faces (`EB Garamond
+Fallback` over Georgia, `Inter Fallback` over Arial, with `size-adjust` and
+ascent/descent overrides computed from Capsize's published metrics) keep text
+from jumping when the webfonts arrive.
 
 ## Routes
 
@@ -209,6 +264,32 @@ Property-based tests use fast-check and run through the same command.
 The API client's tests inject the transport (`createApiClient({ fetchImpl })`)
 rather than patching a global, so they assert on the exact URL, method,
 headers, and body it produced without needing a backend.
+
+## Screenshots and layout checks
+
+`spike/ui_shots.py` photographs every surface for visual review, using the
+Playwright already installed in `cli/.venv` (chromium; if the browser is
+missing, run `cli/.venv/bin/python -m playwright install chromium` once):
+
+```bash
+cli/.venv/bin/python spike/ui_shots.py               # build, serve, shoot, check
+cli/.venv/bin/python spike/ui_shots.py --skip-build  # reuse frontend/dist
+cli/.venv/bin/python spike/ui_shots.py --base-url http://localhost:5173
+cli/.venv/bin/python spike/ui_shots.py --layout-only # checks only, no PNGs
+```
+
+It serves the build with `vite preview` on a free port, answers every
+`/api/**` request with fixture JSON (no backend is contacted), and gives
+dashboard pages a fake token. PNGs land in `ui-shots/` (git-ignored): the
+landing, login and signup pages, the overview, a project's runs, a run detail
+on each tab, the New project modal and the delete dialog, at 390, 1280 and
+1920 wide in light and dark, plus the full landing page at 1440. Shots use
+reduced motion, so scroll fade-ups never leave blank sections.
+
+It also checks layout at 390, 768, 1024, 1280, 1440, 1920 and 2560 wide (no
+horizontal scroll, landing content within its 1240px container, the dashboard
+filling the viewport), writes `ui-shots/layout-report.json`, and exits 1 if a
+check fails.
 
 ## Building
 
