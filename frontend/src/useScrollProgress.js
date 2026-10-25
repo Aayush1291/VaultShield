@@ -74,6 +74,33 @@ export function progressFor(
 }
 
 /**
+ * An element's position in document coordinates as laid out in the flow,
+ * from the offset chain, so a transform in progress (a reveal's rise) does
+ * not count. One exception needs care: Chromium reports a stuck sticky
+ * element's offsetTop where it is stuck, not where it sits in the flow. So
+ * when the chain reaches a sticky element, its top is taken from its parent
+ * instead; the sticky elements here (the pinned stage) start at the top of
+ * their parent's content box. Measure-time only: it reads computed styles.
+ *
+ * @param {HTMLElement|null} el
+ * @returns {{ top: number, left: number }}
+ */
+export function flowPosition(el) {
+  let left = 0;
+  for (let node = el; node; node = node.offsetParent) left += node.offsetLeft;
+  let top = 0;
+  for (let node = el; node; node = node.offsetParent) {
+    const parent = node.parentElement;
+    if (parent && getComputedStyle(node).position === 'sticky') {
+      const lead = parseFloat(getComputedStyle(parent).paddingTop) + parseFloat(getComputedStyle(node).marginTop);
+      return { top: top + flowPosition(parent).top + (Number.isFinite(lead) ? lead : 0), left };
+    }
+    top += node.offsetTop;
+  }
+  return { top, left };
+}
+
+/**
  * @param {{ current: HTMLElement|null }} ref
  * @param {{ enabled?: boolean, mode?: 'travel'|'pin'|'handoff',
  *           restValue?: number, target?: string,
@@ -116,11 +143,8 @@ export default function useScrollProgress(
       const sticky = rest ? parseFloat(getComputedStyle(rest).top) : NaN;
       restTop = Number.isFinite(sticky) ? sticky : HANDOFF_REST_TOP;
       // While pinned, the target's live rect is not its document position;
-      // take it from its sticky ancestor's static place instead, via the
-      // offset chain (layout, not the pinned paint position).
-      let top = 0;
-      for (let el = node; el; el = el.offsetParent) top += el.offsetTop;
-      targetTop = node ? top : 0;
+      // take its place in the flow instead (see flowPosition).
+      targetTop = node ? flowPosition(node).top : 0;
     };
 
     const measure = () => {

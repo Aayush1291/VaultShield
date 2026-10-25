@@ -20,7 +20,22 @@ Output goes to ui-shots/ (git-ignored):
                                 the New project modal and the delete dialog,
                                 at 390, 1280 and 1920 wide, light and dark
   landing-full-1440-<theme>.png the landing page, full length, at 1440
-  layout-report.json            the layout checks below
+
+  With motion ON (the shots above use reduced motion):
+  landing-scroll-<pct>-1440-<theme>.png  the landing at 0/25/50/75/100%
+                                          scroll, with the hero handoff and
+                                          pinned stage running
+  demo-<ms>ms-1440-<theme>.png           See it work about 0.5/3/6/9/12s
+                                          after it enters view
+
+  faq-<width>-<theme>.png       the FAQ at 1440 and 1920, the supported-tools
+                                item open (static, like the main set)
+
+  layout-report.json            the layout checks below, plus the How it
+                                works equal-height check (1280/1440/1920)
+
+Screenshots show frames, not motion: they cannot prove the scrolling or the
+demo feels smooth.
 
 Layout checks (printed, and the exit code is 1 if any fails): at 390, 768,
 1024, 1280, 1440, 1920 and 2560 wide, no page scrolls horizontally; landing
@@ -264,6 +279,98 @@ def shoot(browser, base: str) -> list[str]:
     return files
 
 
+SCROLL_STOPS = (0, 25, 50, 75, 100)
+DEMO_FRAME_TIMES_MS = (500, 3000, 6000, 9000, 12000)
+FAQ_WIDTHS = (1440, 1920)
+
+
+def motion_context(browser, width: int, theme: str):
+    """Like new_context, but with motion allowed, so scroll-linked motion and
+    the demo actually run."""
+    context = browser.new_context(
+        viewport={"width": width, "height": HEIGHTS[width]},
+        color_scheme=theme,
+        reduced_motion="no-preference",
+        device_scale_factor=1,
+    )
+    context.add_init_script(f"localStorage.setItem({json.dumps(THEME_KEY)}, {json.dumps(theme)});")
+    context.route("**/api/**", handle_api)
+    return context
+
+
+def shoot_motion(browser, base: str) -> list[str]:
+    """The motion review set: the landing at 0/25/50/75/100% scroll at 1440,
+    the See it work demo at ~0.5/3/6/9/12s after it enters view (motion ON
+    for both), and the FAQ at 1440 and 1920 (static, reduced motion, so no
+    reveal is caught half way)."""
+    files: list[str] = []
+    for theme in THEMES:
+        ctx = motion_context(browser, 1440, theme)
+        page = ctx.new_page()
+        page.goto(base + "/")
+        settle(page)
+        max_y = page.evaluate("document.documentElement.scrollHeight - innerHeight")
+        for pct in SCROLL_STOPS:
+            page.evaluate(f"window.scrollTo(0, {int(max_y * pct / 100)})")
+            # Two frames for the rAF-driven --p to apply, then a short settle.
+            page.wait_for_timeout(250)
+            files.append(save(page, f"landing-scroll-{pct:03d}-1440-{theme}.png"))
+        ctx.close()
+
+        # Demo frames: scroll to where the pinned stage first holds (scene 0
+        # of the track), so the clock, not the scroll, chooses the scene. The
+        # demo starts when it enters view; time is measured from there.
+        ctx = motion_context(browser, 1440, theme)
+        page = ctx.new_page()
+        page.goto(base + "/")
+        settle(page)
+        page.evaluate(
+            "() => { const t = document.querySelector('.lp-stage-track');"
+            " window.scrollTo(0, t.getBoundingClientRect().top + scrollY); }"
+        )
+        page.wait_for_function("document.querySelector('.lp-demo').dataset.status === 'playing'")
+        started = time.monotonic()
+        for at_ms in DEMO_FRAME_TIMES_MS:
+            wait = at_ms / 1000 - (time.monotonic() - started)
+            if wait > 0:
+                time.sleep(wait)
+            target = page.locator(".lp-demo")
+            # Padded: the hero pieces dock across the window's top edge.
+            files.append(save_element(target, f"demo-{at_ms:05d}ms-1440-{theme}.png", pad=56))
+        ctx.close()
+
+        for width in FAQ_WIDTHS:
+            ctx = new_context(browser, width, theme, signed_in=False)
+            page = ctx.new_page()
+            page.goto(base + "/")
+            settle(page)
+            page.get_by_text("Which AI tools are supported?").click()
+            page.wait_for_timeout(150)
+            # The FAQ is taller than the viewport, so an element shot scrolls
+            # through it and the sticky header would be painted across it.
+            # Unstick the header for this shot only.
+            page.add_style_tag(content=".lp-header { position: relative !important; }")
+            files.append(save_element(page.locator("#faq"), f"faq-{width}-{theme}.png"))
+            ctx.close()
+    return files
+
+
+def save_element(locator, name: str, pad: int = 0) -> str:
+    """Screenshot one element; `pad` px of the page around it are kept, for
+    decoration that sits across its edge (the badges on the demo window)."""
+    target = OUT / name
+    if not pad:
+        locator.screenshot(path=str(target))
+        return target.name
+    box = locator.bounding_box()
+    view = locator.page.viewport_size
+    left, top = max(0, box["x"] - pad), max(0, box["y"] - pad)
+    right = min(view["width"], box["x"] + box["width"] + pad)
+    bottom = min(view["height"], box["y"] + box["height"] + pad)
+    locator.page.screenshot(path=str(target), clip={"x": left, "y": top, "width": right - left, "height": bottom - top})
+    return target.name
+
+
 def save(page, name: str, full_page: bool = False) -> str:
     target = OUT / name
     page.screenshot(path=str(target), full_page=full_page)
@@ -379,7 +486,7 @@ def main() -> int:
     with server as base, sync_playwright() as pw:
         browser = pw.chromium.launch()
         try:
-            files = [] if args.layout_only else shoot(browser, base)
+            files = [] if args.layout_only else shoot(browser, base) + shoot_motion(browser, base)
             rows = check_layout(browser, base)
             steps = check_steps(browser, base)
         finally:

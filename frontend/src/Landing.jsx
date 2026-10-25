@@ -17,13 +17,14 @@
  *    origin by `buildInstallCommand` — the one place it is spelled.
  *
  * Styles are a scoped `<style>` under `.vs-landing` that reads the theme tokens
- * from index.css, so Paper/Ink switching needs nothing here. Motion (scroll
- * fade-up, the auto-advancing terminal, the typing caret) runs only when
- * `prefers-reduced-motion` is not set, and only via CSS plus an
- * IntersectionObserver: no animation library.
+ * from index.css, so Paper/Ink switching needs nothing here. Motion (section
+ * reveals, the hero morph, the pinned See it work stage, the hero pieces'
+ * handoff onto the demo window) runs only when `prefers-reduced-motion` is
+ * not set, and only via CSS, IntersectionObserver, requestAnimationFrame and
+ * the small useScrollProgress hook: no animation library.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import SeeItWork, { Morph, Vault } from './SeeItWork.jsx';
@@ -32,7 +33,8 @@ import { useAuth } from './auth.jsx';
 import { morphText, scramble } from './charMorph.js';
 import { FAKE_STRIPE_KEY } from './fakeValues.js';
 import { useMediaQuery, usePageVisible, useReducedMotion } from './motion.js';
-import useScrollProgress from './useScrollProgress.js';
+import { HANDOFF_PIECES, QUEUE_END, planHandoff } from './handoff.js';
+import useScrollProgress, { HANDOFF_REST_TOP, flowPosition } from './useScrollProgress.js';
 
 /**
  * The install command, built from the page's own origin — the single place
@@ -227,29 +229,27 @@ function HeroTerminal() {
   );
 }
 
-/**
- * Where each hero piece starts (fractions of the handoff layer) and where it
- * docks (fractions of the See it work window's free space). `speed` > 1
- * arrives early, < 1 arrives late: that difference is the parallax.
- */
-const PIECES = [
-  { key: 'env', start: [0.05, 0.16], dock: [0.02, 0.04], speed: 1.12 },
-  { key: 'key', start: [0.8, 0.12], dock: [0.6, 0.03], speed: 1.0 },
-  { key: 'shield', start: [0.86, 0.3], dock: [0.97, 0.9], speed: 0.9 },
-];
+/** Hero boxes the pieces' column keeps clear of, and text lines (by extent). */
+const BESIDE_BOXES = '.lp-hero .lp-eyebrow, .lp-hero .lp-install, .lp-hero .lp-term';
+const BESIDE_TEXT = '.lp-hero .lp-display, .lp-hero .lp-subline, .lp-hero .lp-note, .lp-hero .lp-secondary, #see .lp-head > *';
+
+/** Per-piece timing for the CSS, from the plan's fixed timeline. */
+const timing = ({ drop, slide }) => ({
+  '--q': QUEUE_END,
+  '--d0': drop[0],
+  '--dw': drop[1] - drop[0],
+  '--s0': slide[0],
+  '--sw': slide[1] - slide[0],
+  '--end': slide[1],
+});
 
 /**
- * The hero's decorative pieces: a .env card, a key chip with the fake key,
- * and a shield. As the visitor scrolls from the hero into See it work they
- * drift down at different speeds and settle on the demo window's frame,
- * where they stay as part of it.
- *
- * Each piece sits at its start point. Its offset to its dock point is
- * measured once, on mount and on resize — never per scroll frame — into
- * --dx/--dy. Scroll progress --p (0 at the top of the page, 1 when the window
- * has scrolled to its resting place) comes from useScrollProgress on the
- * layer, and CSS turns it into translate() and rotate(). So the browser
- * animates only transform, and no layout is read while scrolling.
+ * Pieces in flight, in the handoff layer. Their route comes from
+ * planHandoff (handoff.js): measured on mount, resize and font load, never
+ * during a scroll frame, and written once as left/top plus --dx/--dy1/--dy2.
+ * CSS turns those and the scroll progress into transforms. If the page has
+ * no clean route (too narrow), the run is marked data-flight="off": no
+ * flight, and the docked copies just sit on the window.
  *
  * @param {{ layerRef: { current: HTMLElement|null } }} props
  */
@@ -262,39 +262,73 @@ function HeroPieces({ layerRef }) {
     let frame = 0;
     const measure = () => {
       frame = 0;
-      const target = document.querySelector('.lp-demo-window');
-      if (!target) return;
-      // Every read first: the layer, the window, each piece's resting box,
-      // all in layer coordinates. --p reaches 1 when the window arrives at
-      // HANDOFF_REST_TOP (before its stage pins), so the dock is where the
-      // window will be at that moment: its current place in the layer. At
-      // 1 the flying piece hands over to the docked copy rendered inside the
-      // window (.lp-docked), which then rides the sticky stage natively.
-      const layerBox = layer.getBoundingClientRect();
-      const targetBox = target.getBoundingClientRect();
-      // Where the window will be at --p = 1, in layer coordinates: it pins at
-      // its stage's sticky `top`, after the page has scrolled
-      // (targetDocTop - restTop). The layer scrolls with the page, so in the
-      // layer the window's top at arrival is just its layout position.
-      let targetDocTop = 0;
-      for (let el = target; el; el = el.offsetParent) targetDocTop += el.offsetTop;
-      const layerDocTop = layerBox.top + window.scrollY;
-      const targetInLayerTop = targetDocTop - layerDocTop;
-      const sizes = PIECES.map(({ key }) => {
-        const el = pieceRefs.current[key];
-        return el ? [el.offsetWidth, el.offsetHeight] : null;
+      const run = layer.parentElement;
+      const set = document.querySelector('.lp-docked-set');
+      const win = document.querySelector('.lp-demo-window');
+      const flying = HANDOFF_PIECES.map(({ key }) => pieceRefs.current[key]);
+      const dockedEls = HANDOFF_PIECES.map(({ key }) => set?.querySelector(`[data-piece="${key}"]`));
+      if (!run || !set || !win || flying.some((el) => !el) || dockedEls.some((el) => !el)) return;
+
+      // All reads first. Layout positions, so neither a reveal's rise nor a
+      // pinned stage moves anything.
+      const at = flowPosition(layer);
+      const boxOf = (el) => {
+        const p = flowPosition(el);
+        const left = p.left - at.left;
+        const top = p.top - at.top;
+        return { left, top, right: left + el.offsetWidth, bottom: top + el.offsetHeight };
+      };
+      // A text block's lines, not its full-width box: a Range over its
+      // contents, offset from the element's own (transform-free) position.
+      const textOf = (el) => {
+        const b = boxOf(el);
+        const range = document.createRange();
+        // No Range geometry (jsdom): fall back to the whole box.
+        if (typeof range.getBoundingClientRect !== 'function') return b;
+        range.selectNodeContents(el);
+        const lines = range.getBoundingClientRect();
+        const own = el.getBoundingClientRect();
+        return {
+          left: b.left + lines.left - own.left,
+          right: b.left + lines.right - own.left,
+          top: b.top + lines.top - own.top,
+          bottom: b.top + lines.bottom - own.top,
+        };
+      };
+      const beside = [
+        ...[...document.querySelectorAll(BESIDE_BOXES)].map(boxOf),
+        ...[...document.querySelectorAll(BESIDE_TEXT)].map(textOf),
+      ];
+      const avoid = [...win.querySelectorAll('.lp-demo-bar > *')].map(boxOf);
+      // Docked copies sit in a translated row on the figure: their offset
+      // within the figure from live rects, the figure's from the flow.
+      const figure = set.parentElement;
+      const fig = flowPosition(figure);
+      const figRect = figure.getBoundingClientRect();
+      const docks = dockedEls.map((el) => {
+        const r = el.getBoundingClientRect();
+        return {
+          left: fig.left - at.left + r.left - figRect.left,
+          top: fig.top - at.top + r.top - figRect.top,
+          width: r.width,
+          height: r.height,
+        };
       });
-      // Then every write.
-      PIECES.forEach(({ key, start, dock }, index) => {
-        const el = pieceRefs.current[key];
-        if (!el || !sizes[index]) return;
-        const [w, h] = sizes[index];
-        const startX = start[0] * layerBox.width;
-        const startY = start[1] * layerBox.height;
-        const dockX = targetBox.left - layerBox.left + dock[0] * (targetBox.width - w);
-        const dockY = targetInLayerTop + dock[1] * (targetBox.height - h);
-        el.style.setProperty('--dx', `${Math.round(dockX - startX)}px`);
-        el.style.setProperty('--dy', `${Math.round(dockY - startY)}px`);
+      const sizes = flying.map((el) => ({ width: el.offsetWidth, height: el.offsetHeight }));
+      const stage = document.querySelector('.lp-pinned .lp-stage');
+      const sticky = stage ? parseFloat(getComputedStyle(stage).top) : NaN;
+      const span = flowPosition(win).top - (Number.isFinite(sticky) ? sticky : HANDOFF_REST_TOP);
+      const plan = planHandoff({ span, layerWidth: layer.offsetWidth, beside, avoid, docks, sizes });
+
+      // Then all writes.
+      run.dataset.flight = plan.ok ? 'on' : 'off';
+      plan.pieces.forEach((piece, i) => {
+        const { style } = flying[i];
+        style.left = `${Math.round(piece.left)}px`;
+        style.top = `${Math.round(piece.top)}px`;
+        style.setProperty('--dx', `${Math.round(piece.dx)}px`);
+        style.setProperty('--dy1', `${Math.round(piece.dy1)}px`);
+        style.setProperty('--dy2', `${Math.round(piece.dy2)}px`);
       });
     };
     const schedule = () => {
@@ -302,7 +336,7 @@ function HeroPieces({ layerRef }) {
     };
     schedule();
     window.addEventListener('resize', schedule, { passive: true });
-    // Fonts change line heights, so re-measure once they are in.
+    // Fonts change line widths and heights; re-plan once they are in.
     document.fonts?.ready?.then(schedule);
     return () => {
       if (frame !== 0) window.cancelAnimationFrame(frame);
@@ -310,20 +344,18 @@ function HeroPieces({ layerRef }) {
     };
   }, [layerRef]);
 
-  const place = (key) => {
-    const { start, speed } = PIECES.find((entry) => entry.key === key);
-    return {
-      ref: (node) => {
-        pieceRefs.current[key] = node;
-      },
-      style: { left: `${start[0] * 100}%`, top: `${start[1] * 100}%`, '--speed': speed },
-    };
-  };
-
   return (
     <>
-      {PIECES.map(({ key }) => (
-        <PieceFace key={key} name={key} className="lp-piece" {...place(key)} />
+      {HANDOFF_PIECES.map((piece) => (
+        <PieceFace
+          key={piece.key}
+          name={piece.key}
+          className="lp-piece"
+          ref={(node) => {
+            pieceRefs.current[piece.key] = node;
+          }}
+          style={timing(piece)}
+        />
       ))}
     </>
   );
@@ -331,12 +363,13 @@ function HeroPieces({ layerRef }) {
 
 /**
  * One piece's face — identical whether it is flying (in the layer) or docked
- * (in the demo window), so the handoff swaps two pixel-identical copies.
+ * (on the window's edge), so the handoff swaps two pixel-identical copies.
  */
-function PieceFace({ name, className, ...rest }) {
+const PieceFace = forwardRef(function PieceFace({ name, className, ...rest }, ref) {
+  const common = { ref, 'data-piece': name, ...rest };
   if (name === 'env') {
     return (
-      <div className={`${className} lp-piece-env`} {...rest}>
+      <div className={`${className} lp-piece-env`} {...common}>
         <span className="lp-piece-tag">.env</span>
         <span>STRIPE_KEY=…</span>
         <span>DATABASE_URL=…</span>
@@ -345,34 +378,30 @@ function PieceFace({ name, className, ...rest }) {
   }
   if (name === 'key') {
     return (
-      <div className={`${className} lp-piece-key`} {...rest}>
+      <div className={`${className} lp-piece-key`} {...common}>
         <span className="lp-piece-dot" />
         {FAKE_STRIPE_KEY.slice(0, 14)}…
       </div>
     );
   }
   return (
-    <div className={`${className} lp-piece-shield`} {...rest}>
+    <div className={`${className} lp-piece-shield`} {...common}>
       <Shield />
     </div>
   );
-}
+});
 
 /**
- * The docked copies, rendered inside the See it work window. They are only
- * meaningful with the handoff running; they appear as the flying pieces
- * arrive (--handoff from HandoffRun) and then ride the sticky window.
+ * The docked copies: badges on the See it work window's top edge, on its
+ * right where the title bar has no text. Each appears the moment its flying
+ * copy lands (--handoff, from HandoffRun, passing that piece's --end), under
+ * the flying copy, which then fades; after that it rides the sticky window.
  */
 export function DockedPieces() {
   return (
     <div className="lp-docked-set" aria-hidden="true">
-      {PIECES.map(({ key, dock }) => (
-        <PieceFace
-          key={key}
-          name={key}
-          className="lp-docked"
-          style={{ '--fx': dock[0], '--fy': dock[1] }}
-        />
+      {HANDOFF_PIECES.map(({ key, slide }) => (
+        <PieceFace key={key} name={key} className="lp-docked" style={{ '--end': slide[1] }} />
       ))}
     </div>
   );
@@ -421,7 +450,7 @@ function HandoffRun({ motion, children }) {
  * its caption. Below 900px, or under reduced motion, it is an ordinary
  * section and the demo plays (or sits) on its own.
  */
-function SeeItWorkSection({ pinned, after, children }) {
+function SeeItWorkSection({ pinned, docked, after, children }) {
   const ref = useRef(null);
   const trackRef = useRef(null);
   const [scene, setScene] = useState(null);
@@ -444,7 +473,7 @@ function SeeItWorkSection({ pinned, after, children }) {
             scroll has room to walk four scenes. */}
         <div ref={trackRef} className="lp-stage-track">
           <div className="lp-stage">
-            <SeeItWork scrollScene={pinned ? scene : null} frameDecoration={pinned ? <DockedPieces /> : null} />
+            <SeeItWork scrollScene={pinned ? scene : null} frameDecoration={docked ? <DockedPieces /> : null} />
           </div>
         </div>
         {after}
@@ -539,7 +568,7 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-see-captions strong { display: block; font-size: 1.08rem; font-weight: 600; color: var(--color-fg-muted); }
 .lp-see-captions li[aria-current="step"] strong { color: var(--color-fg); }
 .lp-see-copy { display: block; margin-top: .25rem; color: var(--color-fg-subtle); font-size: .97rem; line-height: 1.55; }
-.lp-demo-figure { margin: 0; min-width: 0; }
+.lp-demo-figure { position: relative; margin: 0; min-width: 0; }
 .lp-demo-window { position: relative; border-radius: 24px; background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); box-shadow: var(--shadow-lift); overflow: hidden; }
 .lp-demo-window:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
 .lp-demo-bar { display: flex; align-items: center; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--color-term-border); }
@@ -675,34 +704,37 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-motion .lp-reveal.is-in .lp-stagger > * { opacity: 1; transform: none; }
 
 /* (a) Hero handoff: one layer over the hero and See it work, clipped to the
-   page width. Each piece moves from its start point by its measured dock
-   offset (--dx, --dy) as --p goes 0 -> 1, eased, each at its own --speed
-   (parallax), and lands exactly on the demo window's frame at 1, where it
-   stays. Transform only; the pieces never fade or leave the page. */
+   page width. handoff.js plans each piece's route (start, then --dy1 shared
+   descent, --dy2 own drop, --dx slide) once per layout; here the scroll
+   progress --p runs it. Each leg is smoothstep-eased over its own stretch of
+   --p (--q, --d0/--dw, --s0/--sw). Transform only while scrolling. A piece
+   lands at --end: its docked copy appears beneath it, then it fades. */
 .lp-handoff-run { position: relative; }
 .lp-pieces { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: clip; }
-.lp-piece { position: absolute; will-change: transform;
-  --e: clamp(0, var(--p, 0) * var(--speed, 1), 1);
-  --ease: calc(1 - (1 - var(--e)) * (1 - var(--e)));
-  transform: translate3d(calc(var(--dx, 0px) * var(--ease)), calc(var(--dy, 0px) * var(--ease)), 0) rotate(calc((1 - var(--ease)) * var(--tilt, 0deg)));
-  /* Hand over to the docked copy over the last few percent. */
-  opacity: calc(1 - clamp(0, (var(--p, 0) - .96) * 25, 1)); }
-/* The docked copies live in the demo window (SeeItWork renders them when
-   given dockedPieces) and appear as the flying ones arrive. Same 0-1 --p,
-   read from the page root, so both halves of the handoff share one clock. */
-/* Positioned with the same dock fractions (--fx, --fy) the flight measures
-   against: a fraction of the window's free space, so the handoff lands on
-   the identical pixel. translate(-x%) subtracts the piece's own size. */
-.lp-docked { position: absolute; z-index: 2; pointer-events: none;
-  left: calc(var(--fx) * 100%); top: calc(var(--fy) * 100%);
-  transform: translate(calc(var(--fx) * -100%), calc(var(--fy) * -100%));
-  opacity: clamp(0, (var(--handoff, 1) - .96) * 25, 1); }
-.lp-piece-env { --tilt: -6deg; display: grid; gap: .2rem; padding: .85rem 1rem; border-radius: var(--radius-card); background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); font: .74rem/1.5 var(--font-mono); box-shadow: var(--shadow-card); }
-.lp-piece-tag { font: 600 .62rem/1.4 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--color-term-muted); }
-.lp-piece-key { --tilt: 5deg; display: inline-flex; align-items: center; gap: .5rem; padding: .5rem .9rem; border-radius: var(--radius-pill); background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-danger-fg); font: .78rem var(--font-mono); white-space: nowrap; box-shadow: var(--shadow-card); }
+.lp-piece { position: absolute; left: 0; top: 0; visibility: hidden; will-change: transform;
+  --t1: clamp(0, calc(var(--p, 0) / var(--q)), 1);
+  --e1: calc(var(--t1) * var(--t1) * (3 - 2 * var(--t1)));
+  --t2: clamp(0, calc((var(--p, 0) - var(--d0)) / var(--dw)), 1);
+  --e2: calc(var(--t2) * var(--t2) * (3 - 2 * var(--t2)));
+  --t3: clamp(0, calc((var(--p, 0) - var(--s0)) / var(--sw)), 1);
+  --e3: calc(var(--t3) * var(--t3) * (3 - 2 * var(--t3)));
+  transform: translate3d(calc(var(--dx, 0px) * var(--e3)), calc(var(--dy1, 0px) * var(--e1) + var(--dy2, 0px) * var(--e2)), 0) rotate(calc((1 - var(--e1)) * var(--tilt, 0deg)));
+  opacity: calc(1 - clamp(0, calc((var(--p, 0) - var(--end) - .004) * 60), 1)); }
+/* Shown only once a route is planned; with no clean route the docked
+   copies simply sit on the window. */
+.lp-handoff-run[data-flight="on"] .lp-piece { visibility: visible; }
+/* The docked set: badges sitting ON the See it work window's top edge, on
+   its right where the title bar has no text, so a docked piece never covers
+   a line of the demo. Only rendered with the handoff running. */
+.lp-docked-set { position: absolute; top: 0; right: 1.25rem; z-index: 2; display: flex; align-items: flex-end; gap: .6rem; transform: translateY(-62%); pointer-events: none; }
+.lp-docked { opacity: clamp(0, calc((var(--handoff, 1) - var(--end, 0)) * 1000), 1); }
+.lp-handoff-run[data-flight="off"] .lp-docked { opacity: 1; }
+.lp-piece-env { --tilt: -6deg; display: grid; gap: .1rem; padding: .55rem .8rem; border-radius: var(--radius-control); background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); font: .7rem/1.45 var(--font-mono); box-shadow: var(--shadow-card); }
+.lp-piece-tag { font: 600 .6rem/1.4 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--color-term-muted); }
+.lp-piece-key { --tilt: 5deg; display: inline-flex; align-items: center; gap: .5rem; padding: .45rem .85rem; border-radius: var(--radius-pill); background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-danger-fg); font: .76rem var(--font-mono); white-space: nowrap; box-shadow: var(--shadow-card); }
 .lp-piece-dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--color-danger); }
-.lp-piece-shield { --tilt: -10deg; display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 1.25rem; background: var(--color-accent-soft); color: var(--color-accent-text); border: 1px solid var(--color-border); box-shadow: var(--shadow-card); }
-.lp-piece-shield svg { width: 2.2rem; height: 2.2rem; }
+.lp-piece-shield { --tilt: -10deg; display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: 1rem; background: var(--color-accent-soft); color: var(--color-accent-text); border: 1px solid var(--color-border); box-shadow: var(--shadow-card); }
+.lp-piece-shield svg { width: 1.7rem; height: 1.7rem; }
 
 /* (b) Pinned stage: the track is tall and the demo sticks inside it, so the
    scroll walks the captions and scenes. Only from 900px up, only with
@@ -726,7 +758,13 @@ export default function Landing() {
   // Scroll-linked motion (handoff and pinning) only on wide screens; mobile
   // keeps just the reveals and the route cross-fade.
   const wide = useMediaQuery('(min-width: 900px)', false);
+  // The hero handoff needs a clear column beside the hero, so it is only
+  // considered from 1200px; pinning the demo needs only 900px. Even then
+  // planHandoff checks the actual layout, and where the route does not fit
+  // (today, below about 1275px) the badges simply sit on the window.
+  const roomy = useMediaQuery('(min-width: 1200px)', false);
   const scrollMotion = wide && !reduced;
+  const handoffMotion = roomy && !reduced;
   const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : '';
   const installCommand = buildInstallCommand(origin);
 
@@ -790,7 +828,7 @@ export default function Landing() {
       </header>
 
       <main>
-        <HandoffRun motion={scrollMotion}>
+        <HandoffRun motion={handoffMotion}>
         <section className="lp-hero" aria-labelledby="hero-title">
           <div className="lp-container">
             <span className="lp-eyebrow">macOS only · for AI coding agents</span>
@@ -816,6 +854,7 @@ export default function Landing() {
 
         <SeeItWorkSection
           pinned={scrollMotion}
+          docked={handoffMotion}
           after={
             <>
                 <div className="lp-measured">

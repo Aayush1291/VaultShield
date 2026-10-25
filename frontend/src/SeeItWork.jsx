@@ -343,6 +343,10 @@ export default function SeeItWork({ scrollScene = null, frameDecoration = null }
       </ol>
 
       <figure className="lp-demo-figure">
+        {/* Optional decoration on the window's frame (the landing page docks
+            its hero pieces on the top edge). Outside the window's clipping,
+            so it can sit across the edge. Decorative, aria-hidden by contract. */}
+        {frameDecoration}
         <div
           ref={stageRef}
           className="lp-demo-window"
@@ -369,9 +373,6 @@ export default function SeeItWork({ scrollScene = null, frameDecoration = null }
               <Line key={line.id} line={line} />
             ))}
           </div>
-          {/* Optional decoration on the window frame (the landing page docks
-              its hero pieces here). Decorative and aria-hidden by contract. */}
-          {frameDecoration}
         </div>
 
         <div className="lp-demo-controls">
