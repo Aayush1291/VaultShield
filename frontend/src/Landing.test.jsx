@@ -385,3 +385,61 @@ describe('See it work', () => {
     expect(within(see).getAllByTestId(MEASURED_CLAIM_TESTID)).toHaveLength(3);
   });
 });
+
+describe('scroll motion gating', () => {
+  afterEach(() => {
+    delete window.matchMedia;
+  });
+
+  /** A viewport `width` px wide, with or without a reduced-motion preference. */
+  function mockViewport({ width, reduce }) {
+    window.matchMedia = jest.fn().mockImplementation((query) => {
+      const min = /min-width:\s*(\d+)px/.exec(query);
+      return {
+        matches: query.includes('reduce') ? reduce : min ? width >= Number(min[1]) : false,
+        media: query,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+      };
+    });
+  }
+
+  const motionParts = (container) => ({
+    pinned: container.querySelector('#see').classList.contains('lp-pinned'),
+    flying: container.querySelectorAll('.lp-pieces .lp-piece').length,
+    docked: container.querySelectorAll('.lp-demo-figure .lp-docked').length,
+  });
+
+  it('with no matchMedia (and so assumed reduced motion): a static page, no pinning, no pieces', () => {
+    const { container } = renderLanding();
+    expect(motionParts(container)).toEqual({ pinned: false, flying: 0, docked: 0 });
+  });
+
+  it('under reduced motion, even on a wide screen: static', () => {
+    mockViewport({ width: 1440, reduce: true });
+    const { container } = renderLanding();
+    expect(motionParts(container)).toEqual({ pinned: false, flying: 0, docked: 0 });
+  });
+
+  it('below 900px: reveals only, no pinning, no pieces', () => {
+    mockViewport({ width: 768, reduce: false });
+    const { container } = renderLanding();
+    expect(motionParts(container)).toEqual({ pinned: false, flying: 0, docked: 0 });
+  });
+
+  it('from 900px: the stage pins, but the hero pieces wait for 1200px', () => {
+    mockViewport({ width: 1000, reduce: false });
+    const { container } = renderLanding();
+    expect(motionParts(container)).toEqual({ pinned: true, flying: 0, docked: 0 });
+  });
+
+  it('from 1200px: three pieces in the decorative layer and their docked copies on the window', () => {
+    mockViewport({ width: 1440, reduce: false });
+    const { container } = renderLanding();
+    expect(motionParts(container)).toEqual({ pinned: true, flying: 3, docked: 3 });
+    // Decorative only: hidden from assistive tech, the fake key and no other.
+    expect(container.querySelector('.lp-pieces')).toHaveAttribute('aria-hidden', 'true');
+    expect(container.querySelector('.lp-docked-set')).toHaveAttribute('aria-hidden', 'true');
+    expect(container.querySelector('.lp-pieces')).toHaveTextContent('sk_live_51HxEX');
+  });
+});

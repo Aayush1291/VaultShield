@@ -6,7 +6,51 @@
 import { render } from '@testing-library/react';
 import { useRef } from 'react';
 
-import useScrollProgress, { HANDOFF_REST_TOP, clamp01, progressFor } from './useScrollProgress.js';
+import useScrollProgress, { HANDOFF_REST_TOP, clamp01, flowPosition, progressFor } from './useScrollProgress.js';
+
+describe('flowPosition', () => {
+  /** Fake layout: jsdom has no offsets, so give each node its own. */
+  const place = (el, { top, left = 0, parent = null }) => {
+    Object.defineProperty(el, 'offsetTop', { value: top, configurable: true });
+    Object.defineProperty(el, 'offsetLeft', { value: left, configurable: true });
+    Object.defineProperty(el, 'offsetParent', { value: parent, configurable: true });
+  };
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('sums the offset chain (so a transform in progress does not count)', () => {
+    const outer = document.createElement('div');
+    const inner = document.createElement('div');
+    outer.appendChild(inner);
+    document.body.appendChild(outer);
+    place(outer, { top: 1000, left: 40 });
+    place(inner, { top: 30, left: 600, parent: outer });
+    inner.style.transform = 'translateY(24px)';
+    expect(flowPosition(inner)).toEqual({ top: 1030, left: 640 });
+  });
+
+  it('takes a stuck sticky element from its parent, not from where it is stuck', () => {
+    const track = document.createElement('div');
+    const stage = document.createElement('div');
+    const target = document.createElement('div');
+    stage.style.position = 'sticky';
+    track.appendChild(stage);
+    stage.appendChild(target);
+    document.body.appendChild(track);
+    place(track, { top: 1700, left: 40 });
+    // Chromium reports a stuck sticky element where it is stuck: here
+    // 2400px further down than the top of its track.
+    place(stage, { top: 4100, left: 40 });
+    place(target, { top: 30, left: 600, parent: stage });
+    expect(flowPosition(target)).toEqual({ top: 1730, left: 640 });
+  });
+
+  it('is zero for nothing', () => {
+    expect(flowPosition(null)).toEqual({ top: 0, left: 0 });
+  });
+});
 
 describe('progressFor', () => {
   it('travel: 0 when the top reaches the viewport bottom, 1 when the bottom leaves the top', () => {
