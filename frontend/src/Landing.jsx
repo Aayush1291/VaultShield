@@ -205,10 +205,14 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 
 .lp-band { padding-block: var(--spacing-section); }
 .lp-band.alt { background: var(--color-surface-2); }
+/* Every section opens with a centered label and heading; the content below
+   uses the full ~1240px container. */
+.lp-head { text-align: center; max-width: 52rem; margin-inline: auto; }
 .lp-kicker { font: 600 .78rem/1.4 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--color-fg-muted); margin: 0; }
-.lp-h2 { font-family: var(--font-display); font-weight: 400; font-size: var(--text-section); line-height: 1.05; letter-spacing: -.015em; margin: .9rem 0 0; max-width: 18ch; text-wrap: balance; }
+.lp-h2 { font-family: var(--font-display); font-weight: 400; font-size: var(--text-section); line-height: 1.05; letter-spacing: -.015em; margin: .9rem auto 0; max-width: 20ch; text-wrap: balance; }
+.lp-lede { font-size: var(--text-body-lg); line-height: 1.6; color: var(--color-fg-muted); max-width: 60ch; margin: 1.25rem auto 0; text-wrap: pretty; }
 .lp-prose { font-size: var(--text-body-lg); line-height: 1.6; color: var(--color-fg-muted); max-width: var(--container-prose); margin: 1.5rem 0 0; text-wrap: pretty; }
-.lp-split .lp-h2 { max-width: 16ch; }
+
 .lp-code { font-family: var(--font-mono); font-size: .88em; color: var(--color-fg); background: color-mix(in srgb, var(--color-fg) 7%, transparent); border-radius: 6px; padding: .05rem .35rem; }
 
 .lp-hero { position: relative; isolation: isolate; overflow: hidden; text-align: center; padding-block: clamp(4rem, 2rem + 6vw, 8.5rem) var(--spacing-section); }
@@ -247,9 +251,9 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-note { margin-top: 1rem; font-size: .85rem; color: var(--color-fg-subtle); }
 
 .lp-slim { padding-block: var(--spacing-section-slim); background: var(--color-surface-2); border-block: 1px solid var(--color-border); }
-.lp-slim-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 2rem; margin-bottom: 1.75rem; }
+.lp-slim-head { text-align: center; margin: 0 auto 2rem; max-width: 52rem; }
 .lp-slim-head h2 { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.75rem, 1.4rem + 1vw, 2.25rem); margin: 0; }
-.lp-slim-head p { margin: 0; color: var(--color-fg-muted); font-size: .95rem; max-width: 52ch; }
+.lp-slim-head p { margin: .6rem auto 0; color: var(--color-fg-muted); font-size: .95rem; max-width: 60ch; }
 .lp-claims { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); list-style: none; margin: 0; padding: 0; }
 @media (min-width:768px) { .lp-claims { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .lp-claim { display: flex; gap: .85rem; align-items: flex-start; padding: 1.3rem 1.4rem; border-radius: var(--radius-card); background: var(--color-surface); border: 1px solid var(--color-border); line-height: 1.55; font-size: .98rem; }
@@ -280,7 +284,8 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
   }
 }
 
-.lp-split { display: grid; gap: 3rem; grid-template-columns: minmax(0, 1fr); align-items: center; }
+.lp-split { display: grid; gap: 3rem; grid-template-columns: minmax(0, 1fr); align-items: center; margin-top: clamp(2.5rem, 2rem + 2vw, 4rem); }
+.lp-split .lp-prose:first-child { margin-top: 0; }
 @media (min-width:1024px) { .lp-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5rem; } .lp-split.flip > :first-child { order: 2; } }
 .lp-bullets { list-style: none; margin: 2rem 0 0; padding: 0; display: grid; gap: .95rem; max-width: var(--container-prose); }
 .lp-bullets li { position: relative; padding-left: 2.1rem; line-height: 1.6; }
@@ -309,13 +314,18 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-fake-btn.reject { border: 1px solid var(--color-danger); color: var(--color-danger-fg); }
 .lp-illus figcaption { margin-top: .85rem; text-align: center; font-size: .8rem; color: var(--color-fg-subtle); }
 
-.lp-faq { max-width: 880px; margin: 3rem 0 0; border-top: 1px solid var(--color-border); }
+/* The FAQ: heading and list centered as one block; the list is up to
+   1040px wide (the container's full width below that). */
+.lp-faq { max-width: 1040px; margin: clamp(2.5rem, 2rem + 2vw, 4rem) auto 0; border-top: 1px solid var(--color-border); text-align: left; }
 .lp-faq details { border-bottom: 1px solid var(--color-border); }
-.lp-faq summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.4rem .25rem; font-size: 1.15rem; font-weight: 500; }
+.lp-faq summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding: 1.75rem .5rem; font-size: clamp(1.25rem, 1.1rem + .45vw, 1.5rem); line-height: 1.3; font-weight: 500; letter-spacing: -.01em; }
+.lp-faq summary:hover { color: var(--color-accent-text); }
 .lp-faq summary::-webkit-details-marker { display: none; }
-.lp-faq summary::after { content: "+"; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: 50%; border: 1px solid var(--color-border-strong); color: var(--color-fg-muted); font-size: 1.15rem; transition: transform .2s ease; }
+.lp-faq summary::after { content: "+"; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; border-radius: 50%; border: 1px solid var(--color-border-strong); color: var(--color-fg-muted); font-size: 1.4rem; font-weight: 400; transition: transform .2s ease; }
 .lp-faq details[open] summary::after { transform: rotate(45deg); }
-.lp-faq .answer { padding: 0 .25rem 1.6rem; color: var(--color-fg-muted); line-height: 1.65; max-width: var(--container-prose); }
+.lp-faq .answer { padding: 0 .5rem 2rem; color: var(--color-fg-muted); font-size: 1.125rem; line-height: 1.6; max-width: var(--container-prose); }
+.lp-faq .answer p { margin: 0; }
+.lp-faq .answer p + p, .lp-faq .answer ul + p { margin-top: .75rem; }
 .lp-faq .answer ul { margin: .75rem 0 0; padding-left: 1.2rem; display: grid; gap: .6rem; }
 .lp-faq .answer ul.lp-tools { list-style: none; padding: 0; margin: 1rem 0; gap: .5rem; }
 .lp-tools li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; padding: .6rem .9rem; border-radius: var(--radius-control); background: var(--color-surface-2); }
@@ -461,10 +471,12 @@ export default function Landing() {
 
         <section id="how" className="lp-band" aria-labelledby="how-title">
           <div className="lp-container lp-reveal">
-            <p className="lp-kicker">How it works</p>
-            <h2 id="how-title" className="lp-h2">
-              Three steps, all in your terminal.
-            </h2>
+            <div className="lp-head">
+              <p className="lp-kicker">How it works</p>
+              <h2 id="how-title" className="lp-h2">
+                Three steps, all in your terminal.
+              </h2>
+            </div>
             <ol className="lp-steps">
               <li className="lp-step">
                 <span className="lp-numeral" aria-hidden="true">
@@ -516,12 +528,15 @@ export default function Landing() {
         </section>
 
         <section className="lp-band alt" aria-labelledby="protect-title">
-          <div className="lp-container lp-split lp-reveal">
-            <div>
+          <div className="lp-container lp-reveal">
+            <div className="lp-head">
               <p className="lp-kicker">Protect</p>
               <h2 id="protect-title" className="lp-h2">
                 Your agent sees the names. Never the values.
               </h2>
+            </div>
+            <div className="lp-split">
+            <div>
               <p className="lp-prose">
                 AI coding tools read your project files to help you — including{' '}
                 <code className="lp-code">.env</code> files full of API keys. VaultShield moves those
@@ -559,16 +574,20 @@ export default function Landing() {
                 Your .env stays in place; only the values move.
               </p>
             </div>
+            </div>
           </div>
         </section>
 
         <section className="lp-band" aria-labelledby="review-title">
-          <div className="lp-container lp-split flip lp-reveal">
-            <div>
+          <div className="lp-container lp-reveal">
+            <div className="lp-head">
               <p className="lp-kicker">Review</p>
               <h2 id="review-title" className="lp-h2">
                 Review every AI change before it ships.
               </h2>
+            </div>
+            <div className="lp-split flip">
+            <div>
               <p className="lp-prose">
                 For sandboxed runs, VaultShield records the diff, the terminal events, screenshots,
                 and a branch bundle, then uploads them to a dashboard where a human reviews and
@@ -619,23 +638,26 @@ export default function Landing() {
               </div>
               <figcaption>Illustration</figcaption>
             </figure>
+            </div>
           </div>
         </section>
 
 
         <section id="faq" className="lp-band" aria-labelledby="faq-title">
           <div className="lp-container lp-reveal">
-            <p className="lp-kicker">FAQ</p>
-            <h2 id="faq-title" className="lp-h2">
-              Questions, answered plainly.
-            </h2>
+            <div className="lp-head">
+              <p className="lp-kicker">FAQ</p>
+              <h2 id="faq-title" className="lp-h2">
+                Questions, answered plainly.
+              </h2>
+            </div>
             <div className="lp-faq">
               <details>
                 <summary>Does the AI agent ever see my real keys?</summary>
                 <div className="answer">
-                  No — not for the values VaultShield moved. It reads the variable names and the
+                  <p>No — not for the values VaultShield moved. It reads the variable names and the
                   placeholder <code className="lp-code">vs_protected</code>. The real value is in the
-                  macOS Keychain.
+                  macOS Keychain.</p>
                 </div>
               </details>
               <details>
@@ -690,24 +712,24 @@ export default function Landing() {
               <details>
                 <summary>Is this a sandbox?</summary>
                 <div className="answer">
-                  No. It is not a sandbox. It moves secret values out of the files an agent reads and
+                  <p>No. It is not a sandbox. It moves secret values out of the files an agent reads and
                   raises the bar against casual exposure, but a determined program running as you can
                   still try indirect tricks. Use the sandboxed{' '}
-                  <code className="lp-code">vaultshield run</code> for stronger isolation.
+                  <code className="lp-code">vaultshield run</code> for stronger isolation.</p>
                 </div>
               </details>
               <details>
                 <summary>Which platforms are supported?</summary>
                 <div className="answer">
-                  macOS only, for now — it relies on the macOS Keychain and needs Python 3.11+.
+                  <p>macOS only, for now — it relies on the macOS Keychain and needs Python 3.11+.</p>
                 </div>
               </details>
               <details>
                 <summary>How do I remove it?</summary>
                 <div className="answer">
-                  Re-run the install command with <code className="lp-code">-s -- --uninstall</code>. It
+                  <p>Re-run the install command with <code className="lp-code">-s -- --uninstall</code>. It
                   removes the private environment and the <code className="lp-code">vaultshield</code>{' '}
-                  command and leaves your secrets in place.
+                  command and leaves your secrets in place.</p>
                 </div>
               </details>
             </div>
