@@ -478,8 +478,9 @@ def login(backend_url: str, username: str | None) -> None:
 # Requirement 14.4 is what shapes its failure handling, in
 # `_upload_run_artifacts` below: a Run whose artifacts were captured and
 # whose upload then failed is reported as an upload failure and its
-# Run_Directory is left exactly as the Run wrote it, so the same artifacts
-# can be re-uploaded. `upload_run` guarantees the "not mutated" half by
+# Run_Directory is left exactly as the Run wrote it, so the artifacts stay
+# inspectable (the Run itself is marked failed, so the work is run again
+# rather than re-uploaded). `upload_run` guarantees the "not mutated" half by
 # never writing under `run_dir` at all (uploader.py's own docstring); this
 # module's half is to report it and to not clean anything up on the way out
 # — which is why nothing follows the upload except step 11's completion
@@ -1468,6 +1469,12 @@ def _upload_run_artifacts(
     truncates, or deletes anything under `run_dir`, so there is no cleanup
     step to skip on failure. The message names the directory so the artifacts
     that survived are findable.
+
+    The Run is registered by then, so `run`'s failure handler marks it
+    `failed` on the backend (a terminal status) before this message prints;
+    there is no command to upload into a failed Run, so the message says the
+    work must be run again. If that mark itself fails, its own warning is
+    printed above this message.
     """
     try:
         # Event payloads are scrubbed of credential needles (Batch 3 FR5).
@@ -1475,8 +1482,9 @@ def _upload_run_artifacts(
     except uploader.UploadError as exc:
         raise click.ClickException(
             f"Run {run_id} was captured but could not be uploaded: {exc} "
-            f"(artifacts preserved at {run_dir}; upload them again once the "
-            "cause is fixed)"
+            "(the Run was marked failed on the backend, unless a warning above "
+            f"says otherwise; artifacts preserved at {run_dir}; the work must be "
+            "run again)"
         ) from exc
 
     click.echo(f"Run {run_id} uploaded to {backend_url}")
