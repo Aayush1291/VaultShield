@@ -54,7 +54,7 @@ it('renders the landing page at /', () => {
   renderApp('/');
 
   expect(screen.getByRole('link', { name: 'Log in' })).toHaveAttribute('href', '/login');
-  expect(screen.getByRole('link', { name: 'Sign up' })).toHaveAttribute('href', '/signup');
+  expect(screen.getByRole('link', { name: 'Get started' })).toHaveAttribute('href', '#install');
   expect(screen.getByTestId('install-cmd')).toBeInTheDocument();
 });
 

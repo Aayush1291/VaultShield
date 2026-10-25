@@ -12,11 +12,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-import Landing, { MEASURED_CLAIM_TESTID } from './Landing.jsx';
+import Landing, { AUTO_ADVANCE_MS, MEASURED_CLAIM_TESTID } from './Landing.jsx';
 import { AuthProvider } from './auth.jsx';
 import { createApiClient, createMemoryTokenStore } from './api.js';
 
@@ -43,7 +43,8 @@ it('builds the install command from the page origin and shows it with a Copy but
   const expected = `curl -fsSL ${ORIGIN}/install.sh | sh`;
   expect(screen.getByTestId('install-cmd')).toHaveTextContent(expected);
 
-  await userEvent.click(screen.getByRole('button', { name: 'Copy' }));
+  // The hero pill's Copy button (the closing band repeats the pill).
+  await userEvent.click(screen.getAllByRole('button', { name: 'Copy' })[0]);
   expect(writeText).toHaveBeenCalledWith(expected);
   expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
 });
@@ -121,11 +122,14 @@ it('is macOS-only and shows the secure terminal mock', () => {
   expect(text).toContain('vs_protected');
 });
 
-it('carries dark-mode, reduced-motion, and responsive styling in its own stylesheet', () => {
+it('carries dark-mode, reduced-motion, and responsive styling', () => {
   const { container } = renderLanding();
   const css = container.querySelector('style')?.textContent ?? '';
 
-  expect(css).toContain('prefers-color-scheme');
+  // Dark mode now comes from the shared Paper/Ink tokens the page reads.
+  const tokens = readFileSync(join(__dirname, 'index.css'), 'utf8');
+  expect(tokens).toContain('prefers-color-scheme');
+  expect(css).toContain('var(--color-canvas)');
   expect(css).toContain('prefers-reduced-motion');
   expect(css).toContain('@media (min-width:');
 });
@@ -137,11 +141,11 @@ it('ships the viewport meta app-wide (index.html)', () => {
   expect(indexHtml).toContain('name="viewport"');
 });
 
-it('shows Log in / Sign up when signed out, Open dashboard when signed in', () => {
+it('shows Log in / Get started when signed out, Open dashboard when signed in', () => {
   // Signed out (no token).
   const { unmount } = renderLanding();
   expect(screen.getByRole('link', { name: 'Log in' })).toHaveAttribute('href', '/login');
-  expect(screen.getByRole('link', { name: 'Sign up' })).toHaveAttribute('href', '/signup');
+  expect(screen.getByRole('link', { name: 'Get started' })).toHaveAttribute('href', '#install');
   unmount();
 
   // Signed in.
@@ -156,4 +160,153 @@ it('shows Log in / Sign up when signed out, Open dashboard when signed in', () =
     </MemoryRouter>,
   );
   expect(screen.getByRole('link', { name: 'Open dashboard' })).toHaveAttribute('href', '/dashboard');
+});
+
+// --- redesign: sections, hero toggle, FAQ ----------------------------------
+
+describe('page structure', () => {
+  it('renders the bands in order, each with its own heading', () => {
+    renderLanding();
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual([
+      'Measured so far',
+      'Three steps, all in your terminal.',
+      'Your agent sees the names. Never the values.',
+      'Review every AI change before it ships.',
+      'Honest about what we have tested.',
+      'Questions, answered plainly.',
+      'Keep the names. Hide the values.',
+    ]);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Let AI agents read your code, not your secrets.',
+    );
+  });
+
+  it('links header sections and Get started to anchors that exist, and nowhere else', () => {
+    const { container } = renderLanding();
+    // Hidden below 900px by a media query jsdom does not evaluate, and
+    // display:none drops the accessible name, so select it directly.
+    const sections = container.querySelector('nav[aria-label="Sections"]');
+    const hrefs = [...sections.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(['#how', '#agents', '#faq']);
+
+    // Every in-page anchor resolves; every route link is one that exists.
+    for (const a of container.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href');
+      if (href.startsWith('#')) {
+        expect(container.querySelector(href)).not.toBeNull();
+      } else {
+        expect(['/login', '/dashboard']).toContain(href);
+      }
+    }
+  });
+
+  it('repeats the install pill in the closing band from the same constant', () => {
+    renderLanding();
+    expect(screen.getByTestId('install-cmd-cta')).toHaveTextContent(
+      screen.getByTestId('install-cmd').textContent,
+    );
+  });
+
+  it('marks the review mini-dashboard as a decorative illustration', () => {
+    renderLanding();
+    const caption = screen.getByText('Illustration');
+    const figure = caption.closest('figure');
+    expect(figure.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    // The fake Approve/Reject are not real controls.
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+  });
+
+  it('ends with a minimal footer', () => {
+    renderLanding();
+    const footer = screen.getByRole('contentinfo');
+    expect(footer).toHaveTextContent('macOS only');
+    expect(footer).toHaveTextContent('Early software: only claims we measured');
+  });
+});
+
+describe('hero terminal toggle', () => {
+  const region = () => screen.getByRole('region', { name: /what an AI agent reads/i });
+  const button = (name) => within(region()).getByRole('button', { name });
+
+  afterEach(() => {
+    delete window.matchMedia;
+    jest.useRealTimers();
+  });
+
+  function mockMotion({ reduce }) {
+    window.matchMedia = jest.fn().mockImplementation((query) => ({
+      matches: query.includes('reduce') ? reduce : false,
+      media: query,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+    }));
+  }
+
+  it('starts on Without, showing the obviously fake key', () => {
+    renderLanding();
+    expect(button('Without VaultShield')).toHaveAttribute('aria-pressed', 'true');
+    expect(button('With VaultShield')).toHaveAttribute('aria-pressed', 'false');
+    expect(region()).toHaveTextContent('STRIPE_KEY=sk_live_51HxEXAMPLExxxNOTREAL');
+    expect(region()).not.toHaveTextContent('vs_protected');
+  });
+
+  it('switches to With by click and back by keyboard', async () => {
+    renderLanding();
+    await userEvent.click(button('With VaultShield'));
+    expect(button('With VaultShield')).toHaveAttribute('aria-pressed', 'true');
+    expect(region()).toHaveTextContent('STRIPE_KEY=vs_protected');
+    expect(region()).toHaveTextContent('Real value: macOS Keychain');
+    expect(region()).not.toHaveTextContent('NOTREAL');
+
+    button('Without VaultShield').focus();
+    await userEvent.keyboard('{Enter}');
+    expect(button('Without VaultShield')).toHaveAttribute('aria-pressed', 'true');
+    expect(region()).toHaveTextContent('NOTREAL');
+  });
+
+  it('auto-advances once to With when motion is allowed and nobody interacted', () => {
+    mockMotion({ reduce: false });
+    jest.useFakeTimers();
+    renderLanding();
+    expect(button('Without VaultShield')).toHaveAttribute('aria-pressed', 'true');
+
+    act(() => jest.advanceTimersByTime(AUTO_ADVANCE_MS + 10));
+    expect(button('With VaultShield')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('does not auto-advance under prefers-reduced-motion', () => {
+    mockMotion({ reduce: true });
+    jest.useFakeTimers();
+    renderLanding();
+    act(() => jest.advanceTimersByTime(AUTO_ADVANCE_MS * 3));
+    expect(button('Without VaultShield')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('does not auto-advance after the visitor used the toggle', () => {
+    mockMotion({ reduce: false });
+    jest.useFakeTimers();
+    renderLanding();
+    act(() => button('Without VaultShield').click());
+    act(() => jest.advanceTimersByTime(AUTO_ADVANCE_MS * 3));
+    expect(button('Without VaultShield')).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('FAQ', () => {
+  it('is a set of closed details/summary accordions that open on click', async () => {
+    const { container } = renderLanding();
+    const faq = container.querySelector('#faq');
+    const items = faq.querySelectorAll('details');
+    expect(items.length).toBe(5);
+    for (const item of items) {
+      expect(item.querySelector('summary')).not.toBeNull();
+      expect(item.open).toBe(false);
+    }
+
+    const limits = within(faq).getByText('Honest limits: what it does not protect');
+    await userEvent.click(limits);
+    expect(limits.closest('details').open).toBe(true);
+    expect(limits.closest('details')).toHaveTextContent('indirect tricks');
+  });
 });
