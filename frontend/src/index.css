@@ -106,6 +106,7 @@
   --color-fg-subtle: #6b6a5e;
   --color-border: rgba(28, 27, 20, 0.12);
   --color-border-strong: #858275;
+  --color-scrim: rgba(28, 27, 20, 0.42);
 
   /* Accent: a soft lavender pill with ink text; a darker violet for links,
    * text accents, and the pill's hover. */
@@ -173,6 +174,7 @@
   --color-fg-subtle: #a29e8f;
   --color-border: rgba(239, 235, 223, 0.12);
   --color-border-strong: #77736a;
+  --color-scrim: rgba(6, 5, 2, 0.62);
   --color-accent: #b9aaf6;
   --color-accent-hover: #d6ccfb;
   --color-accent-fg: #14130f;
@@ -221,6 +223,7 @@
     --color-fg-subtle: #a29e8f;
     --color-border: rgba(239, 235, 223, 0.12);
     --color-border-strong: #77736a;
+  --color-scrim: rgba(6, 5, 2, 0.62);
     --color-accent: #b9aaf6;
     --color-accent-hover: #d6ccfb;
     --color-accent-fg: #14130f;

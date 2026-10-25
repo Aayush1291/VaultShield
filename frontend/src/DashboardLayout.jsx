@@ -143,7 +143,7 @@ export default function DashboardLayout() {
           type="button"
           aria-label="Close navigation"
           onClick={() => setDrawerOpen(false)}
-          className="fixed inset-0 z-30 bg-fg/30 md:hidden"
+          className="fixed inset-0 z-30 bg-scrim md:hidden"
         />
       )}
 
@@ -345,7 +345,7 @@ function DeleteProjectDialog({ project, pending, error, onConfirm, onCancel, ret
         onClick={() => {
           if (!pending) onCancel();
         }}
-        className="absolute inset-0 bg-fg/35 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-scrim backdrop-blur-[2px]"
       />
       <div
         ref={panelRef}

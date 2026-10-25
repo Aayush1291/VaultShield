@@ -78,7 +78,7 @@ export default function Modal({ title, onClose, closeDisabled = false, returnFoc
         aria-label="Close dialog"
         tabIndex={-1}
         onClick={requestClose}
-        className="absolute inset-0 bg-fg/35 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-scrim backdrop-blur-[2px]"
       />
       <div
         ref={panelRef}

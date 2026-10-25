@@ -31,3 +31,6 @@ id_ed25519
 # Built wheel served by the dashboard at /dist/ (website/build.sh writes it
 # into the frontend's public dir; the dashboard dev server serves public/).
 /frontend/public/dist/
+
+# Dashboard screenshots written by spike/ui_shots.py.
+/ui-shots/
