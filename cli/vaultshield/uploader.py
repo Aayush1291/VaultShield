@@ -113,7 +113,8 @@ produced, with no translation in between:
 - **Events.** `events.jsonl` is one JSON object per line
   (`event_type`/`timestamp`/`payload`, written by `monitor.py`), and the
   events endpoint accepts a bare JSON array of exactly those objects, so
-  a batch is literally a list of parsed lines.
+  a batch is literally a list of parsed lines — minus any whose payload is
+  blank, which the backend would reject (`_without_blank_payloads`).
 - **Diff.** `diff.json` is `{"files": [...]}` (written by
   `git_capture.py`), which is verbatim what the diff endpoint accepts —
   `RunDiff.files` is the same JSON value.
@@ -869,8 +870,13 @@ def _upload_events(
     A Run with no Event_Log, or an empty one, sends nothing at all rather
     than an empty array: there is no artifact to submit, and a request that
     stores zero events only adds a way for the upload to fail.
+
+    Events with a blank payload are left out (see `_without_blank_payloads`),
+    with one note saying how many; the file on disk is not changed.
     """
-    events = _scrubbed_events(_read_event_log(event_log_path(run_dir)), scrub)
+    events = _without_blank_payloads(
+        _scrubbed_events(_read_event_log(event_log_path(run_dir)), scrub)
+    )
     for batch in _batched(events, batch_size):
         # Sequential and awaited: batch N must be stored before batch N+1 is
         # sent, because the backend numbers each batch from the highest
@@ -888,6 +894,30 @@ def _scrubbed_events(
         else event
         for event in events
     ]
+
+
+def _without_blank_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`events` minus every event whose `payload` is a string that is empty
+    or whitespace-only, in their original order, and one note naming how
+    many were left out.
+
+    Such an event carries nothing to show, and the backend rejects it: the
+    ingest serializer's `payload` is a DRF `CharField` that strips before its
+    blank check, so one `""` (a blank line in the agent's reply) fails the
+    whole batch with HTTP 400. `str.strip()` is the same test DRF applies.
+    Applied after scrubbing, to exactly what would be sent. A non-string or
+    missing payload is not touched here.
+    """
+    kept = [
+        event
+        for event in events
+        if not (isinstance(event.get("payload"), str) and not event["payload"].strip())
+    ]
+    skipped = len(events) - len(kept)
+    if skipped:
+        noun = "event" if skipped == 1 else "events"
+        click.echo(f"Skipped {skipped} blank {noun} (nothing to show).")
+    return kept
 
 
 def upload_events_best_effort(
@@ -910,7 +940,9 @@ def upload_events_best_effort(
     try:
         _guard_run_id(run_id)
         url = _build_url(backend_url, EVENTS_PATH_TEMPLATE.format(run_id=run_id))
-        events = _scrubbed_events(_read_event_log(event_log_path(run_dir)), scrub)
+        events = _without_blank_payloads(
+            _scrubbed_events(_read_event_log(event_log_path(run_dir)), scrub)
+        )
         if not events:
             return None
         with httpx.Client(

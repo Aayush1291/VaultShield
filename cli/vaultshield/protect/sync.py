@@ -137,6 +137,10 @@ def _violation_event(line: str) -> dict | None:
     timestamp, payload = obj.get("timestamp"), obj.get("payload")
     if not isinstance(timestamp, str) or not isinstance(payload, str):
         return None
+    # A blank payload says nothing and the backend rejects it; skipped like
+    # an unparsable line, so it neither counts nor creates an empty Run.
+    if not payload.strip():
+        return None
     return {"event_type": "violation", "timestamp": timestamp, "payload": payload}
 
 
