@@ -16,7 +16,8 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-import Landing, { AUTO_ADVANCE_MS, MEASURED_CLAIM_TESTID } from './Landing.jsx';
+import Landing, { AUTO_ADVANCE_MS, HERO_MORPH_FRAMES, MEASURED_CLAIM_TESTID } from './Landing.jsx';
+import { DEMO_CAPTION } from './SeeItWork.jsx';
 import { AuthProvider } from './auth.jsx';
 import { createApiClient, createMemoryTokenStore } from './api.js';
 
@@ -187,7 +188,7 @@ describe('page structure', () => {
     renderLanding();
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(headings).toEqual([
-      'Measured so far',
+      'Watch a secret turn into a placeholder.',
       'Three steps, all in your terminal.',
       'Your agent sees the names. Never the values.',
       'Review every AI change before it ships.',
@@ -292,6 +293,40 @@ describe('hero terminal toggle', () => {
     expect(button('With VaultShield')).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('auto-advances with the character morph, then settles on the placeholder', () => {
+    mockMotion({ reduce: false });
+    jest.useFakeTimers();
+    renderLanding();
+
+    act(() => jest.advanceTimersByTime(AUTO_ADVANCE_MS + 10));
+    // Mid-morph: With is pressed, the characters are animating (aria-hidden),
+    // and the live key is no longer shown as plain text.
+    expect(button('With VaultShield')).toHaveAttribute('aria-pressed', 'true');
+    expect(region().querySelector('.d-morph')).not.toBeNull();
+    expect(region().querySelector('.d-morph').closest('[aria-hidden="true"]')).not.toBeNull();
+
+    const total = HERO_MORPH_FRAMES.reduce((sum, frame) => sum + frame[2], 0);
+    for (let i = 0; i < HERO_MORPH_FRAMES.length + 1; i += 1) {
+      act(() => jest.advanceTimersByTime(total));
+    }
+    expect(region().querySelector('.d-morph')).toBeNull();
+    expect(region()).toHaveTextContent('STRIPE_KEY=vs_protected');
+    expect(region()).toHaveTextContent('Real value: macOS Keychain');
+    expect(region()).not.toHaveTextContent('NOTREAL');
+  });
+
+  it('a click mid-morph switches instantly and stops the morph', () => {
+    mockMotion({ reduce: false });
+    jest.useFakeTimers();
+    renderLanding();
+    act(() => jest.advanceTimersByTime(AUTO_ADVANCE_MS + 10));
+    act(() => button('Without VaultShield').click());
+    expect(region().querySelector('.d-morph')).toBeNull();
+    expect(region()).toHaveTextContent('NOTREAL');
+    act(() => jest.advanceTimersByTime(10000));
+    expect(button('Without VaultShield')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('does not auto-advance under prefers-reduced-motion', () => {
     mockMotion({ reduce: true });
     jest.useFakeTimers();
@@ -325,5 +360,26 @@ describe('FAQ', () => {
     await userEvent.click(limits);
     expect(limits.closest('details').open).toBe(true);
     expect(limits.closest('details')).toHaveTextContent('indirect tricks');
+  });
+});
+
+describe('See it work', () => {
+  it('follows the hero, before How it works', () => {
+    const { container } = renderLanding();
+    const ids = [...container.querySelectorAll('main > section')].map(
+      (section) => section.id || section.getAttribute('aria-labelledby'),
+    );
+    expect(ids).toEqual(['hero-title', 'see', 'how', 'protect-title', 'review-title', 'faq', 'cta-title']);
+  });
+
+  it('carries the caption, the scene buttons and a screen-reader description', () => {
+    const { container } = renderLanding();
+    const see = container.querySelector('#see');
+    expect(within(see).getByText(DEMO_CAPTION)).toBeInTheDocument();
+    expect(within(see).getAllByRole('button', { name: /^Scene \d:/ })).toHaveLength(4);
+    expect(see.querySelector('[data-testid="demo-stage"]')).toHaveAttribute('aria-hidden', 'true');
+    expect(see.querySelector('.sr-only')).toHaveTextContent('vaultshield exec');
+    // The measured claims close the section.
+    expect(within(see).getAllByTestId(MEASURED_CLAIM_TESTID)).toHaveLength(3);
   });
 });

@@ -3,8 +3,9 @@
  *
  * An editorial, terminal-first page in full-width bands, each with a centered
  * ~1240px container: sticky header, hero (serif headline, one install pill, a
- * Without/With terminal), a slim "Measured so far" strip, How it works,
- * Protect, Review, FAQ, a closing install band, and a minimal footer.
+ * Without/With terminal), See it work (the four-scene demo, closing with the
+ * "Measured so far" claims), How it works, Protect, Review, FAQ, a closing
+ * install band, and a minimal footer.
  *
  * Honesty constraints the tests pin (Landing.test.jsx):
  *  - In the FAQ's "Which AI tools are supported?" answer, Antigravity is the
@@ -25,8 +26,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import SeeItWork, { Morph, Vault } from './SeeItWork.jsx';
 import ThemeSwitch from './ThemeSwitch.jsx';
 import { useAuth } from './auth.jsx';
+import { morphText, scramble } from './charMorph.js';
+import { FAKE_STRIPE_KEY } from './fakeValues.js';
+import { usePageVisible } from './motion.js';
 
 /**
  * The install command, built from the page's own origin — the single place
@@ -46,7 +51,7 @@ export const MEASURED_CLAIM_TESTID = 'measured-claim';
 export const AUTO_ADVANCE_MS = 3600;
 
 /** The obviously fake key the "Without" view shows. */
-export const FAKE_STRIPE_KEY = 'sk_live_51HxEXAMPLExxxNOTREAL';
+export { FAKE_STRIPE_KEY };
 
 /**
  * True when motion should be avoided. A browser that cannot answer (no
@@ -112,30 +117,63 @@ function InstallPill({ command, testId, id }) {
 }
 
 /**
+ * The hero morph, as frames: the key lifts, scrambles, flies into the
+ * Keychain, and `vs_protected` resolves in its place. Each entry is
+ * [morph, vault, delay ms]; `null` morph means the morph is finished.
+ */
+const N = FAKE_STRIPE_KEY.length;
+export const HERO_MORPH_FRAMES = [
+  [{ text: FAKE_STRIPE_KEY, state: 'lift', n: N, cls: 't-leak' }, 'open', 260],
+  ...[1, 2, 3, 4, 5].map((f) => [{ text: scramble(FAKE_STRIPE_KEY, f), state: 'lift', n: N, cls: 't-leak' }, 'open', 70]),
+  [{ text: scramble(FAKE_STRIPE_KEY, 6), state: 'fly', n: N, cls: 't-leak' }, 'receiving', 760],
+  [{ text: '', state: 'gone', n: 0, cls: '' }, 'locked', 220],
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((f) => [{ text: morphText('', 'vs_protected', f, 8), state: 'in', n: 12, cls: 't-safe' }, 'locked', 50]),
+];
+
+/**
  * The hero terminal: what an agent reads from `.env`, without and with
- * VaultShield. Starts on "Without"; advances once to "With" after
- * `AUTO_ADVANCE_MS` unless the visitor has used the toggle or prefers reduced
- * motion. The toggle is two `aria-pressed` buttons, so it works by keyboard and
- * needs no animation to make sense.
+ * VaultShield. Starts on "Without". Once, after `AUTO_ADVANCE_MS`, it plays
+ * the character morph into "With" — unless the visitor has used the toggle or
+ * prefers reduced motion. The toggle (two `aria-pressed` buttons) switches
+ * instantly, so it works by keyboard and needs no animation to make sense.
+ * The morphing characters are aria-hidden; the live region only ever
+ * announces the settled line.
  */
 function HeroTerminal() {
   const [view, setView] = useState('without');
+  const [morphFrame, setMorphFrame] = useState(null); // index into HERO_MORPH_FRAMES
   const interacted = useRef(false);
+  const visible = usePageVisible();
 
   useEffect(() => {
     if (prefersReducedMotion()) return undefined;
     const timer = setTimeout(() => {
-      if (!interacted.current) setView('with');
+      if (interacted.current) return;
+      setView('with');
+      setMorphFrame(0);
     }, AUTO_ADVANCE_MS);
     return () => clearTimeout(timer);
   }, []);
 
+  // Step the morph one frame per timeout; pause while the tab is hidden.
+  useEffect(() => {
+    if (morphFrame === null || !visible) return undefined;
+    const timer = setTimeout(
+      () => setMorphFrame((f) => (f === null || f + 1 >= HERO_MORPH_FRAMES.length ? null : f + 1)),
+      HERO_MORPH_FRAMES[morphFrame][2],
+    );
+    return () => clearTimeout(timer);
+  }, [morphFrame, visible]);
+
   function choose(next) {
     interacted.current = true;
+    setMorphFrame(null);
     setView(next);
   }
 
   const protectedView = view === 'with';
+  const morphing = protectedView && morphFrame !== null;
+  const [morph, vault] = morphing ? HERO_MORPH_FRAMES[morphFrame] : [null, null];
 
   return (
     <div className="lp-term" role="region" aria-label="Example: what an AI agent reads from .env">
@@ -160,7 +198,17 @@ function HeroTerminal() {
         {'\n'}
         <span className="t-dim"># what your agent reads</span>
         {'\n'}
-        {protectedView ? (
+        {morphing ? (
+          <>
+            STRIPE_KEY=
+            <span aria-hidden="true">
+              <Morph morph={morph} />
+              <Vault state={vault} />
+            </span>
+            {'\n'}
+            <span className="t-dim">&nbsp;</span>
+          </>
+        ) : protectedView ? (
           <>
             STRIPE_KEY=<span className="t-safe">vs_protected</span>
             {'\n'}
@@ -250,10 +298,60 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .t-safe { color: var(--color-term-ok); }
 .lp-note { margin-top: 1rem; font-size: .85rem; color: var(--color-fg-subtle); }
 
-.lp-slim { padding-block: var(--spacing-section-slim); background: var(--color-surface-2); border-block: 1px solid var(--color-border); }
 .lp-slim-head { text-align: center; margin: 0 auto 2rem; max-width: 52rem; }
-.lp-slim-head h2 { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.75rem, 1.4rem + 1vw, 2.25rem); margin: 0; }
+.lp-slim-head h3 { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.75rem, 1.4rem + 1vw, 2.25rem); margin: 0; }
 .lp-slim-head p { margin: .6rem auto 0; color: var(--color-fg-muted); font-size: .95rem; max-width: 60ch; }
+/* See it work: captions beside a framed stage. */
+.lp-demo { display: grid; gap: 2.5rem; grid-template-columns: minmax(0, 1fr); align-items: center; margin-top: clamp(2.5rem, 2rem + 2vw, 4rem); }
+@media (min-width:900px) { .lp-demo { grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); gap: 3.5rem; } }
+.lp-see-captions { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.lp-see-captions li { display: flex; gap: 1rem; align-items: flex-start; padding: 1rem 1.1rem; border-radius: var(--radius-card); border: 1px solid transparent; transition: background-color .3s ease, border-color .3s ease; }
+.lp-see-captions li[aria-current="step"] { background: var(--color-surface); border-color: var(--color-border); box-shadow: var(--shadow-soft); }
+.lp-see-num { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 2.1rem; height: 2.1rem; border-radius: 50%; border: 1px solid var(--color-border-strong); color: var(--color-fg-muted); font: 1.15rem/1 var(--font-display); transition: background-color .3s, color .3s; }
+.lp-see-captions li[aria-current="step"] .lp-see-num { background: var(--color-accent); border-color: transparent; color: var(--color-accent-fg); }
+.lp-see-captions strong { display: block; font-size: 1.08rem; font-weight: 600; color: var(--color-fg-muted); }
+.lp-see-captions li[aria-current="step"] strong { color: var(--color-fg); }
+.lp-see-copy { display: block; margin-top: .25rem; color: var(--color-fg-subtle); font-size: .97rem; line-height: 1.55; }
+.lp-demo-figure { margin: 0; min-width: 0; }
+.lp-demo-window { border-radius: 24px; background: var(--color-term-bg); color: var(--color-term-fg); border: 1px solid var(--color-term-border); box-shadow: var(--shadow-lift); overflow: hidden; }
+.lp-demo-window:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
+.lp-demo-bar { display: flex; align-items: center; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--color-term-border); }
+.lp-demo-title { font: .8rem var(--font-mono); color: var(--color-term-muted); }
+.lp-demo-paused { margin-left: auto; border: 1px solid var(--color-term-border); border-radius: var(--radius-pill); padding: .25rem .6rem; font: 600 .68rem/1 var(--font-sans); letter-spacing: .1em; text-transform: uppercase; color: var(--color-term-muted); }
+.lp-demo-body { display: flex; flex-direction: column; gap: .3rem; height: 25rem; padding: 1.25rem 1.4rem; overflow: hidden; font: .86rem/1.7 var(--font-mono); }
+@media (max-width: 599px) { .lp-demo-body { height: 31rem; padding: 1rem; font-size: .78rem; } }
+.d-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.d-you { color: var(--color-term-accent); }
+.d-agent, .d-cmd, .d-out { color: var(--color-term-fg); }
+.d-dim { color: var(--color-term-muted); }
+.d-deny { color: var(--color-term-danger); }
+.d-block { color: var(--color-term-danger); font-weight: 600; }
+.d-line .t-leak { color: var(--color-term-danger); background: rgba(242, 160, 143, .12); border-radius: 4px; }
+.lp-demo-controls { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+.lp-demo-dots { display: flex; gap: .35rem; }
+.lp-demo-dot { position: relative; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.lp-demo-dot::before { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: var(--color-border-strong); transition: transform .2s ease, background-color .2s ease; }
+.lp-demo-dot[aria-pressed="true"]::before { background: var(--color-accent-text); transform: scale(1.35); }
+.lp-demo-replay { border-radius: var(--radius-pill); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-fg); font: 500 .9rem/1 var(--font-sans); padding: .6rem 1.1rem; cursor: pointer; }
+.lp-demo-replay:hover { background: var(--color-surface-2); }
+.lp-demo-caption { margin-top: .75rem; font-size: .85rem; color: var(--color-fg-subtle); }
+
+/* The character morph: characters lift, scramble, fly into the Keychain
+   (to the right, measured in ch, so no layout reads), and the placeholder
+   resolves in. Transform and opacity only. */
+.d-morph { display: inline-block; }
+.d-ch { display: inline-block; white-space: pre; transition: transform .45s cubic-bezier(.2, .7, .2, 1), opacity .45s ease; transition-delay: calc(var(--i) * 14ms); }
+.d-morph[data-state="lift"] .d-ch { transform: translateY(-.35em); }
+.d-morph[data-state="fly"] .d-ch { transform: translate(calc((var(--n) - var(--i)) * 1ch + 2ch), -.15em) scale(.3); opacity: 0; transition-duration: .7s; }
+.d-morph[data-state="in"] .d-ch { animation: d-in .28s ease both; }
+@keyframes d-in { from { opacity: 0; transform: translateY(.35em); } to { opacity: 1; transform: none; } }
+.d-vault { display: inline-flex; align-items: center; gap: .35rem; margin-left: 1ch; padding: .05rem .5rem; vertical-align: middle; border: 1px solid var(--color-term-border); border-radius: var(--radius-pill); color: var(--color-term-accent); font: 600 .68rem/1.4 var(--font-sans); transition: transform .3s ease, background-color .3s ease, color .3s ease; }
+.d-vault svg { width: 1rem; height: 1rem; }
+.d-vault[data-state="receiving"] { transform: scale(1.12); background: rgba(201, 188, 248, .14); }
+.d-vault[data-state="locked"] { color: var(--color-term-ok); }
+
+/* Measured so far, now the closing note of See it work. */
+.lp-measured { margin-top: clamp(3rem, 2.5rem + 2vw, 5rem); padding-top: clamp(2.5rem, 2rem + 2vw, 3.5rem); border-top: 1px solid var(--color-border); }
 .lp-claims { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); list-style: none; margin: 0; padding: 0; }
 @media (min-width:768px) { .lp-claims { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .lp-claim { display: flex; gap: .85rem; align-items: flex-start; padding: 1.3rem 1.4rem; border-radius: var(--radius-card); background: var(--color-surface); border: 1px solid var(--color-border); line-height: 1.55; font-size: .98rem; }
@@ -328,7 +426,7 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-faq .answer p + p, .lp-faq .answer ul + p { margin-top: .75rem; }
 .lp-faq .answer ul { margin: .75rem 0 0; padding-left: 1.2rem; display: grid; gap: .6rem; }
 .lp-faq .answer ul.lp-tools { list-style: none; padding: 0; margin: 1rem 0; gap: .5rem; }
-.lp-tools li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; padding: .6rem .9rem; border-radius: var(--radius-control); background: var(--color-surface-2); }
+.lp-tools li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; padding: .6rem .9rem; border-radius: var(--radius-control); background: var(--color-surface); border: 1px solid var(--color-border); }
 .lp-tool { color: var(--color-fg); font-weight: 600; }
 .lp-tag { border-radius: var(--radius-pill); padding: .25rem .75rem; font: 600 .8rem/1.3 var(--font-sans); }
 .lp-tag.live { background: var(--color-success-soft); color: var(--color-success-fg); }
@@ -440,32 +538,44 @@ export default function Landing() {
           </div>
         </section>
 
-        <section className="lp-slim" aria-labelledby="measured-title">
+        <section id="see" className="lp-band alt" aria-labelledby="see-title">
           <div className="lp-container lp-reveal">
-            <div className="lp-slim-head">
-              <h2 id="measured-title">Measured so far</h2>
-              <p>
-                No invented numbers. These are the outcomes of the spike and the live tests that
-                were run; the rest is honestly marked as not yet tested.
+            <div className="lp-head">
+              <p className="lp-kicker">See it work</p>
+              <h2 id="see-title" className="lp-h2">
+                Watch a secret turn into a placeholder.
+              </h2>
+              <p className="lp-lede">
+                The same request, before and after VaultShield, replayed from a real test.
               </p>
             </div>
-            <ul className="lp-claims">
-              <li className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
-                <span className="mark">✓</span>
-                <span>
-                  Placeholders held in the Antigravity CLI and App: an agent that got past the rules
-                  read the placeholder, not the secret.
-                </span>
-              </li>
-              <li className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
-                <span className="mark">✓</span>
-                <span>The command hook blocked printenv live in Antigravity.</span>
-              </li>
-              <li className="lp-claim claim pending" data-testid={MEASURED_CLAIM_TESTID}>
-                <span className="mark">○</span>
-                <span>Claude Code, Kiro and Codex backstops are built from docs, not yet live-tested.</span>
-              </li>
-            </ul>
+            <SeeItWork />
+            <div className="lp-measured">
+              <div className="lp-slim-head">
+                <h3 id="measured-title">Measured so far</h3>
+                <p>
+                  No invented numbers. These are the outcomes of the spike and the live tests that
+                  were run; the rest is honestly marked as not yet tested.
+                </p>
+              </div>
+              <ul className="lp-claims">
+                <li className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
+                  <span className="mark">✓</span>
+                  <span>
+                    Placeholders held in the Antigravity CLI and App: an agent that got past the rules
+                    read the placeholder, not the secret.
+                  </span>
+                </li>
+                <li className="lp-claim claim yes" data-testid={MEASURED_CLAIM_TESTID}>
+                  <span className="mark">✓</span>
+                  <span>The command hook blocked printenv live in Antigravity.</span>
+                </li>
+                <li className="lp-claim claim pending" data-testid={MEASURED_CLAIM_TESTID}>
+                  <span className="mark">○</span>
+                  <span>Claude Code, Kiro and Codex backstops are built from docs, not yet live-tested.</span>
+                </li>
+              </ul>
+            </div>
           </div>
         </section>
 
@@ -643,7 +753,7 @@ export default function Landing() {
         </section>
 
 
-        <section id="faq" className="lp-band" aria-labelledby="faq-title">
+        <section id="faq" className="lp-band alt" aria-labelledby="faq-title">
           <div className="lp-container lp-reveal">
             <div className="lp-head">
               <p className="lp-kicker">FAQ</p>
@@ -736,7 +846,7 @@ export default function Landing() {
           </div>
         </section>
 
-        <section className="lp-band alt lp-cta" aria-labelledby="cta-title">
+        <section className="lp-band lp-cta" aria-labelledby="cta-title">
           <div className="lp-container lp-reveal">
             <h2 id="cta-title" className="lp-h2">
               Keep the names. Hide the values.
