@@ -25,6 +25,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import ThemeSwitch from './ThemeSwitch.jsx';
 import { useAuth } from './auth.jsx';
 
 /**
@@ -200,6 +201,7 @@ export default function Landing() {
             <span>VaultShield</span>
           </span>
           <nav className="links" aria-label="Primary">
+            <ThemeSwitch />
             {signedIn ? (
               <Link className="btn primary" to="/dashboard">
                 Open dashboard

@@ -24,6 +24,7 @@ import { Link, Outlet, useNavigate, useParams } from 'react-router-dom';
 import Modal from './Modal.jsx';
 import NewProjectForm from './NewProjectForm.jsx';
 import ProjectListView from './ProjectListView.jsx';
+import ThemeSwitch from './ThemeSwitch.jsx';
 import { useAuth } from './auth.jsx';
 
 /** An original shield glyph for the wordmark (decorative). */
@@ -170,15 +171,18 @@ export default function DashboardLayout() {
             />
           </div>
 
-          <div className="border-t border-border px-5 py-4">
-            <p className="truncate text-xs text-fg-subtle">Signed in</p>
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="mt-1 text-sm font-medium text-accent-text hover:text-accent-text hover:underline"
-            >
-              Sign out
-            </button>
+          <div className="flex items-end justify-between gap-3 border-t border-border px-5 py-4">
+            <div className="min-w-0">
+              <p className="truncate text-xs text-fg-subtle">Signed in</p>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="mt-1 text-sm font-medium text-accent-text hover:underline"
+              >
+                Sign out
+              </button>
+            </div>
+            <ThemeSwitch />
           </div>
         </aside>
 

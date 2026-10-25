@@ -3,7 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VaultShield Dashboard</title>
+    <title>VaultShield</title>
+    <!-- Apply the stored color theme before first paint, so a Dark preference
+         never flashes the light theme. Same key as src/theme.js
+         (THEME_STORAGE_KEY); theme.test.jsx runs this script to keep them in
+         step. No attribute means "follow the system". -->
+    <script>
+      (function () {
+        try {
+          var t = window.localStorage.getItem('vaultshield.theme');
+          if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <!-- Vite's build entry. `src/main.jsx` is the only module that reads
