@@ -98,19 +98,37 @@ it('states the honest limits', () => {
   expect(text).toContain('not a sandbox');
 });
 
-it('labels the supported agents honestly: one proven live, three built from docs', () => {
+it('labels the supported tools honestly in the FAQ: one proven live, three built from docs', async () => {
   const { container } = renderLanding();
-  const text = container.textContent ?? '';
-  const count = (needle) => text.split(needle).length - 1;
+  const summary = within(container.querySelector('#faq')).getByText('Which AI tools are supported?');
+  const item = summary.closest('details');
+  expect(item.open).toBe(false);
+  await userEvent.click(summary);
+  expect(item.open).toBe(true);
 
+  const text = item.textContent ?? '';
+  const count = (needle) => text.split(needle).length - 1;
   expect(count('proven live')).toBe(1);
   expect(count('built from docs, not live-tested')).toBe(3);
   for (const agent of ['Antigravity', 'Claude Code', 'Kiro', 'Codex']) {
     expect(text).toContain(agent);
   }
-  // Antigravity is the one proven-live agent.
-  const antigravity = screen.getByText('Antigravity').closest('.agent');
+  expect(text).toContain('tested end to end');
+  expect(text).toContain('macOS only');
+  // Antigravity is the one proven-live tool.
+  const antigravity = within(item).getByText('Antigravity').closest('li');
   expect(within(antigravity).getByText('proven live')).toBeInTheDocument();
+  // Nowhere else on the page claims "proven live".
+  expect((container.textContent ?? '').split('proven live').length - 1).toBe(1);
+});
+
+it('has no Agents section and no Agents link', () => {
+  const { container } = renderLanding();
+  expect(container.querySelector('#agents')).toBeNull();
+  expect(container.querySelector('a[href="#agents"]')).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'Honest about what we have tested.' })).not.toBeInTheDocument();
+  const nav = container.querySelector('nav[aria-label="Sections"]');
+  expect([...nav.querySelectorAll('a')].map((a) => a.textContent)).not.toContain('Agents');
 });
 
 it('is macOS-only and shows the secure terminal mock', () => {
@@ -173,7 +191,6 @@ describe('page structure', () => {
       'Three steps, all in your terminal.',
       'Your agent sees the names. Never the values.',
       'Review every AI change before it ships.',
-      'Honest about what we have tested.',
       'Questions, answered plainly.',
       'Keep the names. Hide the values.',
     ]);
@@ -188,7 +205,7 @@ describe('page structure', () => {
     // display:none drops the accessible name, so select it directly.
     const sections = container.querySelector('nav[aria-label="Sections"]');
     const hrefs = [...sections.querySelectorAll('a')].map((a) => a.getAttribute('href'));
-    expect(hrefs).toEqual(['#how', '#agents', '#faq']);
+    expect(hrefs).toEqual(['#how', '#faq']);
 
     // Every in-page anchor resolves; every route link is one that exists.
     for (const a of container.querySelectorAll('a[href]')) {
@@ -298,7 +315,7 @@ describe('FAQ', () => {
     const { container } = renderLanding();
     const faq = container.querySelector('#faq');
     const items = faq.querySelectorAll('details');
-    expect(items.length).toBe(5);
+    expect(items.length).toBe(6);
     for (const item of items) {
       expect(item.querySelector('summary')).not.toBeNull();
       expect(item.open).toBe(false);

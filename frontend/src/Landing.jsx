@@ -4,11 +4,12 @@
  * An editorial, terminal-first page in full-width bands, each with a centered
  * ~1240px container: sticky header, hero (serif headline, one install pill, a
  * Without/With terminal), a slim "Measured so far" strip, How it works,
- * Protect, Review, Agents, FAQ, a closing install band, and a minimal footer.
+ * Protect, Review, FAQ, a closing install band, and a minimal footer.
  *
  * Honesty constraints the tests pin (Landing.test.jsx):
- *  - Antigravity is the only agent labelled "proven live"; Claude Code, Kiro
- *    and Codex are "built from docs, not live-tested".
+ *  - In the FAQ's "Which AI tools are supported?" answer, Antigravity is the
+ *    only tool labelled "proven live"; Claude Code, Kiro and Codex are
+ *    "built from docs, not live-tested".
  *  - The measured-claims list holds exactly the three measured outcomes.
  *  - The honest limits (indirect tricks, not a sandbox) stay on the page.
  *  - The only absolute URL is the install line, built from the page's own
@@ -308,15 +309,6 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-fake-btn.reject { border: 1px solid var(--color-danger); color: var(--color-danger-fg); }
 .lp-illus figcaption { margin-top: .85rem; text-align: center; font-size: .8rem; color: var(--color-fg-subtle); }
 
-.lp-agents { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); list-style: none; margin: 3rem 0 0; padding: 0; }
-@media (min-width:768px) { .lp-agents { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (min-width:1280px) { .lp-agents { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.vs-landing .agent { display: flex; flex-direction: column; justify-content: space-between; gap: 2.5rem; min-height: 11rem; padding: 1.6rem; border-radius: var(--radius-card-lg); background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: var(--shadow-soft); }
-.vs-landing .agent .name { font-family: var(--font-display); font-size: 2rem; line-height: 1.1; }
-.vs-landing .badge { align-self: flex-start; border-radius: var(--radius-pill); padding: .35rem .8rem; font: 600 .78rem/1.3 var(--font-sans); }
-.vs-landing .badge.live { background: var(--color-success-soft); color: var(--color-success-fg); }
-.vs-landing .badge.docs { background: var(--color-warn-soft); color: var(--color-warn-fg); }
-
 .lp-faq { max-width: 880px; margin: 3rem 0 0; border-top: 1px solid var(--color-border); }
 .lp-faq details { border-bottom: 1px solid var(--color-border); }
 .lp-faq summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.4rem .25rem; font-size: 1.15rem; font-weight: 500; }
@@ -325,6 +317,12 @@ html:has(.vs-landing) { scroll-behavior: smooth; }
 .lp-faq details[open] summary::after { transform: rotate(45deg); }
 .lp-faq .answer { padding: 0 .25rem 1.6rem; color: var(--color-fg-muted); line-height: 1.65; max-width: var(--container-prose); }
 .lp-faq .answer ul { margin: .75rem 0 0; padding-left: 1.2rem; display: grid; gap: .6rem; }
+.lp-faq .answer ul.lp-tools { list-style: none; padding: 0; margin: 1rem 0; gap: .5rem; }
+.lp-tools li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; padding: .6rem .9rem; border-radius: var(--radius-control); background: var(--color-surface-2); }
+.lp-tool { color: var(--color-fg); font-weight: 600; }
+.lp-tag { border-radius: var(--radius-pill); padding: .25rem .75rem; font: 600 .8rem/1.3 var(--font-sans); }
+.lp-tag.live { background: var(--color-success-soft); color: var(--color-success-fg); }
+.lp-tag.docs { background: var(--color-warn-soft); color: var(--color-warn-fg); }
 
 .lp-cta { position: relative; isolation: isolate; overflow: hidden; text-align: center; }
 .lp-cta::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(55% 70% at 50% 100%, color-mix(in srgb, var(--color-accent) 30%, transparent), transparent 72%); }
@@ -386,7 +384,6 @@ export default function Landing() {
           </a>
           <nav className="lp-sections" aria-label="Sections">
             <a href="#how">How it works</a>
-            <a href="#agents">Agents</a>
             <a href="#faq">FAQ</a>
           </nav>
           <div className="lp-actions">
@@ -625,36 +622,6 @@ export default function Landing() {
           </div>
         </section>
 
-        <section id="agents" className="lp-band alt" aria-labelledby="agents-title">
-          <div className="lp-container lp-reveal">
-            <p className="lp-kicker">Agents</p>
-            <h2 id="agents-title" className="lp-h2">
-              Honest about what we have tested.
-            </h2>
-            <p className="lp-prose">
-              Antigravity is the one agent we have run end to end. The others follow each tool&rsquo;s
-              documentation and say so until a live test says otherwise.
-            </p>
-            <ul className="lp-agents">
-              <li className="agent">
-                <span className="name">Antigravity</span>
-                <span className="badge live">proven live</span>
-              </li>
-              <li className="agent">
-                <span className="name">Claude Code</span>
-                <span className="badge docs">built from docs, not live-tested</span>
-              </li>
-              <li className="agent">
-                <span className="name">Kiro</span>
-                <span className="badge docs">built from docs, not live-tested</span>
-              </li>
-              <li className="agent">
-                <span className="name">Codex</span>
-                <span className="badge docs">built from docs, not live-tested</span>
-              </li>
-            </ul>
-          </div>
-        </section>
 
         <section id="faq" className="lp-band" aria-labelledby="faq-title">
           <div className="lp-container lp-reveal">
@@ -669,6 +636,35 @@ export default function Landing() {
                   No — not for the values VaultShield moved. It reads the variable names and the
                   placeholder <code className="lp-code">vs_protected</code>. The real value is in the
                   macOS Keychain.
+                </div>
+              </details>
+              <details>
+                <summary>Which AI tools are supported?</summary>
+                <div className="answer">
+                  <p>
+                    Antigravity is the one tool we have tested end to end. For the others, the
+                    protection is written from each tool&rsquo;s documentation and has not been tested
+                    live yet.
+                  </p>
+                  <ul className="lp-tools">
+                    <li>
+                      <span className="lp-tool">Antigravity</span>
+                      <span className="lp-tag live">proven live</span>
+                    </li>
+                    <li>
+                      <span className="lp-tool">Claude Code</span>
+                      <span className="lp-tag docs">built from docs, not live-tested</span>
+                    </li>
+                    <li>
+                      <span className="lp-tool">Kiro</span>
+                      <span className="lp-tag docs">built from docs, not live-tested</span>
+                    </li>
+                    <li>
+                      <span className="lp-tool">Codex</span>
+                      <span className="lp-tag docs">built from docs, not live-tested</span>
+                    </li>
+                  </ul>
+                  <p>All of them on macOS only.</p>
                 </div>
               </details>
               <details>
