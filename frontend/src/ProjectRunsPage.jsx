@@ -198,7 +198,7 @@ export default function ProjectRunsPage() {
 
       {visible.length > 0 && (
         <div className="overflow-x-auto rounded-card-lg border border-border bg-surface shadow-soft">
-          <table className="w-full border-collapse text-left text-sm">
+          <table className="w-full min-w-[40rem] border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-border text-[11px] uppercase tracking-[0.12em] text-fg-muted">
                 <th scope="col" className="h-11 px-5 font-semibold">Run</th>
@@ -221,7 +221,7 @@ export default function ProjectRunsPage() {
                     <td className="px-5 py-2">
                       <Link
                         to={`runs/${encodeURIComponent(run?.run_id ?? '')}`}
-                        className="break-all font-mono text-sm font-medium text-accent-text underline-offset-4 hover:underline"
+                        className="whitespace-nowrap font-mono text-sm font-medium text-accent-text underline-offset-4 hover:underline"
                       >
                         {run?.run_id}
                       </Link>

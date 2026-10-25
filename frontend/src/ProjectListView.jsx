@@ -102,7 +102,7 @@ export function ProjectCard({ project, onSelect, selected = false }) {
           <span className="text-fg">{project?.name}</span>
         )}
       </h3>
-      <p className="mt-1 break-all font-mono text-[11px] leading-snug text-fg-muted">
+      <p className="mt-1 truncate font-mono text-[11px] leading-snug text-fg-muted" title={project?.repo_url}>
         {project?.repo_url}
       </p>
       {created !== '' && <p className="mt-2 text-[11px] text-fg-subtle">Created {created}</p>}
