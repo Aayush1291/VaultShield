@@ -206,6 +206,22 @@ def test_offsets_are_not_advanced_when_the_upload_fails(protect_project, home):
     assert [e["payload"] for e in events_posted(good)] == ["denied, will be resent"]
 
 
+def test_a_blank_violation_payload_is_neither_uploaded_nor_counted(protect_project, home):
+    write_violation(protect_project, "")
+    write_violation(protect_project, "antigravity shell denied: protected_path .env")
+    write_violation(protect_project, "   ")
+    with backend() as server:
+        outcome = sync_mod.perform(protect_project, "proj-abc", server.origin, TOKEN)
+    assert outcome.event_count == 1
+    assert [e["payload"] for e in events_posted(server)] == ["antigravity shell denied: protected_path .env"]
+
+    # Only blank lines: nothing new, so no Run is created at all.
+    write_violation(protect_project, "")
+    with backend() as again:
+        assert sync_mod.perform(protect_project, "proj-abc", again.origin, TOKEN).nothing is True
+    assert again.received == []
+
+
 def test_a_rejected_token_does_not_advance_offsets(protect_project, home):
     write_violation(protect_project, "denied")
     with backend(fail={"create": 401}) as server:

@@ -896,6 +896,13 @@ def test_run_reports_an_unreachable_backend_and_preserves_the_artifacts(monkeypa
         assert str(run_dir) in result.output
         assert event_log_path(run_dir).is_file()
         assert diff_path(run_dir).read_text() == '{"files": []}\n'
+        # The Run is marked failed (terminal) and no retry command exists, so
+        # the message says the work must be run again, not "upload again".
+        error = _error_line(result.output)
+        assert "the Run was marked failed on the backend" in error
+        assert f"artifacts preserved at {run_dir.resolve()}" in error
+        assert "the work must be run again" in error
+        assert "upload them again" not in result.output
 
 
 # --- Run registration, completion and the failed mark (Batch 2) ------------

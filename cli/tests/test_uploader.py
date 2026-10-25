@@ -1057,3 +1057,121 @@ def test_upload_events_best_effort_never_raises(tmp_path):
     assert uploader.upload_events_best_effort(
         "http://127.0.0.1:1", "tok", "20250614-091530-3f9a2b7c8d1e4f60", tmp_path / "none", scrub=str
     ) is None
+
+
+# --- blank payloads are never uploaded ----------------------------------------
+#
+# The real failure: a blank line in Antigravity's reply became an `output`
+# event with payload "" at index 2 of the first batch, and the backend answered
+# HTTP 400 {"2":{"payload":["This field may not be blank."]}}, failing the whole
+# upload. The ingest server below validates each batch the way the backend's
+# DRF CharField does (strip, then reject blank), so these tests would see that
+# 400 if a blank event were ever sent.
+
+
+def _rejecting_blank_payloads(box: dict) -> Callable[[int, str], tuple[int, bytes]]:
+    """A responder that answers 400 with DRF's per-index error for any events
+    batch holding a blank or whitespace-only payload, and 201 otherwise. `box`
+    carries the server, set once it exists, so the body can be inspected."""
+
+    def respond(index: int, path: str) -> tuple[int, bytes]:
+        if not path.endswith("/events/"):
+            return 201, b"{}"
+        batch = box["server"].received[index].json
+        errors = {
+            str(i): {"payload": ["This field may not be blank."]}
+            for i, event in enumerate(batch)
+            if str(event["payload"]).strip() == ""
+        }
+        if errors:
+            return 400, json.dumps(errors).encode()
+        return 201, b"{}"
+
+    return respond
+
+
+def _write_mixed_event_log(run_dir: Path, payloads: list[str]) -> list[dict]:
+    """`payloads` as `output` events in `<run_dir>/events.jsonl`, in order."""
+    events = [
+        {"event_type": "output", "timestamp": f"2026-10-25T19:05:{i:02d}+00:00", "payload": p}
+        for i, p in enumerate(payloads)
+    ]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    event_log_path(run_dir).write_text(
+        "".join(f"{json.dumps(event)}\n" for event in events), encoding="utf-8"
+    )
+    return events
+
+
+def test_upload_run_skips_blank_payload_events_and_keeps_the_order(
+    tmp_path: Path, capsys
+):
+    run_dir = tmp_path / "runs" / _RUN_ID
+    events = _write_mixed_event_log(
+        run_dir,
+        [
+            "created: /workspace/repo/hello3.txt",
+            "The file hello3.txt has been created containing:",
+            "",  # index 2, exactly like the real failure
+            "```text",
+            "   ",
+            "hello",
+            "\t\r",
+            "```",
+        ],
+    )
+    before = _snapshot(run_dir)
+    box: dict = {}
+
+    with _ingest_server(_rejecting_blank_payloads(box)) as server:
+        box["server"] = server
+        # Batches of 3, so order is shown to hold across batch boundaries.
+        upload_run(run_dir, _RUN_ID, server.origin, _TOKEN, batch_size=3)
+        batches = [request.json for request in server.received]
+
+    # Succeeded (no 400), and only the non-blank events arrived, in file order.
+    expected = [event for event in events if event["payload"].strip()]
+    assert [event for batch in batches for event in batch] == expected
+    assert [len(batch) for batch in batches] == [3, 2]
+    # One note for the upload.
+    assert capsys.readouterr().out.count("Skipped 3 blank events (nothing to show).") == 1
+    # events.jsonl on disk is untouched.
+    assert _snapshot(run_dir) == before
+
+
+def test_upload_run_with_only_blank_events_uploads_nothing_and_does_not_fail(
+    tmp_path: Path, capsys
+):
+    run_dir = tmp_path / "runs" / _RUN_ID
+    _write_mixed_event_log(run_dir, ["", "  ", "\r"])
+    box: dict = {}
+
+    with _ingest_server(_rejecting_blank_payloads(box)) as server:
+        box["server"] = server
+        upload_run(run_dir, _RUN_ID, server.origin, _TOKEN)
+        received = list(server.received)
+
+    assert received == []
+    assert "Skipped 3 blank events (nothing to show)." in capsys.readouterr().out
+
+
+def test_upload_events_best_effort_also_skips_blank_payload_events(
+    tmp_path: Path, capsys
+):
+    run_dir = tmp_path / "runs" / _RUN_ID
+    _write_mixed_event_log(run_dir, ["egress violation: CONNECT x:443 denied", "", "ok"])
+    box: dict = {}
+
+    with _ingest_server(_rejecting_blank_payloads(box)) as server:
+        box["server"] = server
+        warning = uploader.upload_events_best_effort(
+            server.origin, _TOKEN, _RUN_ID, run_dir, scrub=str
+        )
+        batches = [request.json for request in server.received]
+
+    assert warning is None
+    assert [e["payload"] for batch in batches for e in batch] == [
+        "egress violation: CONNECT x:443 denied",
+        "ok",
+    ]
+    assert "Skipped 1 blank event (nothing to show)." in capsys.readouterr().out
