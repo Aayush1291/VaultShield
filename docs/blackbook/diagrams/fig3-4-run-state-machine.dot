@@ -1,0 +1,33 @@
+// Figure 3.4: run status state machine.
+// Drawn at print size: the page text block is 6.27 in wide, so fonts here are
+// the sizes that appear on paper.
+digraph RunStates {
+    graph [rankdir=TB, nodesep=0.55, ranksep=0.55, pad=0.15, bgcolor=white,
+           fontname="Helvetica"];
+    node  [shape=box, style="rounded,filled", fillcolor="#f2f2f2", color="#333333",
+           penwidth=1.4, fontname="Helvetica", fontsize=15, margin="0.22,0.12"];
+    edge  [color="#333333", penwidth=1.3, arrowsize=0.9, fontname="Helvetica",
+           fontsize=13];
+
+    start [shape=circle, label="", width=0.28, style=filled, fillcolor="#222222"];
+    stop  [shape=doublecircle, label="", width=0.22, style=filled, fillcolor="#222222"];
+
+    running        [label="running"];
+    awaiting       [label="awaiting_review"];
+    approved       [label="approved"];
+    rejected       [label="rejected"];
+    failed         [label="failed"];
+    submitted      [label="approved\npr_url recorded", style="rounded,filled,dashed"];
+
+    start    -> running   [label="  vaultshield run\l  registers the run\l"];
+    running  -> awaiting  [label="  evidence\l  uploaded\l"];
+    running  -> failed    [label="  any error\l"];
+    awaiting -> approved  [label="  reviewer\l  approves\l"];
+    awaiting -> rejected  [label="  reviewer\l  rejects\l"];
+    approved -> submitted [label="  vaultshield submit\l  opens the PR\l"];
+    rejected -> stop      [label="  teardown deletes\l  the run branch\l"];
+    submitted -> stop;
+    failed   -> stop;
+
+    { rank=same; approved; rejected; failed; }
+}

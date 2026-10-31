@@ -1,0 +1,19 @@
+flowchart TB
+    subgraph R1[" "]
+        direction LR
+        A["Prompt + repo URL<br/>+ agent"] --> B["vaultshield run<br/>(host CLI)"] --> C["Disposable Docker sandbox<br/>fresh clone + dummy<br/>.env.sandbox"]
+    end
+    subgraph R2[" "]
+        direction RL
+        D["Monitored agent execution<br/>PTY + file watch<br/>+ egress log"] --> E["Trusted capture helper<br/>branch + diff.json"] --> F["Backend + MongoDB<br/>status: awaiting_review"]
+    end
+    subgraph R3[" "]
+        direction LR
+        G{"Human reviewer<br/>(dashboard)"} -->|"approve"| H["vaultshield submit<br/>opens PR / MR"]
+        G -->|"reject"| I["vaultshield teardown<br/>deletes run branch"]
+    end
+    R1 --> R2
+    R2 --> R3
+    style R1 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R2 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R3 fill:none,stroke:#bbb,stroke-dasharray:6 4

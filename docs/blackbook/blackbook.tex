@@ -1,0 +1,1700 @@
+\documentclass[12pt,a4paper,oneside]{report}
+\usepackage[a4paper,left=1in,right=1in,top=1in,bottom=1in]{geometry}
+% pdfLaTeX-compatible font setup (Latin Modern, close to Computer Modern)
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{textcomp}
+\usepackage{tfrupee}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{pdflscape}
+\usepackage{caption}
+\usepackage{booktabs}
+% BlackBook grid-table formatting: uniform padding and single-weight rules throughout.
+% Ordinary table header cells remain regular weight; only cost-section tables 4.6--4.10 use bold headers.
+% Longtable data rows already end with \hline, so the last-foot rule is
+% intentionally empty to prevent a doubled/heavier bottom border.
+\renewcommand{\toprule}{\hline}
+\renewcommand{\midrule}{\hline}
+\renewcommand{\bottomrule}{}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{calc}
+\providecommand{\real}[1]{#1}
+\usepackage{multirow}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{newunicodechar}
+\newunicodechar{≥}{\ensuremath{\geq}}
+\newunicodechar{≠}{\ensuremath{\neq}}
+% pdfLaTeX's utf8 input encoding already maps these characters, so they are
+% only defined here for XeLaTeX/LuaLaTeX builds.
+\usepackage{iftex}
+\ifPDFTeX\else
+  \newunicodechar{→}{\ensuremath{\rightarrow}}
+  \newunicodechar{←}{\ensuremath{\leftarrow}}
+  \newunicodechar{×}{\ensuremath{\times}}
+  \newunicodechar{…}{\ldots}
+  \newunicodechar{–}{--}
+  \newunicodechar{—}{---}
+  \newunicodechar{’}{'}
+  \newunicodechar{“}{``}
+  \newunicodechar{”}{''}
+  \newunicodechar{«}{\guillemotleft}
+  \newunicodechar{»}{\guillemotright}
+\fi
+% Rupee symbol is provided by tfrupee (command: \rupee).
+\usepackage{listings}
+\usepackage{chngcntr}
+\usepackage{titlesec}
+\usepackage{needspace}
+\usepackage[hidelinks,unicode]{hyperref}
+\usepackage{bookmark}
+\counterwithin{figure}{chapter}
+\counterwithin{table}{chapter}
+\setlength{\parindent}{1.5em}
+\setlength{\parskip}{0pt}
+\setlength{\emergencystretch}{3em}
+\renewcommand{\arraystretch}{1.18}
+\setlength{\arrayrulewidth}{0.4pt}
+\setlength{\extrarowheight}{2pt}
+\setlength{\tabcolsep}{5pt}
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{3}
+\titleformat{\chapter}[display]
+  {\normalfont\bfseries\Huge}
+  {\chaptername\ \thechapter}
+  {0.6em}
+  {\Huge}
+\titlespacing*{\chapter}{0pt}{-0.2in}{1.6em}
+\titleformat{\section}{\normalfont\bfseries\Large}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\normalfont\bfseries\large}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalfont\bfseries\normalsize}{\thesubsubsection}{0.8em}{}
+\captionsetup[table]{position=top,skip=6pt}
+% Equal space above and below every table caption:
+\newcommand{\TableCapGap}{6pt}
+\setlength{\LTpre}{0pt}
+\setlength{\LTpost}{0pt}
+\setlength{\intextsep}{\TableCapGap}
+\captionsetup{font=small,labelfont=bf,justification=centering,hypcap=false,skip=6pt}
+\pagestyle{plain}
+\setlist[itemize]{leftmargin=2em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=2em,itemsep=2pt,topsep=3pt}
+\lstdefinelanguage{Mermaid}{
+  morekeywords={flowchart,sequenceDiagram,classDiagram,stateDiagram-v2,gantt,xychart-beta,pie,subgraph,end,participant,Note,alt,else,opt,loop,par,and,rect,autonumber},
+  sensitive=true
+}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  columns=fullflexible,
+  breaklines=true,
+  breakatwhitespace=false,
+  keepspaces=true,
+  showstringspaces=false,
+  tabsize=2,
+  frame=single,
+  rulecolor=\color{black!35},
+  xleftmargin=0.5em,
+  framexleftmargin=0.25em,
+  aboveskip=0.7\baselineskip,
+  belowskip=0.7\baselineskip,
+  literate={→}{{$\rightarrow$}}1 {←}{{$\leftarrow$}}1 {–}{{--}}1 {—}{{---}}1 {’}{{'}}1 {“}{{``}}1 {”}{{''}}1 {…}{{\ldots}}1 {×}{{$\times$}}1 {«}{{\guillemotleft}}1 {»}{{\guillemotright}}1 {≠}{{$\neq$}}1 {≥}{{$\geq$}}1
+}
+\renewcommand{\arraystretch}{1.18}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\providecommand{\passthrough}[1]{#1}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+% Display the supplied graphic when available; otherwise keep the report compilable
+% and show a labeled placeholder until the original file is uploaded to Overleaf.
+\newcommand{\SafeIncludeGraphics}[2][]{%
+  \IfFileExists{#2}{\includegraphics[#1]{#2}}{%
+    \par\noindent\begingroup\setlength{\fboxsep}{7pt}%
+    \fbox{\begin{minipage}[c][0.15\textheight][c]{0.80\linewidth}
+      \centering\textbf{Figure asset not found}\par\smallskip
+      \texttt{\detokenize{#2}}\par\smallskip
+      Upload this image file to the Overleaf project to display it.
+    \end{minipage}}%
+    \endgroup
+  }%
+}
+
+% A wide diagram on its own portrait page, rotated 90 degrees so it fills the
+% page. The page stays portrait; only the image and its caption are turned.
+\newcommand{\RotatedFigure}[3]{%
+  \clearpage
+  \begin{figure}[p]
+    \centering
+    \rotatebox{90}{%
+      \begin{minipage}{0.92\textheight}
+        \centering
+        \SafeIncludeGraphics[width=\linewidth,height=0.92\textwidth,keepaspectratio]{#1}%
+        \par\medskip
+        \captionof{figure}{#2}\label{#3}
+      \end{minipage}%
+    }%
+  \end{figure}
+  \clearpage
+}
+
+% A tall diagram on its own portrait page, filling the page height.
+\newcommand{\TallFigure}[3]{%
+  \clearpage
+  \begin{figure}[p]
+    \centering
+    \SafeIncludeGraphics[width=\textwidth,height=0.9\textheight,keepaspectratio]{#1}%
+    \par\medskip
+    \captionof{figure}{#2}\label{#3}
+  \end{figure}
+  \clearpage
+}
+
+% Float placement: let large diagrams sit at the top of a text page and
+% let text fill the remaining space instead of leaving blank pages.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.8}
+\setcounter{topnumber}{2}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}
+
+\begin{document}
+\pagenumbering{roman}
+\setcounter{page}{1}
+\begin{titlepage}
+\thispagestyle{empty}
+\centering
+\vspace*{0.55in}
+{\normalsize A Project Report on\par}
+\vspace{0.12in}
+{\Large\bfseries VaultShield: Sandboxed, Monitored Execution\\\par}
+{\Large\bfseries and Human Review for AI Coding Agents\par}
+\vspace{0.38in}
+{\normalsize Submitted in partial fulfillment of the requirements for the award\\ of the degree of\par}
+\vspace{0.34in}
+{\large\bfseries Bachelor of Engineering\par}
+\vspace{0.12in}
+{\normalsize in\par}
+\vspace{0.12in}
+{\large\bfseries Computer Science and Engineering (Data Science)\par}
+\vspace{0.30in}
+{\normalsize by\par}
+\vspace{0.12in}
+{\large\bfseries
+Aayush Subhash Balip (24207010)\\
+Krish Mahesh Patil (24207006)\\
+Muhammad Anis Momin (24207008)\\
+Sameer Hasan Saiyed (24207014)\par}
+\vspace{0.36in}
+{\normalsize Under the Guidance of\par}
+\vspace{0.08in}
+{\large\bfseries Prof. Rajashri Chaudhari\\ Prof. Hardiki Achrekar\par}
+\vfill
+% Institute logo: upload it to the Overleaf project as img-000.jpg.
+\IfFileExists{img-000.jpg}{\SafeIncludeGraphics[width=1.65in]{img-000.jpg}\par}{}
+\vspace{0.16in}
+{\large\bfseries Computer Science and Engineering (Data Science)\par}
+{\normalsize A.P. Shah Institute of Technology\par}
+{\normalsize G.B. Road, Kasarvadavali, Thane (W) -- 400615\par}
+{\normalsize UNIVERSITY OF MUMBAI\par}
+\vspace{0.08in}
+{\normalsize\bfseries Academic Year 2026--2027\par}
+\end{titlepage}
+
+% ------------------------------------------------------------------
+% APPROVAL SHEET — layout follows the NirmalSagar BlackBook template.
+% Keep the approval paragraph justified/left aligned; signature blocks
+% are two unboxed columns; the HOD appears centered below them.
+% ------------------------------------------------------------------
+\thispagestyle{empty}
+\vspace*{0.55in}
+\begin{center}\large\bfseries Approval Sheet\end{center}
+\vspace{0.35in}
+\noindent This Project Report entitled \textbf{\textit{VaultShield: Sandboxed, Monitored Execution and Human Review for AI Coding Agents}} submitted by \textbf{Aayush Subhash Balip} (24207010), \textbf{Krish Mahesh Patil} (24207006), \textbf{Muhammad Anis Momin} (24207008), and \textbf{Sameer Hasan Saiyed} (24207014) is approved for the partial fulfillment of the requirement for the award of the degree of \textbf{Bachelor of Engineering in Computer Science and Engineering (Data Science)} from \textbf{University of Mumbai}.\par
+
+\vspace{0.95in}
+\noindent\begin{tabularx}{\textwidth}{>{\centering\arraybackslash}X >{\centering\arraybackslash}X}
+Prof. Rajashri Chaudhari & Prof. Hardiki Achrekar\\[0.08in]
+Guide & Co-Guide
+\end{tabularx}
+
+\vspace{1.15in}
+\begin{center}
+Dr. Pravin Adivarekar\\[0.08in]
+HOD, Computer Science and Engineering (Data Science)
+\end{center}
+\vfill
+\noindent Place: A.P. Shah Institute of Technology, Thane\\[0.15in]
+Date:
+\clearpage
+
+% ------------------------------------------------------------------
+% CERTIFICATE — two unboxed signature columns, HOD/Principal below,
+% and unboxed examiner entries as in the NirmalSagar template.
+% ------------------------------------------------------------------
+\thispagestyle{empty}
+\vspace*{0.55in}
+\begin{center}\large\bfseries CERTIFICATE\end{center}
+\vspace{0.35in}
+\noindent This is to certify that the project entitled \textbf{\textit{VaultShield: Sandboxed, Monitored Execution and Human Review for AI Coding Agents}} submitted by \textbf{Aayush Subhash Balip} (24207010), \textbf{Krish Mahesh Patil} (24207006), \textbf{Muhammad Anis Momin} (24207008), and \textbf{Sameer Hasan Saiyed} (24207014) for the partial fulfillment of the requirement for award of a degree of \textbf{Bachelor of Engineering in Computer Science and Engineering (Data Science)} to the University of Mumbai, is a bonafide work carried out during academic year 2026--2027.\par
+
+\vspace{0.78in}
+\noindent\begin{tabularx}{\textwidth}{>{\centering\arraybackslash}X >{\centering\arraybackslash}X}
+\textbf{Prof. Rajashri Chaudhari} & \textbf{Prof. Hardiki Achrekar}\\[0.08in]
+Guide & Co-Guide
+\end{tabularx}
+
+\vspace{0.95in}
+\noindent\begin{tabularx}{\textwidth}{>{\centering\arraybackslash}X >{\centering\arraybackslash}X}
+\textbf{Dr. Pravin Adivarekar} & \textbf{Dr. Uttam D. Kolekar}\\[0.08in]
+HOD, C.S.E (Data Science) & Principal
+\end{tabularx}
+
+\vspace{0.72in}
+\noindent\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+External Examiner(s) & Internal Examiner(s)\\[0.20in]
+1. & 1.\\[0.34in]
+2. & 2.
+\end{tabularx}
+
+\vfill
+\noindent Place: A.P. Shah Institute of Technology, Thane\\[0.15in]
+Date:
+\clearpage
+
+\thispagestyle{empty}
+\vspace*{0.55in}
+\begin{center}\large\bfseries Acknowledgement\end{center}
+\vspace{0.55in}
+We express our sincere gratitude to our project guide, \textbf{Prof. Rajashri Chaudhari}, for the constant guidance, encouragement and critical feedback provided throughout this project. The guide's insistence on precision, both in engineering and in stating the limits of what had been built, shaped the security model at the heart of this work.
+
+We are equally grateful to our co-guide, \textbf{Prof. Hardiki Achrekar}, for valuable suggestions on system design and evaluation, and for the time spent reviewing our progress at every stage.
+
+We thank \textbf{Dr. Pravin Adivarekar}, Head of the Department of Computer Science and Engineering (Data Science), for providing the facilities and the supportive environment that made this project possible, and \textbf{Dr. Uttam D. Kolekar}, Principal, A. P. Shah Institute of Technology, for the institutional support extended to us.
+
+We also thank the project coordinators for organising the reviews and keeping us on schedule, and all the teaching and non-teaching staff of the department for their help throughout the academic year.
+
+Finally, we thank our colleagues and friends for their feedback on the dashboard and the documentation, and our families for their patience and encouragement.
+
+\vspace{0.45in}
+\begin{flushleft}
+\textbf{Aayush Subhash Balip}\\(24207010)\\[0.15in]
+\textbf{Krish Mahesh Patil}\\(24207006)\\[0.15in]
+\textbf{Muhammad Anis Momin}\\(24207008)\\[0.15in]
+\textbf{Sameer Hasan Saiyed}\\(24207014)
+\end{flushleft}
+\clearpage
+
+\thispagestyle{empty}
+\vspace*{0.55in}
+\begin{center}\large\bfseries Declaration\end{center}
+\vspace{0.35in}
+We declare that this written submission represents our ideas in our own words, and where others' ideas or words have been included, we have adequately cited and referenced the original sources. We also declare that we have adhered to all principles of academic honesty and integrity and have not misrepresented, fabricated or falsified any idea, data, fact or source in our submission. We understand that any violation of the above will be cause for disciplinary action by the Institute and can also evoke penal action from the sources which have thus not been properly cited or from whom proper permission has not been taken when needed.
+
+\vspace{0.5in}
+\begin{flushright}
+(Signature)\\ Aayush Subhash Balip (24207010)\\[0.28in]
+(Signature)\\ Krish Mahesh Patil (24207006)\\[0.28in]
+(Signature)\\ Muhammad Anis Momin (24207008)\\[0.28in]
+(Signature)\\ Sameer Hasan Saiyed (24207014)
+\end{flushright}
+\vfill
+Date: 
+\clearpage
+
+\thispagestyle{empty}
+\vspace*{1.60in}
+\begin{center}{\large\bfseries Abstract}\end{center}
+\vspace{0.20in}
+AI coding agents now read repositories, edit many files and execute shell commands with little human intervention. Run directly on a developer's machine, such an agent inherits the developer's privileges: it can read real secrets, write anywhere, contact any host and leave unreviewed changes in version control. Current tooling conflates running an agent with trusting its output. This project presents VaultShield, a pipeline that separates the two. VaultShield runs the agent in a disposable Docker container holding a fresh clone of the repository and a read-only credential file whose values mirror the shape of the developer's \texttt{.env} but contain no real secret; a repository-host token, when needed, is confined to the single \texttt{git clone} process. Terminal output, in-container file changes and policy violations are merged into a timestamped JSON Lines event log. Writes to off-limits paths fail the run, and an optional egress policy routes traffic through a hardened proxy that blocks and records non-allowlisted hosts. A separate hardened helper container then rebuilds the repository from a pre-agent base and commits the change to a dedicated branch with a structured diff, so the agent cannot falsify the evidence. Artifacts are uploaded to a Django REST Framework backend on MongoDB, scanned asynchronously, and approved or rejected by a reviewer in a React dashboard. Only an approved run can become a pull or merge request. The system comprises about 18,100 logical lines of product code. Of 2,704 automated tests, including Docker-backed isolation, egress, token-hygiene and tamper-resistance tests and concurrency tests against a real MongoDB replica set, 2,702 passed. In a 40-run benchmark, VaultShield added 1.17 seconds of fixed overhead per run by default and 1.98 seconds with egress allowlisting, a projected 0.4--0.7\% of a five-minute agent session; the host checkout was untouched and the change was captured in every run, with no container or network left behind. The evaluation also exposed limits: the shared-kernel boundary of containers, opt-in egress control, a polling file watcher that missed 20\% of very short writes, and an approval gate that is a workflow control rather than a separation-of-duties control in the single-user MVP. VaultShield shows that containment, evidence and human review for coding agents can be delivered together at negligible cost, with every residual risk stated explicitly.
+
+\vspace{0.15in}
+\noindent\textbf{Keywords:} AI coding agents, sandboxing, Docker, human-in-the-loop review, audit logging, credential isolation, egress control, software supply-chain security.
+\clearpage
+
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+\clearpage
+
+\chapter*{List of Abbreviations}\label{list-of-abbreviations}
+\begin{longtable}{@{}p{1.1in}@{}p{0.25in}@{}p{4.9in}@{}}
+AA &: & Level AA conformance of the Web Content Accessibility Guidelines \\[2pt]
+ACI &: & Agent-Computer Interface \\[2pt]
+API &: & Application Programming Interface \\[2pt]
+ASGI &: & Asynchronous Server Gateway Interface \\[2pt]
+CI/CD &: & Continuous Integration / Continuous Delivery \\[2pt]
+CLI &: & Command-Line Interface \\[2pt]
+COCOMO &: & Constructive Cost Model \\[2pt]
+CORS &: & Cross-Origin Resource Sharing \\[2pt]
+CPU &: & Central Processing Unit \\[2pt]
+CWE &: & Common Weakness Enumeration \\[2pt]
+DNS &: & Domain Name System \\[2pt]
+DRF &: & Django REST Framework \\[2pt]
+HTTP &: & Hypertext Transfer Protocol \\[2pt]
+HTTPS &: & Hypertext Transfer Protocol Secure \\[2pt]
+IDE &: & Integrated Development Environment \\[2pt]
+IP &: & Internet Protocol \\[2pt]
+JSON &: & JavaScript Object Notation \\[2pt]
+JSONL &: & JSON Lines \\[2pt]
+KLOC &: & Thousand Lines of Code \\[2pt]
+LLM &: & Large Language Model \\[2pt]
+LM &: & Language Model \\[2pt]
+MR &: & Merge Request \\[2pt]
+MVP &: & Minimum Viable Product \\[2pt]
+OAuth &: & Open Authorization \\[2pt]
+OCR &: & Optical Character Recognition \\[2pt]
+PM &: & Person-Month \\[2pt]
+PR &: & Pull Request \\[2pt]
+PTY &: & Pseudo-Terminal \\[2pt]
+RBAC &: & Role-Based Access Control \\[2pt]
+REST &: & Representational State Transfer \\[2pt]
+SHA &: & Secure Hash Algorithm \\[2pt]
+SLOC &: & Source Lines of Code \\[2pt]
+SNI &: & Server Name Indication \\[2pt]
+SPA &: & Single-Page Application \\[2pt]
+SQL &: & Structured Query Language \\[2pt]
+STRIDE &: & Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege \\[2pt]
+TLS &: & Transport Layer Security \\[2pt]
+TTL &: & Time To Live \\[2pt]
+UI &: & User Interface \\[2pt]
+UML &: & Unified Modeling Language \\[2pt]
+URL &: & Uniform Resource Locator \\[2pt]
+UTC &: & Coordinated Universal Time \\[2pt]
+VCS &: & Version Control System \\[2pt]
+VM &: & Virtual Machine \\[2pt]
+WCAG &: & Web Content Accessibility Guidelines \\[2pt]
+WSGI &: & Web Server Gateway Interface \\[2pt]
+\end{longtable}
+
+\clearpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\chapter{Introduction}\label{introduction}
+
+Large Language Models trained on source code have moved from completing a single line to operating as autonomous coding agents that read a repository, plan a change, edit many files, run shell commands and iterate on test results with little human intervention. Tools such as OpenAI Codex CLI, Google Antigravity, Amazon's Kiro and Anthropic's Claude Code expose this capability directly in the developer's terminal or editor, and research systems such as SWE-agent \cite{ref3} and OpenHands \cite{ref4} resolve a meaningful fraction of real GitHub issues from benchmarks like SWE-bench \cite{ref2}.
+
+The same capability makes coding agents hazardous. An agent is an ordinary process that runs with the privileges of the user who launched it. On a developer's workstation it can read every secret in the shell environment and in nearby .env files, write anywhere the user can write, run commands the prompt never asked for, contact arbitrary hosts and leave changes in version control before anyone has examined them. Prior work shows that LLM-generated code is often insecure \cite{ref8}, that LLM-integrated applications can be hijacked through indirect prompt injection \cite{ref7}, and that even carefully aligned agents take risky actions in a non-trivial fraction of high-stakes scenarios \cite{ref5}. Governance guidance recommends constraining an agent's action space, requiring human approval for consequential actions and making agent activity legible \cite{ref9}, \cite{ref10}, but these recommendations are rarely packaged as a pipeline a developer can run against an existing repository.
+
+VaultShield addresses that gap. It runs an AI coding agent inside a disposable Docker container, records what the agent does, captures the resulting code changes as a reviewable Git diff on a dedicated branch, and holds those changes behind an explicit human approval step before they can become a pull request or merge request. The developer's working tree, real credentials and repository write access are never handed to the agent. The system consists of a Python command-line interface that orchestrates the sandboxed run, a per-run Docker execution plane, and a Django REST Framework backend with a React dashboard where a reviewer approves or rejects the run. Producing evidence therefore never implies accepting it.
+
+\section{Motivation}\label{motivation}
+
+The first motivation is the asymmetry between the cost of an agent mistake and the cost of preventing it. An agent that deletes the wrong directory or commits a hard-coded key can cost hours of recovery, or far more if credentials leak, while running the same agent in a throwaway container costs about 1.2 seconds of fixed overhead per run on the evaluation machine.
+
+The second motivation is credential exposure. Applications keep database strings, API keys and session secrets in a local .env file inside the very repository the agent is asked to modify. A preliminary spike in this project confirmed the risk: with no protection, a production coding agent asked to reveal a value from .env read the file with its built-in tool and printed both test secrets. Agent-specific deny rules reduced but did not remove the exposure, and only keeping the real value off disk proved reliable.
+
+The third motivation is reviewability. Code review is the primary quality-control mechanism of modern software engineering \cite{ref14}, yet agent output often bypasses the pull-request workflow because it lands directly in the working tree. Capturing agent output on a dedicated branch, together with a timestamped event log and screenshots, lets a reviewer apply the same review process to agent changes and leaves a durable audit trail.
+
+The fourth motivation is honest security engineering. Container isolation shares the host kernel and is not equivalent to a virtual machine boundary \cite{ref11}, \cite{ref12}, \cite{ref13}. VaultShield therefore states which controls it implements and which risks remain, so that adopters can judge where it fits in their own threat model.
+
+\section{Problem Statement}\label{problem-statement}
+
+Given a Git repository, a natural-language prompt and an AI coding agent, the problem is to let the agent attempt the requested change while guaranteeing that it never executes against the developer's real working tree, real application secrets or repository-host credentials; that everything it does is recorded as reviewable evidence; that its change is captured in a form it could not have tampered with; and that no change reaches a shared branch or pull request without an explicit human approval decision.
+
+The agent must still be able to work, so it needs a real repository, a functioning toolchain and sometimes its own model API credential. The application must be able to start inside the sandbox for screenshots, so configuration values must keep their structural shape even though their content is fake. Every container, network and temporary branch must be removed on every exit path, and the pipeline overhead must stay small compared with typical agent run times.
+
+\section{Objectives}\label{objectives}
+
+The project set out to achieve the following objectives.
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Develop a universal AI agent execution platform compatible with multiple AI coding agents and development environments through a common CLI interface.
+\item
+  Implement an intelligent Agentic AI Orchestrator that understands project context, asks clarification questions before execution, and provides enriched context to AI agents to improve accuracy and reduce hallucinations.
+\item
+  Ensure secure AI-assisted software development by executing AI agents inside isolated Docker-based sandbox environments while protecting production credentials and resources.
+\item
+  Provide comprehensive monitoring and automated security analysis by capturing AI activities, execution logs, code changes, and identifying security vulnerabilities or unsafe operations.
+\item
+  Enable transparent governance and human approval through a web-based dashboard that allows developers to review, verify, approve, or reject AI-generated changes before deployment.
+\end{enumerate}
+
+\section{Scope}\label{scope}
+
+The scope of the VaultShield project covers the sandboxed execution, monitoring and human review of AI coding agents working on a Git repository.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Command-Line Interface:} the vaultshield CLI with the init, login, run, submit and teardown commands and the supporting ask and protect command groups.
+\item
+  \textbf{Sandboxed Execution:} a per-run Docker sandbox with a fresh clone, a read-only dummy credential file and guaranteed teardown.
+\item
+  \textbf{Agent Adapters:} the mock, codex, kiro and antigravity agents behind a common adapter interface.
+\item
+  \textbf{Monitoring and Egress Control:} terminal capture, in-container file watching, off-limits paths, a JSON Lines event log and an optional egress policy enforced by a hardened proxy.
+\item
+  \textbf{Trusted Change Capture:} the run branch and structured diff built in a separate hardened helper container, with run outputs scanned for leaked credentials.
+\item
+  \textbf{Backend, Dashboard and Submission:} a Django REST Framework backend on MongoDB with the run state machine and Celery-based scanning, a React review dashboard, and pull or merge request submission to GitHub or GitLab for approved runs.
+\end{itemize}
+
+The following are outside the scope of the project:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Stronger Isolation and Hosted Execution:} virtual-machine-grade isolation and running the CLI as a hosted service; container escape is a documented residual risk.
+\item
+  \textbf{Behavioural Judgement:} automatic analysis of agent intent, content-level network filtering and detection of deliberately encoded exfiltration.
+\item
+  \textbf{Multi-User Operation:} multi-tenant operation, role-based access control and separate runner and reviewer identities.
+\item
+  \textbf{Other Integrations:} live output streaming, other repository hosts, automatic merging and CI/CD pipeline integration.
+\end{itemize}
+
+The minimum viable product is scoped to a single developer's machine, so the approval gate is a workflow control within one trust domain rather than a security boundary between mutually distrustful parties.
+
+\clearpage
+
+\chapter{Literature Review}\label{literature-review}
+
+The literature relevant to VaultShield falls into five strands: coding agents and their evaluation, the risks of LLM agents and generated code, governance of agentic systems, isolation technologies, and human code review.
+
+Coding agents and sandboxes. Chen et al.~\cite{ref1} introduced Codex and the HumanEval benchmark and ran model-generated programs inside a gVisor-based sandbox, establishing early that model output must be treated as untrusted code. Jimenez et al.~\cite{ref2} moved evaluation to whole repositories with SWE-bench, 2,294 tasks from real GitHub issues, on which the best model of the time resolved fewer than 2\%. Yang et al.~\cite{ref3} showed with SWE-agent that a purpose-built agent-computer interface raises this to 12.5\%, executing inside a Docker container, and Wang et al.~\cite{ref4} presented OpenHands, whose agents act through a sandboxed Docker runtime that records every action in an event stream. These systems validate containers as the execution environment and a chronological action log as the unit of observability, but their sandboxes exist for capability: none holds the patch for human approval or keeps the developer's real secrets out of the workspace.
+
+Risks of agents and generated code. Ruan et al.~\cite{ref5} red-teamed agents in an LM-emulated sandbox and found risky failures in 23.9\% of cases even for the safest agent. Debenedetti et al.~\cite{ref6} built AgentDojo to measure prompt-injection attacks and defences, and Greshake et al.~\cite{ref7} showed that instructions planted in retrieved data can take control of LLM-integrated applications. Pearce et al.~\cite{ref8} found that about 40\% of programs generated by GitHub Copilot for security-relevant scenarios contained vulnerabilities. These works characterise the threat but do not provide an operational containment and review pipeline.
+
+Governance and visibility. Shavit et al.~\cite{ref9} recommend constraining the action space, requiring human approval for high-impact actions, making agent activity legible and keeping systems interruptible, and Chan et al.~\cite{ref10} argue that oversight requires agent identifiers, real-time monitoring and activity logs. VaultShield implements several of these practices for coding agents: the run identifier names the sandbox, branch, run directory and backend record; the event log, egress log and screenshots form the activity log; and the approval state machine is the human-approval control.
+
+Isolation and review. Combe et al.~\cite{ref11} showed that Docker's security depends heavily on configuration because containers share the host kernel. Firecracker microVMs \cite{ref12} and the gVisor user-space kernel \cite{ref13} provide stronger boundaries at a cost in operational complexity or performance, so VaultShield uses Docker for its MVP and documents the escape risk. Bacchelli and Bird \cite{ref14} found that the main challenge for code reviewers is understanding the change and its context, which is why VaultShield shows the reviewer the agent's timeline, screenshots and automated findings alongside the diff.
+
+\section{Comparative Analysis of Recent Studies}\label{comparative-analysis-of-recent-studies}
+
+Table 2.1 compares the reviewed works and records the limitation of each that VaultShield addresses.
+
+\begingroup\small
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Comparative analysis of the reviewed literature}\label{tab:2-1}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3400}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4400}}|@{}}
+\hline
+Ref. & Approach & Limitation relative to this project \\
+\hline
+\endfirsthead
+\hline
+Ref. & Approach & Limitation relative to this project \\
+\hline
+\endhead
+\endlastfoot
+\cite{ref1} Chen et al., 2021 & Code LLM evaluated by running generated programs in a sandbox & Internal harness for short functions; no repository workflow, credential model or review \\\hline
+\cite{ref2} Jimenez et al., 2024 & Repository-level benchmark from real issues & Measures capability; patches are applied for scoring, not held for approval \\\hline
+\cite{ref3} Yang et al., 2024 & Agent with a purpose-built agent-computer interface in Docker & Container is a workspace, not a trust boundary; no secret substitution, egress control or review gate \\\hline
+\cite{ref4} Wang et al., 2025 & Open agent platform with an event stream and sandboxed runtime & Changes are not captured on a reviewable branch behind an approval state machine \\\hline
+\cite{ref5} Ruan et al., 2024 & LM-emulated sandbox for red-teaming agents & Emulation cannot contain a real agent acting on a real repository \\\hline
+\cite{ref6} Debenedetti et al., 2024 & Benchmark for prompt-injection attacks and defences & Evaluates attacks; offers no containment or audit pipeline \\\hline
+\cite{ref7} Greshake et al., 2023 & Indirect prompt injection via retrieved data & Characterises the threat; mitigation is left open \\\hline
+\cite{ref8} Pearce et al., 2022 & Security study of AI code suggestions & Studies suggestions, not agents that also execute commands \\\hline
+\cite{ref9} Shavit et al., 2023 & Governance practices for agentic AI & Technology-neutral; no implementation for coding agents \\\hline
+\cite{ref10} Chan et al., 2024 & Visibility measures for AI agents & Defines what to log, not how to capture tamper-resistant evidence \\\hline
+\cite{ref11} Combe et al., 2016 & Security analysis of Docker & Does not address agent credentials or review \\\hline
+\cite{ref12} Agache et al., 2020 & Firecracker microVM isolation & Requires KVM; not integrated with a review workflow \\\hline
+\cite{ref13} Young et al., 2019 & Performance study of gVisor & Quantifies isolation cost; is not an agent pipeline \\\hline
+\cite{ref14} Bacchelli \& Bird, 2013 & Empirical study of modern code review & Concerns human changes; agent changes need behavioural context \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\endgroup
+
+\section{Research Gap}\label{research-gap}
+
+The literature shows that coding agents can now make repository-scale changes \cite{ref2}, \cite{ref3}, \cite{ref4}, that their code and actions are risky in measurable ways \cite{ref5}, \cite{ref6}, \cite{ref7}, \cite{ref8}, that container security depends on configuration \cite{ref11}, \cite{ref12}, \cite{ref13}, and that governance research recommends human approval, legible logs and monitoring \cite{ref9}, \cite{ref10}. What is missing is a single developer-facing pipeline that combines these findings. No existing platform substitutes dummy values for the developer's secrets, keeps the repository-host token out of the agent's reach, builds the diff in a component the agent cannot tamper with, and holds the change behind an approval state machine before a pull request is opened. VaultShield fills this gap and states explicitly which risks remain.
+
+\clearpage
+
+\chapter{Project Design}\label{project-design}
+
+\section{Existing System}\label{existing-system}
+
+Developers currently run AI coding agents in one of three ways. The most common is raw local execution, where the agent's CLI or editor extension runs in the developer's own checkout with the developer's environment, permissions and network access, and its changes appear as uncommitted edits. Some products add permission prompts or per-tool deny rules, but these are product-specific and often relaxed by users who find repeated prompts tedious. The second practice is ad-hoc containerisation, which usually bind-mounts the real working tree, so every write still lands on the host and the real .env file travels into the container. The third, development containers and cloud workspaces, is designed for convenience rather than for constraining an untrusted actor and holds nothing for review. Figure 3.1 summarises this workflow.
+
+\begin{figure}[!htbp]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.45\textheight,keepaspectratio]{images/diagrams/fig3-1-existing-workflow.png}
+\par\medskip
+\captionof{figure}{Existing workflow – direct agent execution on the developer’s host}\label{fig:3-1}
+\end{figure}
+
+As Figure 3.1 shows, execution and acceptance are a single step and every arrow out of the agent touches a real asset. There is no isolation of side effects, no separation between the agent and the developer's secrets, no structured record of what happened, no enforced review before changes are committed, no automatic cleanup of processes the agent started, and no record of which hosts the agent contacted.
+
+\section{Proposed System}\label{proposed-system}
+
+VaultShield replaces this single step with a pipeline in which execution, evidence collection, storage and review are separate stages. The developer runs vaultshield run with an agent, a prompt and a repository URL. The CLI loads the project configuration, generates a run identifier, creates a per-run directory and registers the run with the backend before any container exists, so that later failures can be recorded. It then writes a dummy credential file that mirrors the shape of the developer's .env and resolves the agent adapter.
+
+The CLI then creates a Docker container, mounts only the dummy credential file, clones the repository inside the container and installs dependencies. If egress control is enabled, the sandbox is moved onto an internal network whose only peer is a filtering proxy. Before any agent code runs, the CLI records the pre-agent commit through the Docker API as a trusted base. The agent runs under a pseudo-terminal while an in-container watcher records file changes, and both streams are merged into a timestamped event log; configured routes are screenshotted with a headless browser. The sandbox is then killed, and a separate hardened capture helper rebuilds the repository from the trusted base and a filtered copy of the work tree, commits the agent's changes to a dedicated run branch and computes the structured diff. Outputs are scanned for the agent's own credentials, the sandbox is torn down and the artifacts are uploaded, moving the run to awaiting\_\allowbreak{}review. A reviewer inspects the evidence in the dashboard and approves or rejects the run, and only an approved run can be submitted as a pull or merge request. Figure 3.2 presents this pipeline.
+
+\begin{figure}[!htbp]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.45\textheight,keepaspectratio]{images/diagrams/fig3-2-proposed-pipeline.png}
+\par\medskip
+\captionof{figure}{Proposed VaultShield pipeline}\label{fig:3-2}
+\end{figure}
+
+Table 3.1 contrasts the proposed system with the existing practices.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Comparison of the existing system and the proposed system}\label{tab:3-1}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2400}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4400}}|@{}}
+\hline
+Concern & Existing practice & Proposed system \\
+\hline
+\endfirsthead
+\hline
+Concern & Existing practice & Proposed system \\
+\hline
+\endhead
+\endlastfoot
+Working tree & Real checkout, modified in place & Fresh clone inside the container; host tree never mounted \\\hline
+Secrets & Real .env readable by the agent & Shape-preserving dummy values in a read-only .env.sandbox \\\hline
+Repository token & Often visible to the agent & Given only to the single git clone process \\\hline
+Network & Unrestricted, unlogged & Optional allowlist through a hardened proxy, every decision logged \\\hline
+Evidence & Terminal scroll-back & Event log, egress log, screenshots and structured diff \\\hline
+Change capture & Uncommitted edits & One commit on a run branch built by a separate helper \\\hline
+Review & Optional and informal & Enforced state machine; PR only from approved \\\hline
+Cleanup & Manual & Guaranteed teardown and a scheduled reaper \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\section{Critical Components of System Architecture}\label{critical-components-of-system-architecture}
+
+The architecture has three planes: a host-side CLI pipeline, a per-run Docker execution plane, and a backend and dashboard review plane. The critical components are described below.
+
+\subsection{Sandbox and Container Manager}\label{sandbox-and-container-manager}
+
+The sandbox manager owns exactly one Docker container per run. It verifies that the credential file exists, creates a container named after the run, mounts the dummy credential file read-only, clones the repository inside the container and installs dependencies. The agent is executed through exec calls rather than as the container's main process, so the container's lifetime bounds every process the agent starts. For private repositories, the repository-host token is passed only as the environment of the single git clone process, so it never appears in the container's environment, the clone's Git configuration or any later process, and it is sent only to hosts on a strict per-provider allowlist. The Docker socket is never mounted.
+
+When egress control is enabled, the EgressGuard builds the per-run topology shown in Figure 3.3: an internal network with no gateway, an ordinary bridge, and a hardened proxy attached to both. The sandbox is moved onto the internal network before the agent runs, so its only reachable peer is the proxy, which checks every destination host against the allowlist and logs each decision.
+
+\begin{figure}[!htbp]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.4\textheight,keepaspectratio]{images/diagrams/fig3-3-egress-topology.png}
+\par\medskip
+\captionof{figure}{Per-run egress network topology}\label{fig:3-3}
+\end{figure}
+
+Any error during creation removes the partial container and raises a single SandboxError whose message never contains a token. Teardown force-removes the container and is called from a finally block, so it runs on success, failure, timeout and interruption alike.
+
+\subsection{Run Monitoring and Logging}\label{run-monitoring-and-logging}
+
+The monitor produces the run's event log, events.jsonl, in which each line records an event type, a timestamp and a payload. The three event types are terminal output from the agent's pseudo-terminal, file changes observed by an in-container watcher, and violations such as off-limits writes, egress denials and leaked credentials. Each changed path is checked against the project's off-limits paths, and a match fails the run only after the log has been written, so evidence always outlives the failure. Browser capture starts the application inside the sandbox and takes one screenshot per configured route. Token hygiene scans the diff, the event log and changed files for the agent's own credential bytes; a hit fails the run, quarantines the diff and scrubs uploaded payloads.
+
+\subsection{Diff Capture on a Dedicated Branch}\label{diff-capture-on-a-dedicated-branch}
+
+If the branch and diff were built inside the agent's own sandbox, a hostile agent could tamper with Git state to misrepresent its changes. VaultShield therefore reads the pre-agent commit through the Docker API before the agent runs, and after the agent finishes it kills the sandbox and extracts a filtered archive of the work tree. A fresh capture helper container with no network, no capabilities and no environment rebuilds the repository from the trusted base, refuses unsafe Git configuration, commits every change to the run branch as exactly one commit, and writes diff.json with per-file additions, deletions and size-capped patches. The branch is exported as a Git bundle because the helper is destroyed at the end of the run.
+
+\subsection{Review and Human Approval Service}\label{review-and-human-approval-service}
+
+The Run.status field is a state machine, shown in Figure 3.4. The CLI may move a run from running to awaiting\_\allowbreak{}review or failed, and the approve and reject endpoints change the status only if it is still awaiting\_\allowbreak{}review, inside a MongoDB transaction that also creates the Approval record. Of two concurrent decisions exactly one succeeds, and the other receives HTTP 409 with the run's actual status.
+
+\begin{figure}[!htbp]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.55\textheight,keepaspectratio]{images/diagrams/fig3-4-run-state-machine.png}
+\par\medskip
+\captionof{figure}{Run status state machine}\label{fig:3-4}
+\end{figure}
+
+vaultshield submit re-reads the run and refuses before any side effect unless its status is approved. For an approved run it checks that the current checkout matches the original repository, imports the branch from the verified bundle, pushes it without force, opens the pull or merge request and records its URL on the run. vaultshield teardown deletes the branch of a rejected run.
+
+\subsection{Backend API and Dashboard}\label{backend-api-and-dashboard}
+
+The backend is a Django 5.2 project with Django REST Framework and MongoDB as its system of record. Every API path except login requires token authentication. The CLI registers runs, uploads events, diffs and screenshots, and patches the status; the dashboard reads run details and records decisions. Celery workers with Redis run a static security scan over the added lines of each diff, reap orphaned sandboxes every 15 minutes and flag approved but unsubmitted runs. The dashboard is a React 19 application built with Vite 7 that shows a projects overview, a filterable run history and a run detail page with Diff, Timeline, Screenshots and Security tabs and the decision controls.
+
+\subsection{Supporting Modules: Protect and Orchestrate}\label{supporting-modules-protect-and-orchestrate}
+
+Protect covers agents that developers still run outside the sandbox: it moves every .env value into the macOS Keychain, leaves a placeholder in the file and injects the real values only into the application started through vaultshield exec. Orchestrate scans the project, asks clarifying questions through a Gemini model and produces an enriched agent prompt that is checked to contain no secret before the run is registered.
+
+Figure 3.5 shows all components and the data flows between them. The CLI is the only component that talks to the Docker daemon, the dummy credential file is the only host path mounted into the sandbox, artifacts reach the backend over authenticated HTTP, and the submit command is the only component that pushes to the repository host, after confirming approval with the backend.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.86\textheight,keepaspectratio]{images/diagrams/fig3-5-system-architecture.png}
+\par\medskip
+\captionof{figure}{Overall system architecture}\label{fig:3-5}
+\end{figure}
+
+\section{System Diagrams}\label{system-diagrams}
+
+System diagrams give a visual representation of the structure, behaviour and interactions of the proposed VaultShield system. The diagrams used are the UML Diagram, Activity Diagram, Use Case Diagram and Sequence Diagram.
+
+\Needspace{0.85\textheight}
+\subsection{UML Diagram}\label{uml-diagram}
+
+Figure 3.6 shows the persistent backend entities and the principal CLI-side classes. Run is the hub of the schema: RunEvent, Screenshot and SecurityFinding are many-per-run, while RunDiff and Approval are one-to-one, which makes ``a run has exactly one change set and at most one decision'' a schema-level guarantee. No backend field can store a repository-host token. On the CLI side, an AgentAdapter describes how its agent runs inside the Sandbox, the EgressGuard isolates the Sandbox's network, monitoring produces the RunEvent records, and the TrustedCapture helper produces the file entries stored in RunDiff.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{images/diagrams/fig3-6-class.png}
+\par\medskip
+\captionof{figure}{UML class diagram of the core backend entities and CLI classes}\label{fig:3-6}
+\end{figure}
+
+\Needspace{0.9\textheight}
+\subsection{Activity Diagram}\label{activity-diagram}
+
+Figure 3.7 traces a run from setup through review and submission, reading each row in the direction of its arrows. The run is registered before the sandbox is created, policy failures are recorded, teardown runs on every exit path, and reviewer approval is the only route to submission.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.82\textheight,keepaspectratio]{images/diagrams/fig3-7-activity.png}
+\par\medskip
+\captionof{figure}{Activity diagram of a VaultShield run, from agent kickoff to PR creation}\label{fig:3-7}
+\end{figure}
+
+\Needspace{0.5\textheight}
+\subsection{Use Case Diagram}\label{use-case-diagram}
+
+Figure 3.8 shows the VaultShield actors and their interactions. The Developer configures and executes sandboxed runs, then submits or tears them down. The Reviewer inspects run evidence and approves or rejects the run. The System actor represents scanning and cleanup by Celery workers, and the Repository host receives the pushed branch and pull request. Executing a run includes dummy-credential generation, monitoring, change capture and upload, and may be extended by egress enforcement and screenshot capture.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.72\textheight,keepaspectratio]{images/diagrams/fig3-8-use-case-diagram.png}
+\par\medskip
+\captionof{figure}{Use case diagram}\label{fig:3-8}
+\end{figure}
+
+\subsection{Sequence Diagram}\label{sequence-diagram}
+
+Figure 3.9 shows the message exchange for one approved run. Messages 1 to 9 cover the run, 10 and 11 the review, and 12 to 16 the submission. The backend learns of the run before Docker creates anything, the branch and diff are produced by a different container from the one the agent controlled, and submit re-reads the status immediately before pushing.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.74\textheight,keepaspectratio]{images/diagrams/fig3-9-sequence.png}
+\par\medskip
+\captionof{figure}{Sequence diagram of one complete approved run}\label{fig:3-9}
+\end{figure}
+
+\clearpage
+
+\chapter{Project Planning and Cost Estimation}\label{project-planning}
+
+\section{Project Development Methodology}\label{project-development-methodology}
+
+VaultShield was developed with an iterative and incremental methodology based on specification-driven development. The team first wrote a requirements specification in which every requirement carried numbered acceptance criteria, and a design document with the architecture, data model and numbered correctness properties. The design was split into small, testable tasks, and each short iteration implemented a slice of tasks together with unit and property-based tests and, where isolation was involved, a Docker-backed integration test. The major phases were:
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Problem Study and Feasibility Spike:} survey the literature and measure how a production agent handles .env secrets under four protection configurations.
+\item
+  \textbf{Requirements and System Design:} write numbered requirements and define the architecture, run lifecycle, data model, REST API and threat model.
+\item
+  \textbf{CLI Core and Evidence Capture:} implement configuration, credential shaping, the sandbox lifecycle, agent adapters, monitoring, screenshots and Git capture.
+\item
+  \textbf{Backend and Dashboard:} implement the models, REST API, authentication, security scan, scheduled tasks and the review dashboard.
+\item
+  \textbf{Submission and Hardening:} implement PR and MR submission and teardown, then add the egress proxy, the trusted capture helper and token hygiene.
+\item
+  \textbf{Migration and Supporting Modules:} move the backend to MongoDB with transactional approval, and add the Protect and Orchestrate modules.
+\item
+  \textbf{Evaluation and Documentation:} run the tests and performance benchmark and write this report.
+\end{enumerate}
+
+\section{Project Schedule and Gantt Chart}\label{project-schedule}
+
+The Semester VII activities follow the project Gantt chart, reproduced as Figure~5.16, and the Semester VIII activities are planned extensions. Table 4.1 lists each activity with its duration and target period.
+
+\begin{table}[H]
+\centering\small
+\caption{Planned project schedule for VaultShield}\label{tab:4-2}
+\begin{tabularx}{\textwidth}{|>{\centering\arraybackslash}p{0.35in}|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}p{0.85in}|>{\raggedright\arraybackslash}p{1.55in}|}\hline
+\textbf{Sr.} & \textbf{Project activity} & \textbf{Duration} & \textbf{Target period} \\\hline
+\multicolumn{4}{|l|}{\textbf{Semester VII}} \\\hline
+1 & Group formation and topic finalisation; identifying the scope and objectives of the project & 1 week & 10 Jul -- 17 Jul 2026 \\\hline
+2 & Discussing the project topic with the help of a paper prototype & 1 week & 17 Jul -- 24 Jul 2026 \\\hline
+3 & Identifying the functionalities of the project as per the objectives identified & 1 week & 24 Jul -- 31 Jul 2026 \\\hline
+4 & Literature review and research paper study & 1 week & 31 Jul -- 7 Aug 2026 \\\hline
+5 & Designing the graphical user interface & 3 weeks & 7 Aug -- 28 Aug 2026 \\\hline
+6 & Presentation I & 1 day & 4 Sep 2026 \\\hline
+7 & Policy logic development & 1 week & 18 Sep -- 25 Sep 2026 \\\hline
+8 & Core model development and training & 1 week & 25 Sep -- 1 Oct 2026 \\\hline
+9 & Presentation II & 1 day & 9 Oct 2026 \\\hline
+10 & Incorporating the suggestions from Presentation II and submitting a draft copy to the project guide for proofreading & 1 week & 16 Oct -- 23 Oct 2026 \\\hline
+11 & Draft submission to the guide for review & 2 days & 23 Oct -- 24 Oct 2026 \\\hline
+12 & Final black book submission & 1 week & 26 Oct -- 30 Oct 2026 \\\hline
+13 & External presentation and viva voce & 1 day & 2 Nov 2026 \\\hline
+\multicolumn{4}{|l|}{\textbf{Semester VIII}} \\\hline
+14 & Evaluation with real agents on sample repositories & 3 weeks & January 2027 \\\hline
+15 & Default sandbox hardening and fixes for issues found in testing & 3 weeks & January -- February 2027 \\\hline
+16 & Verification of the Codex and Kiro egress allowlists; reviewer-identity separation study & 2 weeks & February 2027 \\\hline
+17 & Usability study with reviewers and dashboard refinements & 2 weeks & March 2027 \\\hline
+18 & Research paper drafting and submission & 2 weeks & March 2027 \\\hline
+19 & Final report, demonstration and viva preparation & 3 weeks & March -- April 2027 \\\hline
+\end{tabularx}
+\end{table}
+
+\section{Team Roles and Responsibilities}\label{team-roles-and-responsibilities}
+
+The team of four divided responsibilities by architectural plane, with shared ownership of testing and documentation, as recorded in Table 4.2.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Team roles and responsibilities}\label{tab:4-3}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2600}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2600}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4800}}|@{}}
+\hline
+Member & Primary role & Responsibilities \\
+\hline
+\endfirsthead
+\hline
+Member & Primary role & Responsibilities \\
+\hline
+\endhead
+\endlastfoot
+Aayush Subhash Balip & Backend and data engineering & Django REST API, MongoDB models, run state machine, artifact ingest, Celery tasks, Docker Compose stack \\\hline
+Krish Mahesh Patil & Frontend and user experience & React dashboard, run detail tabs, decision controls, accessibility and responsive layout \\\hline
+Muhammad Anis Momin & Security research and sandbox engineering & Sandbox lifecycle, credential shaping, egress proxy, trusted capture, token hygiene, threat model \\\hline
+Sameer Hasan Saiyed & Integration, testing and documentation & CLI pipeline, agent adapters, submit and teardown, test strategy, benchmark and report \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\section{Software Size Estimation}\label{preliminary-software-size-estimation-kloc}
+
+\subsection{KLOC-Based Estimation}\label{kloc-based-estimation}
+
+The size of the delivered software was measured directly from the repository as logical source lines, excluding blank lines, comments, docstrings, migrations, lock files and generated content. Table 4.3 reports the counts.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Measured software size by component}\label{tab:4-4}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4000}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3000}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3000}}|@{}}
+\hline
+Component & Product code, SLOC & Test code, SLOC \\
+\hline
+\endfirsthead
+\hline
+Component & Product code, SLOC & Test code, SLOC \\
+\hline
+\endhead
+\endlastfoot
+CLI package and tools & 12,404 & 16,697 \\\hline
+Backend & 1,150 & 2,552 \\\hline
+Frontend & 4,356 & 2,511 \\\hline
+Deployment configuration & 160 & -- \\\hline
+\textbf{Total delivered product} & \textbf{18,070} & \textbf{21,760} \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+The delivered product therefore measures KLOC = 18.07. Test code is excluded from the primary estimate, because COCOMO sizes delivered source instructions.
+
+\section{Effort Estimation Using COCOMO}\label{effort-estimation-using-basic-cocomo}
+
+\subsection{Basic COCOMO Model}\label{basic-cocomo-model}
+
+The Basic Constructive Cost Model \cite{ref15} estimates effort and schedule from size alone. VaultShield was classified as an organic project, built by a small team in a familiar environment with flexible requirements, so the coefficients are a = 2.4, b = 1.05, c = 2.5 and d = 0.38. E is effort in person-months, T is development time in months and P is the average number of persons.
+
+E = a × (KLOC)\^{}b = 2.4 × (KLOC)\^{}1.05
+
+T = c × (E)\^{}d = 2.5 × (E)\^{}0.38
+
+P = E / T
+
+\subsection{Calculation}\label{cocomo-calculation}
+
+With KLOC = 18.07, (18.07)\^{}1.05 = 20.884, so E = 2.4 × 20.884 = 50.12 person-months. Then (50.12)\^{}0.38 = 4.426, so T = 2.5 × 4.426 = 11.06 months, and P = 50.12 / 11.06 = 4.53 persons. Table 4.4 summarises the estimate.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Basic COCOMO estimate}\label{tab:4-5}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3333}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3333}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3333}}|@{}}
+\hline
+Quantity & Formula & Value for KLOC = 18.07 \\
+\hline
+\endfirsthead
+\hline
+Quantity & Formula & Value for KLOC = 18.07 \\
+\hline
+\endhead
+\endlastfoot
+Effort E & 2.4 × KLOC\^{}1.05 & 50.12 person-months \\\hline
+Development time T & 2.5 × E\^{}0.38 & 11.06 months \\\hline
+Average staffing P & E / T & 4.53 persons \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+The estimate of about 4.5 persons over about 11 months agrees closely with the actual four-member team working across two semesters, which supports the organic classification.
+
+\section{Human Resource Cost}\label{cost-estimation-human-resources}
+
+The project was completed by the four team members as part of their academic programme, and no salary, stipend or consultant fee was paid. Table 4.5 therefore records actual cash expenditure rather than a hypothetical value for unpaid effort.
+
+\begin{table}[H]
+\centering\small
+\caption{Actual human-resource cash expenditure}\label{tab:4-6}
+\begin{tabularx}{\textwidth}{|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}X|>{\raggedleft\arraybackslash}p{1.45in}|}\hline
+\textbf{Cost item} & \textbf{Actual basis} & \textbf{Actual cost in \rupee} \\\hline
+Student development effort & Unpaid academic project work & 0 \\\hline
+Guide supervision and review & No project-specific payment & 0 \\\hline
+\textbf{Total} & & \textbf{0} \\\hline
+\end{tabularx}
+\end{table}
+
+\section{Hardware, Software and Cloud Infrastructure Cost}\label{cost-estimation-hardware-software-and-infrastructure}
+
+The work used existing team laptops, open-source software and local infrastructure, and no paid cloud environment was commissioned, as shown in Table 4.6.
+
+\begin{table}[H]
+\centering\small
+\caption{Actual hardware, software and infrastructure cash expenditure}\label{tab:4-7}
+\begin{tabularx}{\textwidth}{|>{\raggedright\arraybackslash}p{1.3in}|>{\raggedright\arraybackslash}X|>{\raggedleft\arraybackslash}p{0.95in}|}\hline
+\textbf{Category} & \textbf{Actual basis} & \textbf{Cost in \rupee} \\\hline
+Hardware & Existing team laptops; no new equipment & 0 \\\hline
+Software & Python, Django, React, Git, Docker and test frameworks, all open source & 0 \\\hline
+Database and hosting & Local MongoDB replica set and free-plan repository hosting & 0 \\\hline
+Cloud and model APIs & No paid deployment or project-funded usage charge & 0 \\\hline
+\textbf{Total} & & \textbf{0} \\\hline
+\end{tabularx}
+\end{table}
+
+\section{Testing, Deployment and Maintenance Cost}\label{cost-estimation-testing-deployment-and-maintenance}
+
+Testing and the MVP deployment ran on local machines with Docker, so no testing or deployment cost was incurred, as shown in Table 4.7. Future maintenance is not included because it has not been incurred.
+
+\begin{table}[H]
+\centering\small
+\caption{Actual testing, deployment and maintenance cash expenditure}\label{tab:4-8}
+\begin{tabularx}{\textwidth}{|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}X|>{\raggedleft\arraybackslash}p{1.25in}|}\hline
+\textbf{Item} & \textbf{Actual basis} & \textbf{Actual cost in \rupee} \\\hline
+Automated and Docker-backed tests & Local machines and open-source frameworks & 0 \\\hline
+MVP deployment & Local Docker Compose stack & 0 \\\hline
+\textbf{Total} & & \textbf{0} \\\hline
+\end{tabularx}
+\end{table}
+
+\section{Total Estimated Project Cost}\label{cost-estimation-total-summary}
+
+Table 4.8 consolidates the actual project-specific cash expenditure.
+
+\begin{table}[H]
+\centering\small
+\caption{Total actual project cash expenditure}\label{tab:4-9}
+\begin{tabularx}{\textwidth}{|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}p{1.55in}|>{\raggedleft\arraybackslash}p{1.25in}|}\hline
+\textbf{Cost head} & \textbf{Source} & \textbf{Actual cost in \rupee} \\\hline
+Human resources & Table 4.5 & 0 \\\hline
+Hardware, software and infrastructure & Table 4.6 & 0 \\\hline
+Testing, deployment and maintenance & Table 4.7 & 0 \\\hline
+\textbf{Total actual project cash expenditure} & & \textbf{0} \\\hline
+\end{tabularx}
+\end{table}
+
+\section{Assumptions and Cost Justification}\label{assumptions-and-cost-justification}
+
+Only amounts paid specifically for the project are included. Unpaid student effort, depreciation of equipment already owned, normal utilities and possible future maintenance are not given hypothetical monetary values, and tools already available at no extra charge count as zero. The actual cash expenditure for VaultShield is therefore \rupee 0. This basis is separate from the COCOMO estimate, which describes effort and schedule rather than money spent.
+
+\section{Risk Assessment and Mitigation}\label{risk-assessment-and-mitigation}
+
+Table 4.9 lists the main technical, security and project risks with their likelihood, impact and mitigation.
+
+\begingroup\small
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Risk assessment and mitigation}\label{tab:4-11}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.3000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.4600}}|@{}}
+\hline
+Risk & Likelihood & Impact & Mitigation \\
+\hline
+\endfirsthead
+\hline
+Risk & Likelihood & Impact & Mitigation \\
+\hline
+\endhead
+\endlastfoot
+Container escape through a kernel or Docker vulnerability & Low & Very high & Docker socket never mounted; only a dummy credential file is mounted; gVisor or microVM isolation planned \\\hline
+Malicious dependency running install hooks & Medium & High & Installs only inside the disposable sandbox with dummy credentials; egress allowlist available \\\hline
+Network exfiltration when egress control is off & Medium & High & Log-only and allowlist modes through a hardened proxy; default-deny egress planned \\\hline
+Real secrets reaching the sandbox or artifacts & Low & Very high & Dummy credentials, one-shot clone credential, token-hygiene scan with diff quarantine \\\hline
+Agent tampering with Git state to hide changes & Low & High & Trusted capture in a separate helper from a pre-agent base \\\hline
+Approval gate bypassed by a token holder & Medium & Medium & Single-developer trust domain documented; reviewer identities planned \\\hline
+Upstream agent CLI changes break an adapter & High & Medium & Adapter interface isolates changes; mock adapter keeps the pipeline testable \\\hline
+Schedule slippage or member unavailability & Medium & Medium & Working pipeline after every iteration; shared module knowledge through testing \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\endgroup
+
+\clearpage
+
+\chapter{Project Implementation}\label{project-implementation}
+
+\section{Code Snippets}\label{code-snippets}
+
+\subsection{Launching the Sandbox Container}\label{launching-the-sandbox-container}
+
+The first snippet is the core of \texttt{Sandbox.\allowbreak{}create}. Before any Docker call it checks that the credential file exists, because Docker silently creates an empty directory at a missing bind-mount source. Egress options are passed only when they are set, and any failure removes the partial container and raises a single \texttt{SandboxError}. As Figure 5.1 shows, the only host path given to the container is the read-only credential file, and \texttt{teardown} force-removes the container from a \texttt{finally} block so that it runs on every exit path.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.72\textheight,keepaspectratio]{images/code/fig5-1-sandbox-create-teardown.png}
+\par\medskip
+\captionof{figure}{Sandbox container creation and teardown}\label{fig:5-1}
+\end{figure}
+
+\subsection{One-Shot Credential for Private Clones}\label{one-shot-credential-for-private-clones}
+
+The second snippet clones a private repository without giving the agent the repository-host token. The token is placed only in the environment of the single \texttt{git clone} exec, and the command line names environment variables rather than containing their values. As Figure 5.2 shows, the token is therefore absent from the remote URL, the process arguments, the container environment and error messages, and its lifetime is exactly the duration of the clone.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.62\textheight,keepaspectratio]{images/code/fig5-2-one-shot-credential-clone.png}
+\par\medskip
+\captionof{figure}{Authenticated clone with a one-shot credential helper}\label{fig:5-2}
+\end{figure}
+
+\subsection{Event Logging and Off-Limits Enforcement}\label{event-logging-and-off-limits-enforcement}
+
+The third snippet, in Figure 5.3, shows the event record type, the off-limits path matcher and the append-only JSON Lines writer. Every record has exactly three fields matching the backend's \texttt{RunEvent} model, and \texttt{json.\allowbreak{}dumps} keeps each record on one line, so a partially written log stays readable. The monitor raises \texttt{OffLimitsViolation} only after the writer has run.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.58\textheight,keepaspectratio]{images/code/fig5-3-event-log-off-limits.png}
+\par\medskip
+\captionof{figure}{Event records, off-limits matching and the JSON Lines writer}\label{fig:5-3}
+\end{figure}
+
+\subsection{Egress Allow/Deny Decision}\label{egress-allowdeny-decision}
+
+The fourth snippet, in Figure 5.4, is the egress proxy's decision function, evaluated for every \texttt{CONNECT} request and TLS connection. A host that is not on the allowlist is never resolved in \texttt{allowlist} mode, IP literals must match an IP entry exactly, and every resolved address must be publicly routable, so an allowlisted name cannot be pointed at an internal address. In \texttt{log-\allowbreak{}only} mode only the allowlist rule is relaxed.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.62\textheight,keepaspectratio]{images/code/fig5-4-egress-decision.png}
+\par\medskip
+\captionof{figure}{Egress decision for one request target}\label{fig:5-4}
+\end{figure}
+
+\subsection{Branch Commit and Structured Diff}\label{branch-commit-and-structured-diff}
+
+The fifth snippet, in Figure 5.5, runs inside the trusted capture helper. \texttt{commit\_\allowbreak{}run\_\allowbreak{}branch} refuses unsafe repository configuration and creates exactly one commit, using \texttt{-\allowbreak{}-\allowbreak{}allow-\allowbreak{}empty} so that a run which changed nothing still produces a reviewable result and \texttt{-\allowbreak{}-\allowbreak{}no-\allowbreak{}verify} so that no repository hook runs. \texttt{build\_\allowbreak{}structured\_\allowbreak{}diff} disables rename detection, external diff programs and text conversion filters.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.62\textheight,keepaspectratio]{images/code/fig5-5-run-branch-diff.png}
+\par\medskip
+\captionof{figure}{Committing the run branch and computing the diff}\label{fig:5-5}
+\end{figure}
+
+\subsection{Approval State Machine}\label{approval-state-machine}
+
+The sixth snippet, in Figure 5.6, is the inner function of \texttt{apply\_\allowbreak{}decision}. The status check and status write are a single conditional update, and the \texttt{Approval} record is created in the same MongoDB transaction, so only one of two concurrent decisions can match. The loser receives HTTP 409 naming the run's actual status; before the retry wrapper was added, 54 of 72 losing calls in a concurrency test received a server error instead.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=\textwidth,height=0.58\textheight,keepaspectratio]{images/code/fig5-6-approval-transaction.png}
+\par\medskip
+\captionof{figure}{Transactional approve/reject decision}\label{fig:5-6}
+\end{figure}
+
+\section{Steps to Access the System}\label{steps-to-access-the-system}
+
+The system requires Python 3.11 or later, a running Docker daemon, Git, Node.js 18 or later, a MongoDB replica set or Atlas cluster, and Playwright Chromium. The commands assume macOS or Linux.
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Clone the repository and copy .env.example to .env, setting VAULTSHIELD\_\allowbreak{}MONGODB\_\allowbreak{}URL to the MongoDB connection string.
+\item
+  Start the backend and dashboard with docker compose up --build. The API is served on http://localhost:8000 and the dashboard on http://localhost:5173.
+\item
+  Create a user with docker compose exec web python manage.py createsuperuser.
+\item
+  Install the CLI:
+
+\begin{lstlisting}[language=bash]
+cd cli && python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]" && playwright install chromium
+\end{lstlisting}
+\item
+  Authenticate with vaultshield login --backend-url http://localhost:8000 --username <user>, create a project in the dashboard and note its identifier.
+\item
+  In a checkout of the target repository, run vaultshield init to write .vaultshield.yml.
+\item
+  Execute a sandboxed run, for example with the mock agent:
+
+\begin{lstlisting}[language=bash]
+vaultshield run --agent=mock --prompt="add a file" \
+  --repo-url="$REPO" --project "$PROJECT_ID"
+\end{lstlisting}
+\item
+  Open the dashboard, select the run, inspect the Diff, Timeline, Screenshots and Security tabs, and choose Approve or Reject.
+\item
+  For an approved run, run vaultshield submit <run-id> to open the pull or merge request; for a rejected run, run vaultshield teardown <run-id>.
+\end{enumerate}
+
+\section{System Implementation}\label{system-implementation}
+
+The dashboard screenshots below were captured by the repository's layout tool, which serves the built dashboard with fixture data, so they show the real interface with illustrative data.
+
+\subsection{Command-Line Interface}\label{command-line-interface-and-run-directory}
+
+The CLI provides the pipeline commands init, login, run, submit and teardown and the supporting commands ask, protect and exec. During vaultshield run, the terminal prints one line per pipeline milestone, as shown in Figure 5.7, and each run writes a run directory containing the dummy credential file, events.jsonl, diff.json, the branch bundle and the screenshots.
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.85\textwidth,height=0.5\textheight,keepaspectratio]{images/screenshots/terminal-run.png}}
+\par\medskip
+\captionof{figure}{Terminal output of a successful vaultshield run with the mock agent}\label{fig:5-9}
+\end{figure}
+
+\subsection{Landing Page and Projects Dashboard}\label{landing-page}
+
+The landing page in Figure 5.8 introduces the product with a one-line installer command and links to sign in. After sign-in, the projects overview in Figure 5.9 shows one card per project with its repository URL, a sidebar of projects and a New project button.
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/landing-1280-light.png}}
+\par\medskip
+\captionof{figure}{Landing page}\label{fig:5-11}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/dashboard-1280-light.png}}
+\par\medskip
+\captionof{figure}{Projects dashboard}\label{fig:5-13}
+\end{figure}
+
+\subsection{Run History}\label{run-history}
+
+The run history in Figure 5.10 lists a project's runs newest first with the run identifier, agent, status badge and creation time, with status filters, search by run identifier and pagination.
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/runs-1280-light.png}}
+\par\medskip
+\captionof{figure}{Run history with status filters}\label{fig:5-15}
+\end{figure}
+
+\subsection{Run Detail Views}\label{run-detail-diff-view}
+
+The run detail page has a header with the run's status, a decision banner while the run is awaiting review, and four tabs. The Diff tab in Figure 5.11 lists every changed file with its addition and deletion counts. The Timeline tab in Figure 5.12 shows the event log in order, giving the reviewer a view of what the agent did as well as what it changed \cite{ref14}. The Screenshots tab in Figure 5.13 shows one image per configured route, and the Security tab in Figure 5.14 lists the findings of the automated scan with their rule, file and line. Findings inform the reviewer but do not block approval.
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-diff-1280-light.png}}
+\par\medskip
+\captionof{figure}{Run detail – Diff tab}\label{fig:5-16}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-timeline-1280-light.png}}
+\par\medskip
+\captionof{figure}{Run detail – Timeline tab}\label{fig:5-17}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-screenshots-1280-light.png}}
+\par\medskip
+\captionof{figure}{Run detail – Screenshots tab}\label{fig:5-18}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-security-1280-light.png}}
+\par\medskip
+\captionof{figure}{Run detail – Security tab}\label{fig:5-19}
+\end{figure}
+
+\subsection{Approval Decision and Submission}\label{approval-decision-and-submission}
+
+When the reviewer approves a run, the buttons are replaced by the status ``approved, awaiting submission'' and the exact vaultshield submit command, as shown in Figure 5.15, because the backend never opens a pull request on its own.
+
+\begin{figure}[H]
+\centering
+\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-approved-1280-light.png}}
+\par\medskip
+\captionof{figure}{Run detail after approval, showing the submit command}\label{fig:5-20}
+\end{figure}
+
+\subsection{Implementation Summary}\label{implementation-summary}
+
+The CLI creates the sandbox, monitors the agent, captures the change on a dedicated branch and uploads the evidence, while the dashboard presents that evidence and records the reviewer's decision. Producing a change and accepting it therefore remain separate steps.
+
+\section{Timeline Sem VII}\label{project-timeline}
+
+The Gantt chart in Figure~5.16 shows the Semester VII activities across thirteen weeks, from group formation on 10 July 2026 to the external presentation and viva voce on 2 November 2026. The activities are grouped into four phases: project conception and initiation, design and implementation, evaluation and documentation, and final submission. All four members are owners of every activity, and every Semester VII activity is complete.
+
+\clearpage
+\begin{figure}[p]
+\centering
+\rotatebox{90}{%
+  \begin{minipage}{0.92\textheight}
+    \centering
+    \SafeIncludeGraphics[width=\linewidth,height=0.95\textwidth,keepaspectratio]{images/diagrams/fig4-1-gantt-chart.png}
+    \par\medskip
+    \captionof{figure}{Gantt chart of the VaultShield major project}\label{fig:5-21}
+  \end{minipage}%
+}
+\end{figure}
+\clearpage
+
+\chapter{Testing}\label{software-testing}
+
+\section{Software Testing}\label{software-testing-1}
+
+VaultShield's value lies mostly in negative guarantees: the agent must not reach the host, real secrets must not enter the sandbox, a token must not appear in any artifact, and an unapproved run must not become a pull request. The team therefore traced every acceptance criterion to at least one test, expressed invariants as property-based tests with Hypothesis and fast-check, tested isolation claims against real Docker containers with a probing agent rather than mocks, and tested the backend against a real MongoDB replica set because the approval gate depends on genuine transaction semantics. Test fixtures redirect the home directory to an empty temporary directory so that no test can touch the developer's real files.
+
+\section{Types of Testing}\label{types-of-testing}
+
+Testing was organised into functional testing and system testing. Table 6.1 lists the test levels used within them.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Types of testing performed}\label{tab:6-1}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.5000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3000}}|@{}}
+\hline
+Level & Scope & Tools \\
+\hline
+\endfirsthead
+\hline
+Level & Scope & Tools \\
+\hline
+\endhead
+\endlastfoot
+Unit & Configuration parsing, credential shaping, off-limits matching, diff parsing, egress decisions, React components & pytest, Hypothesis, Jest, fast-check \\\hline
+Integration & CLI with real Docker, backend with MongoDB, upload with the API & pytest with Docker and a replica set \\\hline
+Security-focused & Isolation, secret suppression, network blocking, tamper resistance, approval atomicity & Probing agents in real containers, concurrency tests \\\hline
+System & The complete run, submit and teardown flows & Click CliRunner, Docker, timing harness \\\hline
+Usability and accessibility & Contrast ratios, responsive layout, keyboard navigation & Jest contrast test, Playwright layout tool \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\subsection{Functional Testing}\label{functional-testing}
+
+Functional testing verified that each function, module and security control behaves as specified. Unit tests checked properties such as a dummy credential never containing the real value and the egress decision table for IP literals and private addresses. Integration tests checked that an exec's environment does not persist into later execs and that the sandbox image carries no credentials. Security-focused tests checked that a non-allowlisted connection and DNS-based exfiltration are blocked, that a tampered in-container Git cannot hide a file from the diff, and that concurrent approve and reject requests resolve to exactly one decision.
+
+\subsection{System Testing}\label{system-testing}
+
+System testing drove the real vaultshield run command end to end with a real container, clone, agent process, trusted capture and teardown, and the same harness executed the 40 timed runs reported in Chapter 7. Accessibility testing computed WCAG contrast ratios for every theme colour pair and rendered nine pages at seven widths to check for layout overflow.
+
+\section{Testing Results and Findings}\label{testing-results-and-findings}
+
+Table 6.2 summarises the results of the three automated suites.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Automated test suite results}\label{tab:6-2}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 11\tabcolsep) * \real{0.2000}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 11\tabcolsep) * \real{0.2000}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 11\tabcolsep) * \real{0.2000}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 11\tabcolsep) * \real{0.2000}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 11\tabcolsep) * \real{0.2000}}|@{}}
+\hline
+Suite & Tests & Passed & Failed & Pass rate \\
+\hline
+\endfirsthead
+\hline
+Suite & Tests & Passed & Failed & Pass rate \\
+\hline
+\endhead
+\endlastfoot
+CLI & 2,080 & 2,078 & 2 & 99.90\% \\\hline
+Backend & 341 & 341 & 0 & 100.00\% \\\hline
+Frontend & 283 & 283 & 0 & 100.00\% \\\hline
+\textbf{Total} & \textbf{2,704} & \textbf{2,702} & \textbf{2} & \textbf{99.93\%} \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+No test was skipped. The lowest text contrast was 4.77:1 in the light theme and 5.80:1 in the dark theme, above the 4.5:1 threshold, and the layout report recorded no horizontal overflow across 63 page and width combinations. Table 6.3 lists the main issues found during development and testing.
+
+\begingroup\small
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Issues found and their resolution}\label{tab:6-4}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4400}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.1400}}|@{}}
+\hline
+Issue & Resolution & Status \\
+\hline
+\endfirsthead
+\hline
+Issue & Resolution & Status \\
+\hline
+\endhead
+\endlastfoot
+54 of 72 losing concurrent decisions received HTTP 500 instead of 409 & Retry on transient transaction errors & Fixed \\\hline
+Dummy connection strings kept the real database host name & Host replaced unless provably local & Fixed \\\hline
+A missing credential file became an empty directory through Docker's bind mount & File check before any Docker call & Fixed \\\hline
+Host listeners reachable from a plain internal bridge & Internal bridge created without a gateway & Fixed \\\hline
+A hanging interactive sign-in was not bounded by its deadline & Under investigation on Docker Desktop 29.2.1 & Open \\\hline
+The file watcher missed the agent's write in some fast runs & The trusted diff remains the authoritative record & Open \\\hline
+The status PATCH route can set approved without an Approval record & Documented MVP limitation; gating planned & Open \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\endgroup
+
+\section{Sample Test Cases}\label{sample-test-cases}
+
+Table 6.4 presents representative test cases, each corresponding to an automated test or to the benchmark harness.
+
+\begingroup\small
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Sample test cases}\label{tab:6-5}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.3000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.4600}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1400}}|@{}}
+\hline
+ID & Description & Expected and actual result & Status \\
+\hline
+\endfirsthead
+\hline
+ID & Description & Expected and actual result & Status \\
+\hline
+\endhead
+\endlastfoot
+TC-01 & Sandbox isolation & Probing agent cannot read the host .env, home directory or Docker socket; host checkout untouched in 40 of 40 runs & Pass \\\hline
+TC-02 & Secret suppression & No generated dummy value contains its real value; 135 of 135 tests passed & Pass \\\hline
+TC-03 & Network blocking & CONNECT to unlisted hosts, IP literals and the host answered 403; direct DNS lookups fail & Pass \\\hline
+TC-04 & Off-limits enforcement & Write to a protected path records a violation event, then fails the run & Pass \\\hline
+TC-05 & Tamper resistance & A file hidden by a tampered in-container Git still appears on the run branch & Pass \\\hline
+TC-06 & Token hygiene & All five credential-leak vectors fail the run and quarantine the diff & Pass \\\hline
+TC-07 & Approval gating & submit refuses every non-approved run with no push and no PR & Pass \\\hline
+TC-08 & Concurrent decisions & Exactly one winner per trial and exactly one Approval record & Pass \\\hline
+TC-09 & Monitoring completeness & Every agent write in the timeline; present in 32 of 40 runs, while the diff recorded 40 of 40 & Partial \\\hline
+TC-10 & Hanging sign-in is bounded & Expected to stop within 60 s; took 600.3 s & Fail \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\endgroup
+
+\section{Conclusion on Testing}\label{conclusion-on-testing}
+
+Of 2,704 automated tests, 2,702 passed, and every security-critical behaviour named in the objectives was exercised against real infrastructure. The two failures affect only the optional interactive sign-in flow. The file watcher's missed events are a gap in supplementary evidence rather than in change capture, because the trusted diff was complete in every run, and the unrestricted status PATCH route is acceptable only within the single-developer trust model of the MVP.
+
+\clearpage
+
+\chapter{Result and Discussions}\label{results-and-analysis}
+
+\section{Introduction}\label{introduction-1}
+
+This chapter evaluates VaultShield with a timing harness that executed 40 complete vaultshield run invocations against real Docker, a baseline of the same agent run directly on the host, the security-focused test cases of Chapter 6, the feasibility spike on secret exposure, and a case study of preserved run directories. All measurements used the deterministic mock agent, which runs inside the sandbox through the same path as a real agent but makes no model API calls, so the results isolate the pipeline's own overhead. The measurements were taken on an Apple MacBook Air with an M4 processor running Docker Desktop 29.2.1, with a small local repository and a stubbed backend.
+
+\section{Evaluation Metrics}\label{evaluation-metrics}
+
+Table 7.1 defines the metrics used.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Evaluation metrics}\label{tab:7-1}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 5\tabcolsep) * \real{0.3200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 5\tabcolsep) * \real{0.6800}}|@{}}
+\hline
+Metric & Definition \\
+\hline
+\endfirsthead
+\hline
+Metric & Definition \\
+\hline
+\endhead
+\endlastfoot
+End-to-end latency & Wall-clock time of one vaultshield run, from command start to exit \\\hline
+Stage latency & Time spent in each pipeline stage \\\hline
+Overhead & Difference between VaultShield latency and the same agent run directly on the host \\\hline
+Isolation effectiveness & Fraction of runs in which the host checkout was unchanged and host files were unreachable \\\hline
+Capture and monitoring completeness & Fraction of runs whose diff and event log contained the agent's change \\\hline
+Detection of unsafe actions & Fraction of injected unsafe behaviours that were blocked or detected \\\hline
+Cleanup reliability & Number of VaultShield containers or networks left after all runs \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\section{Performance Analysis}\label{performance-analysis}
+
+Table 7.2 reports the stage latency of the default configuration over 20 runs, in seconds, and Figure 7.1 shows the mean of each stage.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Stage latency in the default configuration}\label{tab:7-3}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.4600}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1800}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1800}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1800}}|@{}}
+\hline
+Stage & Mean & Std. dev. & Share \\
+\hline
+\endfirsthead
+\hline
+Stage & Mean & Std. dev. & Share \\
+\hline
+\endhead
+\endlastfoot
+Sandbox creation, clone and install & 0.239 & 0.017 & 17.0\% \\\hline
+Agent execution and monitoring & 0.413 & 0.033 & 29.4\% \\\hline
+Trusted capture & 0.651 & 0.053 & 46.4\% \\\hline
+Token-hygiene scan & 0.019 & 0.008 & 1.4\% \\\hline
+Teardown & 0.042 & 0.006 & 3.0\% \\\hline
+Other stages & 0.039 & -- & 2.8\% \\\hline
+\textbf{End-to-end total} & \textbf{1.403} & \textbf{0.075} & \textbf{100\%} \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.85\textwidth,height=0.38\textheight,keepaspectratio]{images/diagrams/fig7-1-stage-latency.png}
+\par\medskip
+\captionof{figure}{Mean stage latency in the default configuration}\label{fig:7-1}
+\end{figure}
+
+Trusted capture is the most expensive stage because it starts a second container, extracts the work tree and rebuilds the repository; this is the price of a diff the agent cannot falsify. Agent execution took 0.413 s against 0.186 s on the host, the difference covering the in-container watcher and Docker's exec API. Table 7.3 and Figure 7.2 compare the configurations.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{End-to-end latency by configuration}\label{tab:7-4}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.5600}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.1400}} |
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3000}}|@{}}
+\hline
+Configuration & Runs & Mean time, s \\
+\hline
+\endfirsthead
+\hline
+Configuration & Runs & Mean time, s \\
+\hline
+\endhead
+\endlastfoot
+Direct on host: clone and agent & 20 & 0.237 \\\hline
+VaultShield default & 20 & 1.403 \\\hline
+VaultShield with egress allowlist & 10 & 2.213 \\\hline
+VaultShield with one screenshot route & 10 & 3.294 \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.85\textwidth,height=0.38\textheight,keepaspectratio]{images/diagrams/fig7-3-config-latency.png}
+\par\medskip
+\captionof{figure}{Mean end-to-end time by configuration}\label{fig:7-3}
+\end{figure}
+
+The egress allowlist added 0.810 s, mostly for creating the per-run networks and proxy and removing them at teardown. One screenshot added 1.891 s, almost all of it spent starting the application and waiting for it to answer.
+
+\section{Overhead with and without VaultShield}\label{overhead-with-and-without-vaultshield}
+
+Against direct execution with a fresh clone, VaultShield's default mode added 1.166 s per run and the egress allowlist mode added 1.976 s. Because this overhead is fixed while a real agent session typically lasts minutes, it projects to 0.39\% and 0.66\% of a five-minute session respectively. Table 7.4 places the overhead alongside the qualitative differences.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Running an agent with and without VaultShield}\label{tab:7-5}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4400}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2400}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3200}}|@{}}
+\hline
+Dimension & Direct execution & VaultShield \\
+\hline
+\endfirsthead
+\hline
+Dimension & Direct execution & VaultShield \\
+\hline
+\endhead
+\endlastfoot
+Fixed overhead & -- & +1.166 s, or +1.976 s with egress \\\hline
+Host checkout unchanged & No & Yes, in every run \\\hline
+Real .env values visible to the agent & Yes & No \\\hline
+Change captured on a reviewable branch & No & Yes, in every run \\\hline
+Outbound traffic restricted and logged & No & With egress allowlist \\\hline
+Approval required before a PR & No & Yes \\\hline
+Containers or networks left behind & -- & 0 \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\section{Safety Events Captured}\label{safety-events-captured}
+
+Table 7.5 summarises the safety-relevant results across the 40 harness runs and the security-focused test cases. These are rates over injected scenarios, which show that each control works for the behaviour it was designed against but do not prove the controls are exhaustive.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Safety events and evidence captured}\label{tab:7-6}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 5\tabcolsep) * \real{0.6000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 5\tabcolsep) * \real{0.4000}}|@{}}
+\hline
+Scenario & Result \\
+\hline
+\endfirsthead
+\hline
+Scenario & Result \\
+\hline
+\endhead
+\endlastfoot
+Host checkout unchanged after the run & 40 of 40 \\\hline
+Agent's file present in diff.json & 40 of 40 \\\hline
+File-change event recorded for the agent's file & 32 of 40 \\\hline
+Non-allowlisted connections blocked and logged & 4 of 4 \\\hline
+Credential-leak vectors detected & 5 of 5 \\\hline
+Tampered in-container Git defeated & 2 of 2 \\\hline
+Values in six real .env.sandbox files that are dummies & 30 of 30 \\\hline
+Containers and networks left after the campaign & 0 \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\section{Secret Exposure With and Without Protection}\label{secret-exposure-with-and-without-protection}
+
+The feasibility spike asked a production coding agent to read .env and .env.local and report the exact values of two fake keys. Table 7.6 reports the outcome under four protection configurations.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Secret exposure under four protection configurations}\label{tab:7-7}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.1200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.6000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2800}}|@{}}
+\hline
+Config & Protection layers & Verdict \\
+\hline
+\endfirsthead
+\hline
+Config & Protection layers & Verdict \\
+\hline
+\endhead
+\endlastfoot
+C0 & None & Both secrets printed \\\hline
+C1 & Agent deny rules for .env files & .env.local read into context \\\hline
+C2 & C1 plus a hook denying shell access to .env & .env.local read into context \\\hline
+C3 & C2 plus real values replaced by a placeholder on disk & Safe \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+Agent-level deny rules proved brittle, and only keeping the real value off disk was safe. This is why the sandbox receives dummy values and why the Protect module moves values into the macOS Keychain for agents run outside the sandbox.
+
+\section{Case Study: Analysis of Real Runs}\label{case-study-analysis-of-real-runs}
+
+The repository preserves five complete mock-agent runs from development. In run 20261009-091725-ff669fcd7dd00b2b, the event log records seven events: the agent confirms that its working directory is the sandbox clone, narrates its work over 157.9 ms, and the in-container watcher then independently reports the created file 106.5 ms after the agent's write. The diff contains exactly that file, and the screenshot shows the sandbox clone's directory listing. In one of the five runs, however, the event log has no file-change event even though the diff and screenshot both show the file, the same gap seen in 8 of the 40 benchmark runs. The event log is therefore corroborating evidence of behaviour, while the trusted diff is the authoritative record of what changed.
+
+\section{Overall Discussion and Limitations}\label{discussion-and-limitations}
+
+The results show that separating the execution of an agent from trust in its output costs about 1.2 seconds per run, or about 2.0 seconds with network allowlisting. In exchange, every evaluated run left the developer's checkout untouched, kept real secrets out of the agent's environment, recorded an event log, captured the change on a branch the agent could not falsify and held it behind an approval state machine. Table 7.7 lists the main residual risks.
+
+\begingroup\small
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Residual risks and limitations}\label{tab:7-9}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3800}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3000}}|@{}}
+\hline
+Limitation & Consequence & Planned improvement \\
+\hline
+\endfirsthead
+\hline
+Limitation & Consequence & Planned improvement \\
+\hline
+\endhead
+\endlastfoot
+Shared-kernel container isolation; default sandbox runs as root & An exploit could reach the host & Default hardening, gVisor or microVMs \\\hline
+Egress unrestricted unless enabled & Repository content could be exfiltrated & Default-deny egress \\\hline
+Host-based allowlist & Uploads to an allowlisted service are possible & Path-aware filtering \\\hline
+Status PATCH can set approved; no multi-user model & A token holder can skip review & Gated transitions, reviewer roles \\\hline
+Polling file watcher misses some writes & Timeline may omit a change & Diff cross-check, event-driven watcher \\\hline
+Diff tab shows counts, not patch text & Line-level review needs diff.json & Inline patch rendering \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+\endgroup
+
+The evaluation itself is limited: all figures come from the mock agent on one machine, so they describe the pipeline's fixed overhead rather than the experience of a real agent on a large repository, and the safety results do not measure resistance to an adaptive adversary. These gaps are addressed in the Semester VIII plan.
+
+\section{Chapter Summary}\label{chapter-summary}
+
+The default pipeline completed in 1.403 s on average, adding 1.166 s to direct execution, with trusted capture the largest stage. Isolation, change capture and cleanup succeeded in every evaluated run, all injected unsafe behaviours were blocked or detected, and every value in six real sandbox credential files was a dummy. The file watcher recorded the agent's change in 80\% of runs, confirming the trusted diff as the authoritative record.
+
+\clearpage
+
+\chapter{Conclusion}\label{conclusion}
+
+VaultShield separates running an AI coding agent from trusting what it produces. The agent receives a disposable Docker container, a fresh clone and only dummy credentials; its output, file changes and network decisions are recorded in an event log; its change is captured as one commit on a dedicated branch by a separate hardened container; and the change can become a pull or merge request only after a human approves it in the review dashboard. The system was built as a Python CLI, a Django REST Framework backend on MongoDB with Celery workers, and a React dashboard, totalling about 18.1 thousand logical lines of product code. Table 8.1 assesses the outcome against each objective.
+
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}{Achievement of objectives}\label{tab:8-1}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.3000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.5000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.2000}}|@{}}
+\hline
+Objective & Evidence & Outcome \\
+\hline
+\endfirsthead
+\hline
+Objective & Evidence & Outcome \\
+\hline
+\endhead
+\endlastfoot
+1. Universal agent execution platform & Mock, codex, kiro and antigravity agents run behind one adapter interface & Achieved \\\hline
+2. Agentic AI Orchestrator & The ask command scans the project, asks clarifying questions and builds an enriched prompt & Achieved \\\hline
+3. Secure sandboxed execution & Host checkout and .env unchanged in 40 of 40 runs; dummy credentials and one-shot clone token & Achieved \\\hline
+4. Monitoring and security analysis & Event log and diff for every run; violations recorded; Celery security scan & Achieved, with a file-watcher gap \\\hline
+5. Governance and human approval & Dashboard review and decision controls; submit refuses non-approved runs & Achieved \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\medskip
+
+All five objectives were achieved. Two gaps remain: in the single-developer MVP a token holder can bypass the dashboard through an unrestricted status update, and the polling file watcher missed some writes in very short runs, although the trusted diff captured every change. The project contributes a working implementation of the governance practices recommended for agentic systems \cite{ref9}, \cite{ref10}, engineering techniques such as shape-preserving credential substitution, a one-shot clone credential and trusted capture, and evidence that this protection costs about 1.2 seconds per run while agent-level deny rules alone do not protect secrets.
+
+\clearpage
+
+\chapter{Future Scope}\label{future-scope}
+
+The limitations identified in this report define the following future work.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Stronger Isolation:} harden the sandbox by default with a non-root user, dropped capabilities, no-new-privileges and resource limits, and support gVisor or Firecracker microVM runtimes \cite{ref12}, \cite{ref13}.
+\item
+  \textbf{Policy Engine:} express rules such as required approvals for infrastructure files or approved dependency lists declaratively, and make egress default-deny with path-aware filtering.
+\item
+  \textbf{Separation of Duties:} add reviewer accounts, role-based access control, decision attribution and multiple approvals, and gate every status transition through the approval endpoint.
+\item
+  \textbf{Cost and Resource Controls:} record per-run token usage and enforce per-project budgets and sandbox time limits.
+\item
+  \textbf{Multi-Repository and Parallel Runs:} capture one branch per repository in a single run, and let several agents attempt the same task for the reviewer to compare.
+\item
+  \textbf{IDE Integration and Live Review:} start runs from the editor, render patch text in the dashboard, and stream events live so that a reviewer can interrupt a run \cite{ref9}.
+\item
+  \textbf{Evidence Quality:} cross-check the event log against the diff, use an event-driven file watcher, and scan screenshots for credentials.
+\item
+  \textbf{Broader Evaluation:} measure real agents on representative repositories, including a subset of SWE-bench \cite{ref2}, and run a usability study with reviewers.
+\end{itemize}
+
+\clearpage
+
+\begingroup
+\renewcommand{\bibname}{Bibliography}
+\begin{thebibliography}{99}
+\addcontentsline{toc}{chapter}{Bibliography}
+\bibitem{ref1} Chen, M., Tworek, J., Jun, H., Yuan, Q., de Oliveira Pinto, H. P., Kaplan, J., et al., ``\href{https://arxiv.org/abs/2107.03374}{Evaluating Large Language Models Trained on Code,}'' arXiv preprint arXiv:2107.03374, 2021.
+
+\bibitem{ref2} Jimenez, C. E., Yang, J., Wettig, A., Yao, S., Pei, K., Press, O., and Narasimhan, K., ``\href{https://openreview.net/forum?id=VTF8yNQM66}{SWE-bench: Can Language Models Resolve Real-World GitHub Issues?,}'' International Conference on Learning Representations, 2024.
+
+\bibitem{ref3} Yang, J., Jimenez, C. E., Wettig, A., Lieret, K., Yao, S., Narasimhan, K., and Press, O., ``\href{https://proceedings.neurips.cc/paper_files/paper/2024/hash/5a7c947568c1b1328ccc5230172e1e7c-Abstract-Conference.html}{SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering,}'' Advances in Neural Information Processing Systems, 2024.
+
+\bibitem{ref4} Wang, X., Li, B., Song, Y., Xu, F. F., Tang, X., Zhuge, M., et al., ``\href{https://arxiv.org/abs/2407.16741}{OpenHands: An Open Platform for AI Software Developers as Generalist Agents,}'' International Conference on Learning Representations, 2025.
+
+\bibitem{ref5} Ruan, Y., Dong, H., Wang, A., Pitis, S., Zhou, Y., Ba, J., Dubois, Y., Maddison, C. J., and Hashimoto, T., ``\href{https://openreview.net/forum?id=GEcwtMk1uA}{Identifying the Risks of LM Agents with an LM-Emulated Sandbox,}'' International Conference on Learning Representations, 2024.
+
+\bibitem{ref6} Debenedetti, E., Zhang, J., Balunović, M., Beurer-Kellner, L., Fischer, M., and Tramèr, F., ``\href{https://proceedings.neurips.cc/paper_files/paper/2024/file/97091a5177d8dc64b1da8bf3e1f6fb54-Paper-Datasets_and_Benchmarks_Track.pdf}{AgentDojo: A Dynamic Environment to Evaluate Prompt Injection Attacks and Defenses for LLM Agents,}'' Advances in Neural Information Processing Systems, Datasets and Benchmarks Track, 2024.
+
+\bibitem{ref7} Greshake, K., Abdelnabi, S., Mishra, S., Endres, C., Holz, T., and Fritz, M., ``\href{https://doi.org/10.1145/3605764.3623985}{Not What You've Signed Up For: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection,}'' ACM Workshop on Artificial Intelligence and Security, 2023.
+
+\bibitem{ref8} Pearce, H., Ahmad, B., Tan, B., Dolan-Gavitt, B., and Karri, R., ``\href{https://doi.org/10.1109/SP46214.2022.9833571}{Asleep at the Keyboard? Assessing the Security of GitHub Copilot's Code Contributions,}'' IEEE Symposium on Security and Privacy, 2022.
+
+\bibitem{ref9} Shavit, Y., Agarwal, S., Brundage, M., et al., ``\href{https://openai.com/index/practices-for-governing-agentic-ai-systems/}{Practices for Governing Agentic AI Systems,}'' OpenAI White Paper, 2023.
+
+\bibitem{ref10} Chan, A., Ezell, C., Kaufmann, M., Wei, K., Hammond, L., Bradley, H., et al., ``\href{https://doi.org/10.1145/3630106.3658948}{Visibility into AI Agents,}'' ACM Conference on Fairness, Accountability, and Transparency, 2024.
+
+\bibitem{ref11} Combe, T., Martin, A., and Di Pietro, R., ``\href{https://doi.org/10.1109/MCC.2016.100}{To Docker or Not to Docker: A Security Perspective,}'' IEEE Cloud Computing, 2016.
+
+\bibitem{ref12} Agache, A., Brooker, M., Florescu, A., Iordache, A., Liguori, A., Neugebauer, R., Piwonka, P., and Popa, D.-M., ``\href{https://www.usenix.org/conference/nsdi20/presentation/agache}{Firecracker: Lightweight Virtualization for Serverless Applications,}'' USENIX Symposium on Networked Systems Design and Implementation, 2020.
+
+\bibitem{ref13} Young, E. G., Zhu, P., Caraza-Harter, T., Arpaci-Dusseau, A. C., and Arpaci-Dusseau, R. H., ``\href{https://www.usenix.org/conference/hotcloud19/presentation/young}{The True Cost of Containing: A gVisor Case Study,}'' USENIX Workshop on Hot Topics in Cloud Computing, 2019.
+
+\bibitem{ref14} Bacchelli, A., and Bird, C., ``\href{https://doi.org/10.1109/ICSE.2013.6606617}{Expectations, Outcomes, and Challenges of Modern Code Review,}'' International Conference on Software Engineering, 2013.
+
+\bibitem{ref15} Boehm, B. W., ``\href{https://www.pearson.com/en-us/subject-catalog/p/software-engineering-economics/P200000000306}{Software Engineering Economics,}'' Prentice-Hall, 1981.
+\end{thebibliography}
+\endgroup
+\end{document}

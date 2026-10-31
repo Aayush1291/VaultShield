@@ -1,0 +1,6 @@
+flowchart TB
+    DEV["Developer"] -->|"prompt"| AGENT["AI coding agent<br/>(host process, developer's privileges)"]
+    AGENT -->|"reads/writes directly"| WT["Real working tree<br/>+ real .env secrets"]
+    AGENT -->|"arbitrary commands"| SHELL["Host shell<br/>(home dir, SSH keys, Docker socket)"]
+    AGENT -->|"unrestricted egress"| NET["Internet"]
+    WT -->|"git commit / push<br/>(review optional)"| REPO["Shared repository"]

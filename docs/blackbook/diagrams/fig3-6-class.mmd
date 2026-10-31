@@ -1,0 +1,65 @@
+---
+config:
+  themeVariables:
+    fontSize: 18px
+---
+classDiagram
+    direction LR
+    class Project {
+        +String name
+        +String repo_url
+    }
+    class Run {
+        +String run_id
+        +String agent
+        +String status
+        +String pr_url
+    }
+    class RunEvent {
+        +String event_type
+        +DateTime timestamp
+        +String payload
+    }
+    class RunDiff {
+        +JSON files
+    }
+    class Screenshot {
+        +String route
+        +Image image
+    }
+    class Approval {
+        +String decision
+        +DateTime decided_at
+    }
+    class SecurityFinding {
+        +String rule_id
+        +String file_path
+        +int line_number
+    }
+    class Sandbox {
+        +create()
+        +exec()
+        +teardown()
+    }
+    class AgentAdapter {
+        <<abstract>>
+        +sandbox_invocation()
+    }
+    class EgressGuard {
+        +isolate(sandbox)
+        +teardown()
+    }
+    class TrustedCapture {
+        +load(base, tree)
+        +build_diff()
+    }
+    Project --> Run : 1 to many
+    Run --> RunEvent : 1 to many
+    Run --> Screenshot : 1 to many
+    Run --> SecurityFinding : 1 to many
+    Run --> Approval : 1 to 0..1
+    Run --> RunDiff : 1 to 0..1
+    AgentAdapter ..> Sandbox : runs in
+    EgressGuard ..> Sandbox : isolates
+    Sandbox ..> RunEvent : produces
+    TrustedCapture ..> RunDiff : produces

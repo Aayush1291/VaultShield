@@ -1,0 +1,20 @@
+---
+config:
+  themeVariables:
+    fontSize: 20px
+  flowchart:
+    nodeSpacing: 30
+    rankSpacing: 55
+---
+flowchart LR
+    subgraph INT["Internal network, no gateway"]
+        SBX["Sandbox container<br/><br/>runs the agent<br/>NET_RAW dropped<br/>IPv6 disabled"]
+    end
+    PX["Egress proxy<br/><br/>checks each host<br/>against the<br/>allowlist"]
+    NET["Internet<br/>allowlisted<br/>hosts only"]
+    LOG["egress.jsonl<br/>logs every<br/>decision"]
+    DENY["Denied<br/>unlisted hosts,<br/>IP literals,<br/>private IPs"]
+    SBX -->|"all outbound<br/>traffic"| PX
+    PX -->|"allowed, over<br/>open bridge"| NET
+    PX -.->|"logged"| LOG
+    PX -.->|"blocked"| DENY

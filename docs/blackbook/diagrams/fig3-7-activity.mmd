@@ -1,0 +1,41 @@
+---
+config:
+  flowchart:
+    nodeSpacing: 40
+    rankSpacing: 45
+    wrappingWidth: 240
+---
+flowchart TB
+    subgraph R1[" "]
+        direction LR
+        S((Start)) --> A1["Developer runs<br/>vaultshield run"] --> D1{"Config<br/>valid?"}
+        D1 -- "no" --> E1["Report<br/>error, stop"]
+    end
+    subgraph R2[" "]
+        direction RL
+        A2["Register run,<br/>create sandbox"] --> A3["Run agent,<br/>record events"] --> D2{"Off-limits<br/>write?"}
+        D2 -- "yes" --> F1["Fail run,<br/>tear down"]
+    end
+    subgraph R3[" "]
+        direction LR
+        A4["Build branch<br/>and diff in<br/>capture helper"] --> D3{"Secret<br/>found?"}
+        D3 -- "yes" --> F2["Quarantine,<br/>fail run"]
+    end
+    subgraph R4[" "]
+        direction RL
+        A5["Tear down,<br/>upload<br/>evidence"] --> D4{"Reviewer<br/>approves?"}
+        D4 -- "no" --> F3["Reject,<br/>delete branch"]
+    end
+    subgraph R5[" "]
+        direction LR
+        A6["Developer runs<br/>vaultshield<br/>submit"] --> A7["Push branch,<br/>open PR"] --> X((End))
+    end
+    R1 -- "yes" --> R2
+    R2 -- "no" --> R3
+    R3 -- "no" --> R4
+    R4 -- "yes" --> R5
+    style R1 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R2 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R3 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R4 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R5 fill:none,stroke:#bbb,stroke-dasharray:6 4
