@@ -91,7 +91,7 @@
   sensitive=true
 }
 \lstset{
-  basicstyle=\ttfamily\footnotesize,
+  basicstyle=\normalfont\footnotesize,
   columns=fullflexible,
   breaklines=true,
   breakatwhitespace=false,
@@ -117,7 +117,7 @@
     \par\noindent\begingroup\setlength{\fboxsep}{7pt}%
     \fbox{\begin{minipage}[c][0.15\textheight][c]{0.80\linewidth}
       \centering\textbf{Figure asset not found}\par\smallskip
-      \texttt{\detokenize{#2}}\par\smallskip
+      \detokenize{#2}\par\smallskip
       Upload this image file to the Overleaf project to display it.
     \end{minipage}}%
     \endgroup
@@ -164,6 +164,7 @@
 \setcounter{bottomnumber}{2}
 \setcounter{totalnumber}{4}
 
+\urlstyle{same}
 \begin{document}
 \pagenumbering{roman}
 \setcounter{page}{1}
@@ -312,7 +313,7 @@ Date:
 \vspace*{1.60in}
 \begin{center}{\large\bfseries Abstract}\end{center}
 \vspace{0.20in}
-AI coding agents now read repositories, edit many files and execute shell commands with little human intervention. Run directly on a developer's machine, such an agent inherits the developer's privileges: it can read real secrets, write anywhere, contact any host and leave unreviewed changes in version control. Current tooling conflates running an agent with trusting its output. This project presents VaultShield, a pipeline that separates the two. VaultShield runs the agent in a disposable Docker container holding a fresh clone of the repository and a read-only credential file whose values mirror the shape of the developer's \texttt{.env} but contain no real secret; a repository-host token, when needed, is confined to the single \texttt{git clone} process. Terminal output, in-container file changes and policy violations are merged into a timestamped JSON Lines event log. Writes to off-limits paths fail the run, and an optional egress policy routes traffic through a hardened proxy that blocks and records non-allowlisted hosts. A separate hardened helper container then rebuilds the repository from a pre-agent base and commits the change to a dedicated branch with a structured diff, so the agent cannot falsify the evidence. Artifacts are uploaded to a Django REST Framework backend on MongoDB, scanned asynchronously, and approved or rejected by a reviewer in a React dashboard. Only an approved run can become a pull or merge request. The system comprises about 18,100 logical lines of product code. Of 2,704 automated tests, including Docker-backed isolation, egress, token-hygiene and tamper-resistance tests and concurrency tests against a real MongoDB replica set, 2,702 passed. In a 40-run benchmark, VaultShield added 1.17 seconds of fixed overhead per run by default and 1.98 seconds with egress allowlisting, a projected 0.4--0.7\% of a five-minute agent session; the host checkout was untouched and the change was captured in every run, with no container or network left behind. The evaluation also exposed limits: the shared-kernel boundary of containers, opt-in egress control, a polling file watcher that missed 20\% of very short writes, and an approval gate that is a workflow control rather than a separation-of-duties control in the single-user MVP. VaultShield shows that containment, evidence and human review for coding agents can be delivered together at negligible cost, with every residual risk stated explicitly.
+AI coding agents now read repositories, edit many files and execute shell commands with little human intervention. Run directly on a developer's machine, such an agent inherits the developer's privileges: it can read real secrets, write anywhere, contact any host and leave unreviewed changes in version control. Current tooling conflates running an agent with trusting its output. This project presents VaultShield, a pipeline that separates the two. VaultShield runs the agent in a disposable Docker container holding a fresh clone of the repository and a read-only credential file whose values mirror the shape of the developer's .env but contain no real secret; a repository-host token, when needed, is confined to the single git clone process. Terminal output, in-container file changes and policy violations are merged into a timestamped JSON Lines event log. Writes to off-limits paths fail the run, and an optional egress policy routes traffic through a hardened proxy that blocks and records non-allowlisted hosts. A separate hardened helper container then rebuilds the repository from a pre-agent base and commits the change to a dedicated branch with a structured diff, so the agent cannot falsify the evidence. Artifacts are uploaded to a Django REST Framework backend on MongoDB, scanned asynchronously, and approved or rejected by a reviewer in a React dashboard. Only an approved run can become a pull or merge request. The system comprises about 18,100 logical lines of product code. Of 2,704 automated tests, including Docker-backed isolation, egress, token-hygiene and tamper-resistance tests and concurrency tests against a real MongoDB replica set, 2,702 passed. In a 40-run benchmark, VaultShield added 1.17 seconds of fixed overhead per run by default and 1.98 seconds with egress allowlisting, a projected 0.4--0.7\% of a five-minute agent session; the host checkout was untouched and the change was captured in every run, with no container or network left behind. The evaluation also exposed limits: the shared-kernel boundary of containers, opt-in egress control, a polling file watcher that missed 20\% of very short writes, and an approval gate that is a workflow control rather than a separation-of-duties control in the single-user MVP. VaultShield shows that containment, evidence and human review for coding agents can be delivered together at negligible cost, with every residual risk stated explicitly.
 
 \vspace{0.15in}
 \noindent\textbf{Keywords:} AI coding agents, sandboxing, Docker, human-in-the-loop review, audit logging, credential isolation, egress control, software supply-chain security.
@@ -428,7 +429,7 @@ The scope of the VaultShield project covers the sandboxed execution, monitoring 
 \begin{itemize}
 \tightlist
 \item
-  \textbf{Command-Line Interface:} the vaultshield CLI with the init, login, run, submit and teardown commands and the supporting ask and protect command groups.
+  \textbf{Command-Line Interface:} the vaultshield CLI with the init, login, run, submit and teardown commands and the supporting protect command group.
 \item
   \textbf{Sandboxed Execution:} a per-run Docker sandbox with a fresh clone, a read-only dummy credential file and guaranteed teardown.
 \item
@@ -461,15 +462,21 @@ The minimum viable product is scoped to a single developer's machine, so the app
 
 \chapter{Literature Review}\label{literature-review}
 
-The literature relevant to VaultShield falls into five strands: coding agents and their evaluation, the risks of LLM agents and generated code, governance of agentic systems, isolation technologies, and human code review.
+The literature relevant to VaultShield falls into five overlapping strands: the capabilities and evaluation of autonomous coding agents, the security risks of LLM agents and of the code they generate, the governance and visibility of agentic systems, isolation technologies for running untrusted code, and human code review. Each strand is reviewed below, followed by a comparative analysis and a statement of the research gap that the project addresses.
 
-Coding agents and sandboxes. Chen et al.~\cite{ref1} introduced Codex and the HumanEval benchmark and ran model-generated programs inside a gVisor-based sandbox, establishing early that model output must be treated as untrusted code. Jimenez et al.~\cite{ref2} moved evaluation to whole repositories with SWE-bench, 2,294 tasks from real GitHub issues, on which the best model of the time resolved fewer than 2\%. Yang et al.~\cite{ref3} showed with SWE-agent that a purpose-built agent-computer interface raises this to 12.5\%, executing inside a Docker container, and Wang et al.~\cite{ref4} presented OpenHands, whose agents act through a sandboxed Docker runtime that records every action in an event stream. These systems validate containers as the execution environment and a chronological action log as the unit of observability, but their sandboxes exist for capability: none holds the patch for human approval or keeps the developer's real secrets out of the workspace.
+Code-generating models and the need for sandboxes. Chen et al.~\cite{ref1} introduced Codex, a GPT model fine-tuned on public GitHub code, together with the HumanEval benchmark of hand-written programming problems scored by functional correctness. Because scoring functional correctness requires executing model-generated programs, the authors ran those programs inside a gVisor-based sandbox and discussed misuse, over-reliance and insecure code as broader risks. The paper established, at the start of the code-LLM era, that model output must be treated as untrusted code and executed only behind an isolation boundary. Its sandbox, however, was an internal evaluation harness for short, self-contained functions rather than a developer-facing tool for repository-scale changes with human review.
 
-Risks of agents and generated code. Ruan et al.~\cite{ref5} red-teamed agents in an LM-emulated sandbox and found risky failures in 23.9\% of cases even for the safest agent. Debenedetti et al.~\cite{ref6} built AgentDojo to measure prompt-injection attacks and defences, and Greshake et al.~\cite{ref7} showed that instructions planted in retrieved data can take control of LLM-integrated applications. Pearce et al.~\cite{ref8} found that about 40\% of programs generated by GitHub Copilot for security-relevant scenarios contained vulnerabilities. These works characterise the threat but do not provide an operational containment and review pipeline.
+Repository-scale agents. Jimenez et al.~\cite{ref2} proposed SWE-bench, 2,294 task instances drawn from real GitHub issues and pull requests across twelve popular Python repositories, in which a model must produce a patch that makes the repository's failing tests pass. SWE-bench moved evaluation from isolated functions to whole repositories, and the best model of the time resolved fewer than 2\% of the issues. Yang et al.~\cite{ref3} then showed with SWE-agent that a purpose-built agent-computer interface, with dedicated commands for viewing, searching and editing files, raises this to 12.5\% with GPT-4 Turbo, executing inside a Docker container. Wang et al.~\cite{ref4} presented OpenHands, an open platform in which agents act through a sandboxed Docker runtime and every action and observation is recorded in an event stream. These systems validate two of VaultShield's design choices: a container is the practical execution environment for repository-scale agents, and a chronological record of agent actions is the natural unit of observability. Their sandboxes, however, exist to give the agent a reproducible workspace. None of them holds the agent's patch for human approval, and none keeps the developer's real secrets out of the workspace.
 
-Governance and visibility. Shavit et al.~\cite{ref9} recommend constraining the action space, requiring human approval for high-impact actions, making agent activity legible and keeping systems interruptible, and Chan et al.~\cite{ref10} argue that oversight requires agent identifiers, real-time monitoring and activity logs. VaultShield implements several of these practices for coding agents: the run identifier names the sandbox, branch, run directory and backend record; the event log, egress log and screenshots form the activity log; and the approval state machine is the human-approval control.
+Risks of LLM agents. Ruan et al.~\cite{ref5} introduced ToolEmu, which uses a language model to emulate tool execution so that agents can be red-teamed against high-stakes scenarios without real side effects, together with an automatic safety evaluator. Across 36 toolkits and 144 test cases, even the safest agent they evaluated showed risky failures in 23.9\% of cases. Debenedetti et al.~\cite{ref6} built AgentDojo, a dynamic environment with 97 realistic tasks and 629 security test cases for measuring prompt-injection attacks against tool-using agents and the defences against them, and found that both remain far from solved. Greshake et al.~\cite{ref7} demonstrated indirect prompt injection, in which instructions planted in data that an LLM-integrated application retrieves take control of the application and can cause data exfiltration. For coding agents the implication is direct, because a repository's own files, issues and dependencies are untrusted input. These works characterise the threat convincingly, but they are evaluation frameworks and do not provide an operational containment and review pipeline for developers.
 
-Isolation and review. Combe et al.~\cite{ref11} showed that Docker's security depends heavily on configuration because containers share the host kernel. Firecracker microVMs \cite{ref12} and the gVisor user-space kernel \cite{ref13} provide stronger boundaries at a cost in operational complexity or performance, so VaultShield uses Docker for its MVP and documents the escape risk. Bacchelli and Bird \cite{ref14} found that the main challenge for code reviewers is understanding the change and its context, which is why VaultShield shows the reviewer the agent's timeline, screenshots and automated findings alongside the diff.
+Security of AI-generated code. Pearce et al.~\cite{ref8} prompted GitHub Copilot with 89 scenarios based on MITRE's top Common Weakness Enumeration categories and found that about 40\% of the 1,689 generated programs contained vulnerabilities. This result motivates VaultShield's static security scan over every ingested diff and, more fundamentally, its requirement that a human reviews agent code before it is merged. The study evaluated completion suggestions rather than autonomous agents, so it does not cover agents that also execute commands; VaultShield extends the concern from insecure code to insecure behaviour.
+
+Governance and visibility of agentic systems. Shavit et al.~\cite{ref9} proposed practices for keeping agentic AI systems safe and accountable, including evaluating suitability for a task, constraining the action space, requiring human approval for high-impact actions, setting safe defaults, making agent activity legible, automatic monitoring, attributability and interruptibility. Chan et al.~\cite{ref10} argued that oversight of AI agents depends on visibility and identified three categories of measures: agent identifiers, real-time monitoring and activity logging. VaultShield can be read as a concrete implementation of several of these practices for coding agents. The run identifier names the sandbox, the branch, the run directory and the backend record; the event log, egress log and screenshots form the activity log; and the approval state machine is the human-approval control. Both papers are deliberately technology-neutral, so they leave the engineering of such controls as an open problem.
+
+Container isolation and its limits. Combe et al.~\cite{ref11} analysed Docker from a security perspective and identified the main areas of concern: isolation through Linux namespaces and control groups, the shared host kernel, network configuration and the trustworthiness of the image distribution chain. They concluded that Docker's default configuration offers reasonable isolation but that its security depends heavily on configuration. Agache et al.~\cite{ref12} described Firecracker, the virtual machine monitor behind AWS Lambda, whose microVMs boot in as little as 125 ms with under 5 MiB of memory overhead, showing that VM-grade isolation can approach container-like efficiency. Young et al.~\cite{ref13} measured gVisor, a user-space kernel that intercepts system calls to shrink the host kernel's attack surface, and showed that this stronger isolation carries substantial costs for system-call-heavy and file-system-heavy workloads. Together these papers frame VaultShield's trade-off: Docker containers are cheap and widely available but share the kernel, while gVisor and microVMs offer stronger boundaries at a cost in performance or operational complexity. VaultShield uses Docker for its MVP, documents the escape risk and lists gVisor and microVMs as future work.
+
+Human code review. Bacchelli and Bird \cite{ref14} studied modern code review at Microsoft through observation, interviews and surveys. Although finding defects is the main stated motivation for review, much of its actual value lies in knowledge transfer, team awareness and alternative solutions, and the main challenge for reviewers is understanding the change and its context. This finding shapes VaultShield's dashboard: the reviewer receives not only the diff but also the timeline of what the agent did, screenshots of the running application and automated findings, so that understanding an agent's change does not require reconstructing its reasoning from the patch alone.
 
 \section{Comparative Analysis of Recent Studies}\label{comparative-analysis-of-recent-studies}
 
@@ -625,9 +632,9 @@ vaultshield submit re-reads the run and refuses before any side effect unless it
 
 The backend is a Django 5.2 project with Django REST Framework and MongoDB as its system of record. Every API path except login requires token authentication. The CLI registers runs, uploads events, diffs and screenshots, and patches the status; the dashboard reads run details and records decisions. Celery workers with Redis run a static security scan over the added lines of each diff, reap orphaned sandboxes every 15 minutes and flag approved but unsubmitted runs. The dashboard is a React 19 application built with Vite 7 that shows a projects overview, a filterable run history and a run detail page with Diff, Timeline, Screenshots and Security tabs and the decision controls.
 
-\subsection{Supporting Modules: Protect and Orchestrate}\label{supporting-modules-protect-and-orchestrate}
+\subsection{Supporting Module: Protect}\label{supporting-module-protect}
 
-Protect covers agents that developers still run outside the sandbox: it moves every .env value into the macOS Keychain, leaves a placeholder in the file and injects the real values only into the application started through vaultshield exec. Orchestrate scans the project, asks clarifying questions through a Gemini model and produces an enriched agent prompt that is checked to contain no secret before the run is registered.
+Protect covers agents that developers still run outside the sandbox: it moves every .env value into the macOS Keychain, leaves a placeholder in the file and injects the real values only into the application started through vaultshield exec.
 
 Figure 3.5 shows all components and the data flows between them. The CLI is the only component that talks to the Docker daemon, the dummy credential file is the only host path mounted into the sandbox, artifacts reach the backend over authenticated HTTP, and the submit command is the only component that pushes to the repository host, after confirming approval with the backend.
 
@@ -710,7 +717,7 @@ VaultShield was developed with an iterative and incremental methodology based on
 \item
   \textbf{Submission and Hardening:} implement PR and MR submission and teardown, then add the egress proxy, the trusted capture helper and token hygiene.
 \item
-  \textbf{Migration and Supporting Modules:} move the backend to MongoDB with transactional approval, and add the Protect and Orchestrate modules.
+  \textbf{Migration and Protect Module:} move the backend to MongoDB with transactional approval, and add the Protect module.
 \item
   \textbf{Evaluation and Documentation:} run the tests and performance benchmark and write this report.
 \end{enumerate}
@@ -970,7 +977,7 @@ Schedule slippage or member unavailability & Medium & Medium & Working pipeline 
 
 \subsection{Launching the Sandbox Container}\label{launching-the-sandbox-container}
 
-The first snippet is the core of \texttt{Sandbox.\allowbreak{}create}. Before any Docker call it checks that the credential file exists, because Docker silently creates an empty directory at a missing bind-mount source. Egress options are passed only when they are set, and any failure removes the partial container and raises a single \texttt{SandboxError}. As Figure 5.1 shows, the only host path given to the container is the read-only credential file, and \texttt{teardown} force-removes the container from a \texttt{finally} block so that it runs on every exit path.
+The first snippet is the core of Sandbox.\allowbreak{}create. Before any Docker call it checks that the credential file exists, because Docker silently creates an empty directory at a missing bind-mount source. Egress options are passed only when they are set, and any failure removes the partial container and raises a single SandboxError. As Figure 5.1 shows, the only host path given to the container is the read-only credential file, and teardown force-removes the container from a finally block so that it runs on every exit path.
 
 \begin{figure}[H]
 \centering
@@ -981,7 +988,7 @@ The first snippet is the core of \texttt{Sandbox.\allowbreak{}create}. Before an
 
 \subsection{One-Shot Credential for Private Clones}\label{one-shot-credential-for-private-clones}
 
-The second snippet clones a private repository without giving the agent the repository-host token. The token is placed only in the environment of the single \texttt{git clone} exec, and the command line names environment variables rather than containing their values. As Figure 5.2 shows, the token is therefore absent from the remote URL, the process arguments, the container environment and error messages, and its lifetime is exactly the duration of the clone.
+The second snippet clones a private repository without giving the agent the repository-host token. The token is placed only in the environment of the single git clone exec, and the command line names environment variables rather than containing their values. As Figure 5.2 shows, the token is therefore absent from the remote URL, the process arguments, the container environment and error messages, and its lifetime is exactly the duration of the clone.
 
 \begin{figure}[H]
 \centering
@@ -992,7 +999,7 @@ The second snippet clones a private repository without giving the agent the repo
 
 \subsection{Event Logging and Off-Limits Enforcement}\label{event-logging-and-off-limits-enforcement}
 
-The third snippet, in Figure 5.3, shows the event record type, the off-limits path matcher and the append-only JSON Lines writer. Every record has exactly three fields matching the backend's \texttt{RunEvent} model, and \texttt{json.\allowbreak{}dumps} keeps each record on one line, so a partially written log stays readable. The monitor raises \texttt{OffLimitsViolation} only after the writer has run.
+The third snippet, in Figure 5.3, shows the event record type, the off-limits path matcher and the append-only JSON Lines writer. Every record has exactly three fields matching the backend's RunEvent model, and json.\allowbreak{}dumps keeps each record on one line, so a partially written log stays readable. The monitor raises OffLimitsViolation only after the writer has run.
 
 \begin{figure}[H]
 \centering
@@ -1003,7 +1010,7 @@ The third snippet, in Figure 5.3, shows the event record type, the off-limits pa
 
 \subsection{Egress Allow/Deny Decision}\label{egress-allowdeny-decision}
 
-The fourth snippet, in Figure 5.4, is the egress proxy's decision function, evaluated for every \texttt{CONNECT} request and TLS connection. A host that is not on the allowlist is never resolved in \texttt{allowlist} mode, IP literals must match an IP entry exactly, and every resolved address must be publicly routable, so an allowlisted name cannot be pointed at an internal address. In \texttt{log-\allowbreak{}only} mode only the allowlist rule is relaxed.
+The fourth snippet, in Figure 5.4, is the egress proxy's decision function, evaluated for every CONNECT request and TLS connection. A host that is not on the allowlist is never resolved in allowlist mode, IP literals must match an IP entry exactly, and every resolved address must be publicly routable, so an allowlisted name cannot be pointed at an internal address. In log-\allowbreak{}only mode only the allowlist rule is relaxed.
 
 \begin{figure}[H]
 \centering
@@ -1014,7 +1021,7 @@ The fourth snippet, in Figure 5.4, is the egress proxy's decision function, eval
 
 \subsection{Branch Commit and Structured Diff}\label{branch-commit-and-structured-diff}
 
-The fifth snippet, in Figure 5.5, runs inside the trusted capture helper. \texttt{commit\_\allowbreak{}run\_\allowbreak{}branch} refuses unsafe repository configuration and creates exactly one commit, using \texttt{-\allowbreak{}-\allowbreak{}allow-\allowbreak{}empty} so that a run which changed nothing still produces a reviewable result and \texttt{-\allowbreak{}-\allowbreak{}no-\allowbreak{}verify} so that no repository hook runs. \texttt{build\_\allowbreak{}structured\_\allowbreak{}diff} disables rename detection, external diff programs and text conversion filters.
+The fifth snippet, in Figure 5.5, runs inside the trusted capture helper. commit\_\allowbreak{}run\_\allowbreak{}branch refuses unsafe repository configuration and creates exactly one commit, using -\allowbreak{}-\allowbreak{}allow-\allowbreak{}empty so that a run which changed nothing still produces a reviewable result and -\allowbreak{}-\allowbreak{}no-\allowbreak{}verify so that no repository hook runs. build\_\allowbreak{}structured\_\allowbreak{}diff disables rename detection, external diff programs and text conversion filters.
 
 \begin{figure}[H]
 \centering
@@ -1025,7 +1032,7 @@ The fifth snippet, in Figure 5.5, runs inside the trusted capture helper. \textt
 
 \subsection{Approval State Machine}\label{approval-state-machine}
 
-The sixth snippet, in Figure 5.6, is the inner function of \texttt{apply\_\allowbreak{}decision}. The status check and status write are a single conditional update, and the \texttt{Approval} record is created in the same MongoDB transaction, so only one of two concurrent decisions can match. The loser receives HTTP 409 naming the run's actual status; before the retry wrapper was added, 54 of 72 losing calls in a concurrency test received a server error instead.
+The sixth snippet, in Figure 5.6, is the inner function of apply\_\allowbreak{}decision. The status check and status write are a single conditional update, and the Approval record is created in the same MongoDB transaction, so only one of two concurrent decisions can match. The loser receives HTTP 409 naming the run's actual status; before the retry wrapper was added, 54 of 72 losing calls in a concurrency test received a server error instead.
 
 \begin{figure}[H]
 \centering
@@ -1050,10 +1057,8 @@ The system requires Python 3.11 or later, a running Docker daemon, Git, Node.js 
 \item
   Install the CLI:
 
-\begin{lstlisting}[language=bash]
-cd cli && python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]" && playwright install chromium
-\end{lstlisting}
+
+cd cli \&\& python3 -m venv .venv \&\& source .venv/bin/activate \&\& pip install -e ''.[dev]'' \&\& playwright install chromium
 \item
   Authenticate with vaultshield login --backend-url http://localhost:8000 --username <user>, create a project in the dashboard and note its identifier.
 \item
@@ -1061,10 +1066,8 @@ pip install -e ".[dev]" && playwright install chromium
 \item
   Execute a sandboxed run, for example with the mock agent:
 
-\begin{lstlisting}[language=bash]
-vaultshield run --agent=mock --prompt="add a file" \
-  --repo-url="$REPO" --project "$PROJECT_ID"
-\end{lstlisting}
+
+vaultshield run --agent=mock --prompt=''add a file'' --repo-url=''\$REPO'' --project ''\$PROJECT\_ID''
 \item
   Open the dashboard, select the run, inspect the Diff, Timeline, Screenshots and Security tabs, and choose Approve or Reject.
 \item
@@ -1077,7 +1080,7 @@ The dashboard screenshots below were captured by the repository's layout tool, w
 
 \subsection{Command-Line Interface}\label{command-line-interface-and-run-directory}
 
-The CLI provides the pipeline commands init, login, run, submit and teardown and the supporting commands ask, protect and exec. During vaultshield run, the terminal prints one line per pipeline milestone, as shown in Figure 5.7, and each run writes a run directory containing the dummy credential file, events.jsonl, diff.json, the branch bundle and the screenshots.
+The CLI provides the pipeline commands init, login, run, submit and teardown and the supporting commands protect and exec. During vaultshield run, the terminal prints one line per pipeline milestone, as shown in Figure 5.7, and each run writes a run directory containing the dummy credential file, events.jsonl, diff.json, the branch bundle and the screenshots.
 
 \begin{figure}[H]
 \centering
@@ -1625,14 +1628,14 @@ Objective & Evidence & Outcome \\
 \endhead
 \endlastfoot
 1. Universal agent execution platform & Mock, codex, kiro and antigravity agents run behind one adapter interface & Achieved \\\hline
-2. Agentic AI Orchestrator & The ask command scans the project, asks clarifying questions and builds an enriched prompt & Achieved \\\hline
+2. Agentic AI Orchestrator & Not implemented in Semester VII; planned for Semester VIII & Not achieved \\\hline
 3. Secure sandboxed execution & Host checkout and .env unchanged in 40 of 40 runs; dummy credentials and one-shot clone token & Achieved \\\hline
 4. Monitoring and security analysis & Event log and diff for every run; violations recorded; Celery security scan & Achieved, with a file-watcher gap \\\hline
 5. Governance and human approval & Dashboard review and decision controls; submit refuses non-approved runs & Achieved \\\hline\end{longtable}
 \addtocounter{table}{-1}
 \par\medskip
 
-All five objectives were achieved. Two gaps remain: in the single-developer MVP a token holder can bypass the dashboard through an unrestricted status update, and the polling file watcher missed some writes in very short runs, although the trusted diff captured every change. The project contributes a working implementation of the governance practices recommended for agentic systems \cite{ref9}, \cite{ref10}, engineering techniques such as shape-preserving credential substitution, a one-shot clone credential and trusted capture, and evidence that this protection costs about 1.2 seconds per run while agent-level deny rules alone do not protect secrets.
+Objectives 1, 3, 4 and 5 were achieved. Objective 2, the Agentic AI Orchestrator, was not achieved: it was not implemented in Semester VII and is planned for Semester VIII. Two further gaps remain: in the single-developer MVP a token holder can bypass the dashboard through an unrestricted status update, and the polling file watcher missed some writes in very short runs, although the trusted diff captured every change. The project contributes a working implementation of the governance practices recommended for agentic systems \cite{ref9}, \cite{ref10}, engineering techniques such as shape-preserving credential substitution, a one-shot clone credential and trusted capture, and evidence that this protection costs about 1.2 seconds per run while agent-level deny rules alone do not protect secrets.
 
 \clearpage
 
@@ -1642,6 +1645,8 @@ The limitations identified in this report define the following future work.
 
 \begin{itemize}
 \tightlist
+\item
+  \textbf{Implement the Agentic AI Orchestrator:} build the module that scans the project, asks clarifying questions before execution and passes an enriched prompt to the agent, then measure whether it improves agent accuracy and reduces hallucinations, completing Objective 2.
 \item
   \textbf{Stronger Isolation:} harden the sandbox by default with a non-root user, dropped capabilities, no-new-privileges and resource limits, and support gVisor or Firecracker microVM runtimes \cite{ref12}, \cite{ref13}.
 \item
