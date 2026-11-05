@@ -1,0 +1,397 @@
+........................................................................ [  3%]
+........................................................................ [  6%]
+........................................................................ [ 10%]
+........................................................................ [ 13%]
+........................................................................ [ 17%]
+........................................................................ [ 20%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+........................................................................ [ 41%]
+........................................................................ [ 44%]
+........................................................................ [ 48%]
+........................................................................ [ 51%]
+........................................................................ [ 55%]
+........................................................................ [ 58%]
+........................................................................ [ 62%]
+........................................................................ [ 65%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 82%]
+........................................................................ [ 86%]
+..............................................................F.......F. [ 89%]
+........................................................................ [ 93%]
+........................................................................ [ 96%]
+....................................................................     [100%]
+=================================== FAILURES ===================================
+______ test_exec_interactive_really_delivers_stdin_to_a_container_process ______
+
+tmp_path = PosixPath('/private/var/folders/w6/12gv6m614j1f_n56cyrnsp0c0000gn/T/pytest-of-aayush/pytest-0/test_exec_interactive_really_d0')
+
+    @requires_docker
+    @requires_sandbox_image
+    def test_exec_interactive_really_delivers_stdin_to_a_container_process(tmp_path):
+        """Requirement 17: the plumbing works against the real daemon."""
+        import docker
+    
+        client = docker.from_env()
+        run_id = "20250614-091530-interactive00001"
+        sandbox = Sandbox(run_id, client)
+        sandbox._ensure_image(SANDBOX_IMAGE)
+        container = client.containers.create(
+            SANDBOX_IMAGE,
+            command=["tail", "-f", "/dev/null"],
+            name=container_name(run_id),
+            working_dir="/workspace",
+        )
+        sandbox.container = container
+        try:
+            container.start()
+            handle = sandbox.exec_interactive(
+                ["sh", "-c", "read value; echo RECEIVED:[$value]"],
+                workdir="/workspace",
+            )
+            try:
+                handle.send_line(_STDIN_SENTINEL)
+                lines = []
+                for line in handle.read_output():
+                    lines.append(line)
+                    if "RECEIVED:[" in line:
+                        break
+                joined = "\n".join(lines)
+>               assert f"RECEIVED:[{_STDIN_SENTINEL}]" in joined, joined
+E               AssertionError: ***
+E                 RECEIVED:[***]
+E               assert 'RECEIVED:[interactive-stdin-sentinel-b41c]' in '***\nRECEIVED:[***]'
+
+tests/test_sandbox_execution.py:1230: AssertionError
+___ test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever ____
+
+    @requires_docker
+    @requires_sandbox_image
+    def test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever():
+        """Timeout handling. The fake prompts and then sleeps for ten minutes; the
+        read deadline has to end it. Patched short so the test is quick."""
+        import docker
+    
+        import vaultshield.cli as cli_module
+    
+        sandbox = _auth_sandbox(
+            docker.from_env(),
+            "20250614-091530-authhang000001",
+            _FAKE_HANGING_PROGRAM,
+        )
+        original = cli_module.ANTIGRAVITY_AUTH_TIMEOUT_S
+        cli_module.ANTIGRAVITY_AUTH_TIMEOUT_S = 3.0
+        try:
+            started = time.monotonic()
+            _shown, outcome = _drive_auth(sandbox, _StubAuthAdapter())
+            elapsed = time.monotonic() - started
+>           assert outcome is not None
+E           assert None is not None
+
+tests/test_sandbox_execution.py:1588: AssertionError
+=============================== warnings summary ===============================
+tests/test_cli.py::test_init_command_runs_without_error
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:55: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_init_writes_config_and_reports_manual_fill_in_when_undetected
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:62: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_init_reports_detected_config_path
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:71: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_stops_on_missing_config_without_any_side_effect
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:212: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_reports_missing_required_config_fields
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:225: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_captures_screenshots_after_the_monitor_and_before_teardown
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:534: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_passes_an_explicit_ready_timeout_through_to_browser_capture
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:577: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_reports_a_readiness_timeout_and_still_tears_the_sandbox_down
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:589: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_reports_a_screenshot_failure_distinctly_from_a_timeout
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:611: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_succeeds_with_no_configured_routes
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:635: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_captures_the_branch_and_diff_after_browser_capture
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:671: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_reports_a_git_capture_failure_and_still_tears_the_sandbox_down
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:718: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_uploads_the_run_artifacts_last
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:767: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_uploads_with_an_overridden_backend_url
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:794: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_uploads_for_every_registered_agent
+tests/test_cli.py::test_run_uploads_for_every_registered_agent
+tests/test_cli.py::test_run_uploads_for_every_registered_agent
+tests/test_cli.py::test_run_uploads_for_every_registered_agent
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:814: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_aborts_before_any_sandbox_without_a_token
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:842: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_reports_an_unreachable_backend_and_preserves_the_artifacts
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:870: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_aborts_before_any_sandbox_when_the_run_cannot_be_registered[backend_down-All connection attempts failed]
+tests/test_cli.py::test_run_aborts_before_any_sandbox_when_the_run_cannot_be_registered[token_rejected-vaultshield login --backend-url http://localhost:8000]
+tests/test_cli.py::test_run_aborts_before_any_sandbox_when_the_run_cannot_be_registered[missing_token-vaultshield login]
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:948: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_without_a_project_stops_before_anything_exists
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:995: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_option_project_beats_the_config_project
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1017: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_uses_the_config_project_without_the_option
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1032: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_rejects_a_config_project_of_the_wrong_type
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1047: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_registers_then_completes_the_run_after_the_last_upload
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1064: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py: 14 warnings
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1212: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_a_failed_mark_that_fails_does_not_change_the_original_error[returns_a_warning]
+tests/test_cli.py::test_a_failed_mark_that_fails_does_not_change_the_original_error[returns_a_warning]
+tests/test_cli.py::test_a_failed_mark_that_fails_does_not_change_the_original_error[raises]
+tests/test_cli.py::test_a_failed_mark_that_fails_does_not_change_the_original_error[raises]
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1255: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_reports_diff_metadata_over_the_upload_cap
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1362: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_forwards_the_project_dir_to_sandbox_create
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1963: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_forwards_the_resolved_agent_workdir_to_the_monitor
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1974: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_defaults_both_to_the_repository_root_without_a_project_dir
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:1987: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_rejects_a_traversing_project_dir_before_any_side_effect
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2001: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_off_mode_creates_the_sandbox_exactly_as_before
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2064: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_allowlist_call_order
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2078: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_trusted_capture_order
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2095: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_an_egress_failure_marks_the_run_failed_once_after_teardown[start]
+tests/test_cli.py::test_an_egress_failure_marks_the_run_failed_once_after_teardown[isolate]
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2124: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_a_token_violation_uploads_only_the_scrubbed_timeline
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2139: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_the_events_upload_runs_before_the_failed_mark_and_cannot_mask_it
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2158: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_a_failing_capture_helper_backstop_adds_one_warning_only
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2180: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_a_pre_agent_capture_failure_does_not_claim_an_event_log
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2195: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_a_skipped_snapshot_event_is_appended_only_when_needed
+tests/test_cli.py::test_a_skipped_snapshot_event_is_appended_only_when_needed
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2215: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_an_app_port_that_collides_with_the_proxy_stops_at_step_1
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2231: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_and_prompt_are_mutually_exclusive
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2277: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_and_prompt_are_mutually_exclusive
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2282: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_without_a_key_stops_before_any_run_or_docker
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2290: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_hands_the_enriched_prompt_to_the_adapter
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2309: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_yes_skips_the_questions
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2336: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_reads_answers_from_a_file
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2351: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_falls_back_when_the_model_fails_and_the_run_continues
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2369: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_cli.py::test_run_ask_never_sends_or_embeds_a_planted_secret
+  /Users/aayush/Codes/VaultShield/cli/tests/test_cli.py:2395: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheFlagIsOptIn::test_no_auth_phase_without_the_flag
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:322: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheFlagIsOptIn::test_the_pipeline_order_is_unchanged_without_the_flag
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:338: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheFlagIsOptIn::test_the_auth_phase_runs_immediately_after_create
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:357: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestOtherAdaptersAreUnaffected::test_the_flag_is_harmless_for_an_agent_that_needs_no_signin
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:382: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestNoHostCredentialStoreIsRead::test_no_host_gemini_or_keychain_path_reaches_docker
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:424: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestNoHostCredentialStoreIsRead::test_the_only_host_file_named_is_the_credential_file
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:439: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestNoHostCredentialStoreIsRead::test_the_signin_runs_outside_the_clone
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:452: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_it_reaches_stdin_and_only_stdin
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:480: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_it_never_appears_in_argv_or_create_arguments
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:489: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_it_is_never_echoed_to_the_terminal
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:510: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_it_never_reaches_the_event_log
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:521: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_it_never_reaches_the_diff_artifact
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:530: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_it_never_appears_in_a_failure_message
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:537: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheAuthorizationCodeCannotEscape::test_no_code_entered_is_refused_without_starting_the_agent
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:547: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheSessionTokenCannotEnterAnArtifact::test_the_banner_discloses_the_scopes_before_asking_for_consent
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:592: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTheSessionTokenCannotEnterAnArtifact::test_the_banner_states_the_agent_can_read_its_own_session
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:609: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_teardown_after_a_failed_signin
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:630: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_teardown_after_a_cancelled_signin
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:645: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_teardown_when_the_signin_never_asks_for_a_code
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:660: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_the_exec_handle_is_always_closed
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:676: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_a_failed_signin_message_names_no_event_log
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:690: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_an_abort_at_the_code_prompt_marks_the_run_failed_after_teardown
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:717: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+tests/test_interactive_auth.py::TestTeardownIsGuaranteedAroundTheAuthPhase::test_a_sign_in_that_goes_silent_is_reported_as_a_timeout
+  /Users/aayush/Codes/VaultShield/cli/tests/test_interactive_auth.py:738: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem():
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_sandbox_execution.py::test_exec_interactive_really_delivers_stdin_to_a_container_process
+FAILED tests/test_sandbox_execution.py::test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever
+2 failed, 2082 passed, 94 warnings in 734.14s (0:12:14)

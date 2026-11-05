@@ -1,0 +1,9 @@
+$ docker ps -a --filter name=vaultshield-run --filter name=vaultshield-capture --filter name=vaultshield-egress
+NAMES     STATUS
+
+$ docker network ls --filter name=vaultshield
+NAME                  DRIVER
+vaultshield_default   bridge
+
+$ ls ../vaultshield_mock_agent.txt   # run from cli/: the host checkout root
+ls: ../vaultshield_mock_agent.txt: No such file or directory

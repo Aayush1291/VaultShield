@@ -1,0 +1,8 @@
+PASS src/DashboardLayout.test.jsx
+PASS src/Landing.test.jsx
+PASS src/useRouteViewTransition.test.jsx
+
+Test Suites: 21 passed, 21 total
+Tests:       283 passed, 283 total
+Snapshots:   0 total
+Time:        2.516 s

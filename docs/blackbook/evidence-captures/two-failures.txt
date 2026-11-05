@@ -1,0 +1,82 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___ test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever ____
+
+    @requires_docker
+    @requires_sandbox_image
+    def test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever():
+        """Timeout handling. The fake prompts and then sleeps for ten minutes; the
+        read deadline has to end it. Patched short so the test is quick."""
+        import docker
+    
+        import vaultshield.cli as cli_module
+    
+        sandbox = _auth_sandbox(
+            docker.from_env(),
+            "20250614-091530-authhang000001",
+            _FAKE_HANGING_PROGRAM,
+        )
+        original = cli_module.ANTIGRAVITY_AUTH_TIMEOUT_S
+        cli_module.ANTIGRAVITY_AUTH_TIMEOUT_S = 3.0
+        try:
+            started = time.monotonic()
+            _shown, outcome = _drive_auth(sandbox, _StubAuthAdapter())
+            elapsed = time.monotonic() - started
+>           assert outcome is not None
+E           assert None is not None
+
+tests/test_sandbox_execution.py:1588: AssertionError
+______ test_exec_interactive_really_delivers_stdin_to_a_container_process ______
+
+tmp_path = PosixPath('/private/var/folders/w6/12gv6m614j1f_n56cyrnsp0c0000gn/T/pytest-of-aayush/pytest-1/test_exec_interactive_really_d0')
+
+    @requires_docker
+    @requires_sandbox_image
+    def test_exec_interactive_really_delivers_stdin_to_a_container_process(tmp_path):
+        """Requirement 17: the plumbing works against the real daemon."""
+        import docker
+    
+        client = docker.from_env()
+        run_id = "20250614-091530-interactive00001"
+        sandbox = Sandbox(run_id, client)
+        sandbox._ensure_image(SANDBOX_IMAGE)
+        container = client.containers.create(
+            SANDBOX_IMAGE,
+            command=["tail", "-f", "/dev/null"],
+            name=container_name(run_id),
+            working_dir="/workspace",
+        )
+        sandbox.container = container
+        try:
+            container.start()
+            handle = sandbox.exec_interactive(
+                ["sh", "-c", "read value; echo RECEIVED:[$value]"],
+                workdir="/workspace",
+            )
+            try:
+                handle.send_line(_STDIN_SENTINEL)
+                lines = []
+                for line in handle.read_output():
+                    lines.append(line)
+                    if "RECEIVED:[" in line:
+                        break
+                joined = "\n".join(lines)
+>               assert f"RECEIVED:[{_STDIN_SENTINEL}]" in joined, joined
+E               AssertionError: ***
+E                 RECEIVED:[***]
+E               assert 'RECEIVED:[interactive-stdin-sentinel-b41c]' in '***\nRECEIVED:[***]'
+
+tests/test_sandbox_execution.py:1230: AssertionError
+============================= slowest 2 durations ==============================
+600.33s call     tests/test_sandbox_execution.py::test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever
+0.21s call     tests/test_sandbox_execution.py::test_exec_interactive_really_delivers_stdin_to_a_container_process
+=========================== short test summary info ============================
+FAILED tests/test_sandbox_execution.py::test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever
+FAILED tests/test_sandbox_execution.py::test_exec_interactive_really_delivers_stdin_to_a_container_process
+2 failed in 600.72s (0:10:00)
+Exception ignored while finalizing file <urllib3.response.HTTPResponse object at 0x10e0f8280>:
+Traceback (most recent call last):
+  File "/Users/aayush/Codes/VaultShield/cli/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1313, in close
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/client.py", line 437, in close
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/client.py", line 450, in flush
+ValueError: I/O operation on closed file.

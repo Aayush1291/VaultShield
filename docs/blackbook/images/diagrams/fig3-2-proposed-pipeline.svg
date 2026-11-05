@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="450pt" height="352pt" viewBox="0 0 450 352"><rect width="100%" height="100%" fill="white"/><defs><marker id="arrow" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#444444"/></marker><marker id="arrows" viewBox="0 0 10 10" refX="0.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#444444"/></marker><marker id="open" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#444444" stroke-width="1.4"/></marker></defs>
+<rect x="4" y="6" width="442" height="112" fill="none" stroke="#bbbbbb" stroke-width="0.8" stroke-dasharray="5,3"/>
+<rect x="12.0" y="18.0" width="101.0" height="52.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="62.5" y="36.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Prompt or task</text>
+<text x="62.5" y="47.1" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">+ repo URL</text>
+<text x="62.5" y="57.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">+ agent</text>
+<rect x="122.0" y="18.0" width="101.0" height="52.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="172.5" y="36.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Project-context</text>
+<text x="172.5" y="47.1" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">scan +</text>
+<text x="172.5" y="57.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">sanitisation*</text>
+<rect x="232.0" y="18.0" width="101.0" height="52.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="282.5" y="36.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Clarifying</text>
+<text x="282.5" y="47.1" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">questions +</text>
+<text x="282.5" y="57.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">developer answers*</text>
+<rect x="342.0" y="18.0" width="101.0" height="52.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="392.5" y="36.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Enriched prompt</text>
+<text x="392.5" y="47.1" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">+ final secret</text>
+<text x="392.5" y="57.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">check*</text>
+<path d="M113.0,44.0 L122.0,44.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<path d="M223.0,44.0 L232.0,44.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<path d="M333.0,44.0 L342.0,44.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<text x="225.0" y="89.0" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="normal" text-anchor="middle" fill="#111111" font-style="italic">* Proposed context preparation (Objective 2), planned for Semester VIII.</text>
+<text x="225.0" y="102.0" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="normal" text-anchor="middle" fill="#111111" font-style="italic">In Semester VII the literal prompt goes directly to vaultshield run.</text>
+<rect x="4" y="128" width="442" height="100" fill="none" stroke="#bbbbbb" stroke-width="0.8" stroke-dasharray="5,3"/>
+<rect x="12.0" y="150.0" width="101.0" height="56.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="62.5" y="170.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Trusted capture</text>
+<text x="62.5" y="181.2" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">helper</text>
+<text x="62.5" y="191.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">branch + diff.json</text>
+<rect x="122.0" y="150.0" width="101.0" height="56.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="172.5" y="170.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Monitored agent</text>
+<text x="172.5" y="181.2" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">execution: PTY +</text>
+<text x="172.5" y="191.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">file watch + egress log</text>
+<rect x="232.0" y="150.0" width="101.0" height="56.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="282.5" y="170.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Disposable Docker</text>
+<text x="282.5" y="181.2" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">sandbox: fresh clone</text>
+<text x="282.5" y="191.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">+ dummy .env.sandbox</text>
+<rect x="342.0" y="150.0" width="101.0" height="56.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="392.5" y="175.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">vaultshield run</text>
+<text x="392.5" y="186.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">(host CLI)</text>
+<path d="M392.5,70.0 L392.5,150.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<path d="M342.0,178.0 L333.0,178.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<path d="M232.0,178.0 L223.0,178.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<path d="M122.0,178.0 L113.0,178.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<rect x="4" y="238" width="442" height="108" fill="none" stroke="#bbbbbb" stroke-width="0.8" stroke-dasharray="5,3"/>
+<rect x="12.0" y="266.0" width="101.0" height="44.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="62.5" y="280.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Backend + MongoDB</text>
+<text x="62.5" y="291.1" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">status:</text>
+<text x="62.5" y="301.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">awaiting_review</text>
+<path d="M62.5,206.0 L62.5,266.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<path d="M190,248 L242,288 L190,328 L138,288 Z" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="190.0" y="280.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">Human</text>
+<text x="190.0" y="291.1" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">reviewer</text>
+<text x="190.0" y="301.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">(dashboard)</text>
+<path d="M113.0,288.0 L138.0,288.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<rect x="300.0" y="250.0" width="140.0" height="32.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="370.0" y="263.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">vaultshield submit</text>
+<text x="370.0" y="274.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">opens PR / MR</text>
+<rect x="300.0" y="296.0" width="140.0" height="32.0" rx="0" fill="#ececec" stroke="#999999" stroke-width="0.8"/>
+<text x="370.0" y="309.8" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">vaultshield teardown</text>
+<text x="370.0" y="320.5" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="normal" text-anchor="middle" fill="#111111">deletes run branch</text>
+<path d="M216.0,268.0 L300.0,266.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<rect x="247.3" y="255.2" width="37.3" height="10.9" fill="white"/>
+<text x="266.0" y="265.0" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="normal" text-anchor="middle" fill="#111111">approve</text>
+<path d="M216.0,308.0 L300.0,312.0" fill="none" stroke="#555555" stroke-width="0.8" marker-end="url(#arrow)"/>
+<rect x="249.7" y="311.2" width="32.6" height="10.9" fill="white"/>
+<text x="266.0" y="321.0" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="normal" text-anchor="middle" fill="#111111">reject</text>
+</svg>

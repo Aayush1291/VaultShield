@@ -1,0 +1,88 @@
+$ python isolation_probe.py
+[+] Creating Sandbox (base_image=python:3.11, repo=https://github.com/octocat/Hello-World.git) ...
+[+] Sandbox created. Running probes:
+
+--- Current working directory [OK] ---
+cmd: pwd
+stdout:
+/workspace/repo
+
+--- List cwd contents [OK] ---
+cmd: ls -la
+stdout:
+total 16
+drwxr-xr-x 3 root root 4096 Nov  1 18:04 .
+drwxr-xr-x 3 root root 4096 Nov  1 18:04 ..
+drwxr-xr-x 8 root root 4096 Nov  1 18:04 .git
+-rw-r--r-- 1 root root   13 Nov  1 18:04 README
+
+--- Read host .env (should FAIL) [exit=1] ---
+cmd: cat /host/.env
+stderr:
+cat: /host/.env: No such file or directory
+
+--- Read mounted .env.sandbox (should WORK) [OK] ---
+cmd: cat /workspace/.env.sandbox
+stdout:
+VAULTSHIELD_MONGODB_URL=mongodb+srv://dummy_user:dummy_password@localhost/?retryWrites=true&w=majority
+VAULTSHIELD_MONGODB_NAME=dummy-value
+SECRET_KEY=dummy-value
+DEBUG=dummy-value
+ALLOWED_HOSTS=dummy-value
+GEMINI_API_KEY=dummy-value
+GROQ_API_KEY=z6uyz8QLg1ajKg9BC9ZKJAqDIOmvIZOwicsbOb1CGETWdwEKRk8OFdzD
+
+--- List host home directory (should FAIL) [OK] ---
+cmd: ls -la /root
+stdout:
+total 20
+drwx------ 1 root root 4096 Oct  6 04:42 .
+drwxr-xr-x 1 root root 4096 Nov  1 18:04 ..
+-rw-r--r-- 1 root root  607 Jul 17 17:05 .bashrc
+-rw-r--r-- 1 root root  132 Jul 17 17:05 .profile
+-rw------- 1 root root    0 Oct  6 04:42 .python_history
+-rw-r--r-- 1 root root  169 Oct  6 04:35 .wget-hsts
+
+--- List /home (should be empty/absent) [OK] ---
+cmd: ls -la /home
+stdout:
+total 8
+drwxr-xr-x 2 root root 4096 Jul 17 17:05 .
+drwxr-xr-x 1 root root 4096 Nov  1 18:04 ..
+
+--- Access Docker socket (should FAIL) [exit=2] ---
+cmd: ls -la /var/run/docker.sock
+stderr:
+ls: cannot access '/var/run/docker.sock': No such file or directory
+
+--- Attempt Docker socket read via curl (should FAIL) [OK] ---
+cmd: sh -c curl -s --unix-socket /var/run/docker.sock http://localhost/version || echo CURL_UNAVAILABLE_OR_BLOCKED
+stdout:
+CURL_UNAVAILABLE_OR_BLOCKED
+
+--- Network identity / hostname [OK] ---
+cmd: hostname
+stdout:
+692443fcfabb
+
+--- Write a test file into the repo [OK] ---
+cmd: sh -c echo hostile-write-test > /workspace/repo/hostile_probe_marker.txt && cat /workspace/repo/hostile_probe_marker.txt
+stdout:
+hostile-write-test
+
+[+] Tearing down Sandbox ...
+[+] Done.
+
+============================================================
+SUMMARY
+============================================================
+✅ Current working directory (exit=0)
+✅ List cwd contents (exit=0)
+🚫 Read host .env (should FAIL) (exit=1)
+✅ Read mounted .env.sandbox (should WORK) (exit=0)
+✅ List host home directory (should FAIL) (exit=0)
+✅ List /home (should be empty/absent) (exit=0)
+🚫 Access Docker socket (should FAIL) (exit=2)
+✅ Attempt Docker socket read via curl (should FAIL) (exit=0)
+✅ Network identity / hostname (exit=0)
+✅ Write a test file into the repo (exit=0)

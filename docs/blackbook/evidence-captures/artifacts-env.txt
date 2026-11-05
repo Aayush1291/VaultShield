@@ -1,0 +1,7 @@
+VAULTSHIELD_MONGODB_URL=mongodb+srv://dummy_user:dummy_password@localhost/?retryWrites=true&w=majority
+VAULTSHIELD_MONGODB_NAME=dummy-value
+SECRET_KEY=dummy-value
+DEBUG=dummy-value
+ALLOWED_HOSTS=dummy-value
+GEMINI_API_KEY=dummy-value
+GROQ_API_KEY=z6uyz8QLg1ajKg9BC9ZKJAqDIOmvIZOwicsbOb1CGETWdwEKRk8OFdzD

@@ -1,0 +1,18 @@
+flowchart TB
+    subgraph R1["Stage 1: understand the project (host only, no agent yet)"]
+        direction LR
+        A["① Developer task<br/>vaultshield run --ask"] --> B["② Context scanner<br/>file names, README,<br/>dependency names,<br/>commit subjects"] --> C["③ Sanitizer +<br/>assert_clean<br/>secret files never read;<br/>secret shapes → ***"]
+    end
+    subgraph R2["Stage 2: clarify before execution"]
+        direction RL
+        D["④ LLM planner<br/>3–5 clarifying<br/>questions (JSON)"] --> E{"⑤ Developer<br/>answers"} --> F["⑥ Prompt builder<br/>task, summary, answers,<br/>fixed constraints,<br/>suggested approach"]
+    end
+    subgraph R3["Stage 3: hand over to the secure pipeline"]
+        direction LR
+        G["⑦ Final secret check<br/>prompt.md saved<br/>in run directory"] --> H["⑧ Sandboxed run<br/>(existing pipeline)"] --> I["⑨ Dashboard<br/>prompt shown with<br/>diff and timeline"]
+    end
+    R1 --> R2
+    R2 --> R3
+    style R1 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R2 fill:none,stroke:#bbb,stroke-dasharray:6 4
+    style R3 fill:none,stroke:#bbb,stroke-dasharray:6 4

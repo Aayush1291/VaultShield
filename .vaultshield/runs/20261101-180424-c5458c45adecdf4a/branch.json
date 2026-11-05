@@ -1,0 +1,9 @@
+{
+  "base_oid": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d",
+  "branch": "vaultshield/run-20261101-180424-c5458c45adecdf4a",
+  "bundle_bytes": 561,
+  "bundle_sha256": "245f53e168b7b2faf7a6c3a04ea3f37513ec183f89f4f617c52f60d326b3e031",
+  "repo_url": "https://github.com/octocat/Hello-World.git",
+  "run_id": "20261101-180424-c5458c45adecdf4a",
+  "tip_oid": "d86518be3298ae7c8131516d2b9afc908304a354"
+}

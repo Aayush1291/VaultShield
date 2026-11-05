@@ -1,0 +1,17 @@
+$ vaultshield run --agent=mock --prompt="add a file" --egress allowlist \
+    --repo-url="https://github.com/octocat/Hello-World.git" --project 6ac8a852d5409c14bd3543c2
+Run 20261101-180424-c5458c45adecdf4a: artifacts in /Users/aayush/Codes/VaultShield/.vaultshield/runs/20261101-180424-c5458c45adecdf4a
+Run 20261101-180424-c5458c45adecdf4a registered with http://localhost:8000.
+Sandbox_Credential_File built from /Users/aayush/Codes/VaultShield/.env at /Users/aayush/Codes/VaultShield/.vaultshield/runs/20261101-180424-c5458c45adecdf4a/.env.sandbox.
+Sandbox created for run 20261101-180424-c5458c45adecdf4a (cloned https://github.com/octocat/Hello-World.git).
+Sandbox for run 20261101-180424-c5458c45adecdf4a isolated: egress allowlist for agent mock.
+Captured 1 screenshot(s) into /Users/aayush/Codes/VaultShield/.vaultshield/runs/20261101-180424-c5458c45adecdf4a/screenshots
+Committed run 20261101-180424-c5458c45adecdf4a to branch vaultshield/run-20261101-180424-c5458c45adecdf4a in the capture helper; structured diff written to /Users/aayush/Codes/VaultShield/.vaultshield/runs/20261101-180424-c5458c45adecdf4a/diff.json
+Run 20261101-180424-c5458c45adecdf4a: branch bundle written to /Users/aayush/Codes/VaultShield/.vaultshield/runs/20261101-180424-c5458c45adecdf4a/branch.bundle (561 bytes).
+Sandbox torn down for run 20261101-180424-c5458c45adecdf4a.
+Run 20261101-180424-c5458c45adecdf4a complete. Event_Log written to /Users/aayush/Codes/VaultShield/.vaultshield/runs/20261101-180424-c5458c45adecdf4a/events.jsonl
+Run 20261101-180424-c5458c45adecdf4a uploaded to http://localhost:8000
+real 6.89
+user 0.78
+sys 0.35
+exit=0

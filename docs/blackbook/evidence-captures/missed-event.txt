@@ -1,0 +1,23 @@
+$ for r in */events.jsonl; do echo "$(dirname $r)  file_change=$(grep -c file_change $r)"; done
+20260903-195802-e503f16521bb1a9c  file_change=1
+20260904-014153-f84dd84f260f75d3  file_change=1
+20261009-084108-e76a0b3dd2de2c25  file_change=1
+20261009-091725-ff669fcd7dd00b2b  file_change=1
+20261009-092431-6891a631b5f4a313  file_change=0
+20261028-203228-6fff2a1f70d369ab  file_change=1
+20261028-203504-eff27f2413d0947a  file_change=1
+20261028-203639-6f27efa1b40c575d  file_change=1
+20261028-204123-ad1d460f578e7f21  file_change=1
+20261031-112815-d5f7e57abe844bbf  file_change=1
+20261031-113718-949a61e6e1d56474  file_change=1
+20261101-172924-0014d12a14fa87e0  file_change=1
+20261101-173056-be89dfb388fd44c9  file_change=1
+20261101-180424-c5458c45adecdf4a  file_change=1
+
+$ grep -c file_change 20261009-092431-6891a631b5f4a313/events.jsonl
+0
+$ cut -c1-110 20261009-092431-6891a631b5f4a313/events.jsonl | tail -2
+{"event_type": "output", "timestamp": "2026-10-09T09:24:56.272866+00:00", "payload": "[mock-sandbox] wrote vau
+{"event_type": "output", "timestamp": "2026-10-09T09:24:56.272890+00:00", "payload": "[mock-sandbox] simulated
+$ python3 -c "import json; print([f['path'] for f in json.load(open('20261009-092431-6891a631b5f4a313/diff.json'))['files']])"
+['vaultshield_mock_agent.txt']

@@ -524,7 +524,47 @@ Ref. & Approach & Limitation relative to this project \\
 
 \section{Research Gap}\label{research-gap}
 
-The literature shows that coding agents can now make repository-scale changes \cite{ref2}, \cite{ref3}, \cite{ref4}, that their code and actions are risky in measurable ways \cite{ref5}, \cite{ref6}, \cite{ref7}, \cite{ref8}, that container security depends on configuration \cite{ref11}, \cite{ref12}, \cite{ref13}, and that governance research recommends human approval, legible logs and monitoring \cite{ref9}, \cite{ref10}. What is missing is a single developer-facing pipeline that combines these findings. No existing platform substitutes dummy values for the developer's secrets, keeps the repository-host token out of the agent's reach, builds the diff in a component the agent cannot tamper with, and holds the change behind an approval state machine before a pull request is opened. VaultShield fills this gap and states explicitly which risks remain.
+The literature shows that coding agents can now make repository-scale changes \cite{ref2}, \cite{ref3}, \cite{ref4}, that their code and actions are risky in measurable ways \cite{ref5}, \cite{ref6}, \cite{ref7}, \cite{ref8}, that container security depends on configuration \cite{ref11}, \cite{ref12}, \cite{ref13}, and that governance research recommends human approval and legible logs \cite{ref9}, \cite{ref10}. Agent vendors have since shipped security features of their own: OS-level sandboxes for the commands an agent runs in Claude Code and the OpenAI Codex CLI, a firewalled hosted environment for the GitHub Copilot cloud agent, local microVM sandboxes in Docker Sandboxes, and a Docker runtime with an event stream in OpenHands. Table~\ref{tab:2-2} compares them with VaultShield, based on their official documentation.
+
+\begingroup\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.08}
+\Needspace{8\baselineskip}
+\par\vspace{\TableCapGap}
+\noindent\begin{minipage}{\textwidth}
+\captionof{table}[]{Comparison with existing AI coding-agent security solutions}\label{tab:2-2}
+\end{minipage}
+\par
+\begin{longtable}[]{@{}|
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1900}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1250}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1250}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1350}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1250}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1250}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 13\tabcolsep) * \real{0.1750}}|@{}}
+\hline
+Control & Claude Code & Codex CLI & Copilot cloud agent & Docker Sandboxes & OpenHands & VaultShield \\
+\hline
+\endfirsthead
+\hline
+Control & Claude Code & Codex CLI & Copilot cloud agent & Docker Sandboxes & OpenHands & VaultShield \\
+\hline
+\endhead
+\endlastfoot
+Agent compatibility & Claude Code only & Codex only & Copilot only & Several agents & Its own agents & Any agent with an adapter (four built) \\\hline
+Isolation approach & OS sandbox for shell commands & OS sandbox & Hosted ephemeral environment & Local microVM & Docker container & Docker container per run (shared kernel) \\\hline
+Real .env kept from agent & -- & -- & Only copilot-environment secrets & -- & -- & Shape-preserving dummy values \\\hline
+Host checkout protected & -- & -- & Yes (hosted) & -- & Configurable & Fresh clone; host never mounted \\\hline
+Network restricted by default & Configurable & Yes & Yes (firewall) & Configurable & -- & Opt-in allowlist proxy \\\hline
+Monitoring and audit evidence & -- & -- & Session logs & -- & Event stream & Event log, egress log, screenshots \\\hline
+Change record outside agent's control & -- & -- & -- & -- & -- & Separate capture helper \\\hline
+Human approval before repository submission & Per-action prompts & Per-action approval policy & Review after the branch is pushed & -- & Per-action confirmation & Whole change held until approved \\\hline\end{longtable}
+\addtocounter{table}{-1}
+\par\smallskip
+\endgroup
+
+\noindent``--'' means the cited documentation does not describe the control. The comparison exposes four gaps. First, each sandbox protects only its own vendor's agent, with no common policy or evidence format. Second, the project's .env sits inside the workspace that local sandboxes allow, and deny rules proved brittle in our spike (Section~\ref{secret-exposure-with-and-without-protection}). Third, any activity record is produced beside the agent, which could tamper with Git state to misreport its change. Fourth, approval is per action or comes after the change is pushed. Existing products lead on isolation strength and default-deny networking. VaultShield closes the four gaps together for any agent on the developer's machine: dummy credentials and a one-shot clone token keep real secrets away, a separate capture helper builds the change record, and an approval gate holds the change until it is approved.
 
 \clearpage
 
@@ -637,6 +677,10 @@ The backend is a Django 5.2 project with Django REST Framework and MongoDB as it
 Protect covers agents that developers still run outside the sandbox: it moves every .env value into the macOS Keychain, leaves a placeholder in the file and injects the real values only into the application started through vaultshield exec.
 
 Figure 3.5 shows all components and the data flows between them. The CLI is the only component that talks to the Docker daemon, the dummy credential file is the only host path mounted into the sandbox, artifacts reach the backend over authenticated HTTP, and the submit command is the only component that pushes to the repository host, after confirming approval with the backend.
+
+\subsection*{3.3.7\hspace{0.8em}Proposed Agentic AI Orchestration}
+
+The Agentic AI Orchestrator of Objective 2 is planned for Semester VIII and has not been implemented in Semester VII; in the evaluated system the developer passes a literal prompt to vaultshield run. Its purpose is to replace a vague one-line prompt, which forces an agent to guess the framework, the files to change and the constraints, with a structured prompt, so that fewer changes are rejected at review and fewer files, APIs or packages are hallucinated. As the first row of Figure 3.2 and the context orchestrator in Figure 3.5 show, it will run on the host before any sandbox is created. A context scanner will collect a bounded, non-secret project summary: the directory listing to three levels, the start command and port detected by vaultshield init, dependency names, the start of the README and recent commit subjects. A sanitiser will replace protected values and secret-shaped strings with *** and block the request if anything secret-like remains; .env and key files are never opened. A language model will then write three to five clarifying questions in a strict JSON format, the developer will answer them at the terminal or from a file, and a prompt builder will combine the task, the project summary, the answers, a fixed Constraints section that the model cannot change, and a suggested approach. A final secret check will run before the prompt is saved as prompt.md in the run directory and passed unchanged into the existing sandboxed pipeline, where the reviewer sees it beside the diff and timeline. Because the Orchestrator sends project context to an external model and could be steered by hostile README text, it will gain no privileges: the agent still receives only dummy credentials, its change still passes trusted capture and human approval, and pattern-based sanitisation remains a stated residual risk. Its expected benefit, higher task success and approval rates with fewer hallucinated changes, will be measured on real agents in Semester VIII.
 
 \begin{figure}[H]
 \centering
@@ -1084,7 +1128,7 @@ The CLI provides the pipeline commands init, login, run, submit and teardown and
 
 \begin{figure}[H]
 \centering
-\fbox{\SafeIncludeGraphics[width=0.85\textwidth,height=0.5\textheight,keepaspectratio]{images/screenshots/terminal-run.png}}
+\fbox{\SafeIncludeGraphics[width=0.85\textwidth,height=0.5\textheight,keepaspectratio]{images/code/terminal-run.png}}
 \par\medskip
 \captionof{figure}{Terminal output of a successful vaultshield run with the mock agent}\label{fig:5-9}
 \end{figure}
@@ -1145,7 +1189,7 @@ The run detail page has a header with the run's status, a decision banner while 
 
 \begin{figure}[H]
 \centering
-\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-security-1280-light.png}}
+\fbox{\SafeIncludeGraphics[width=0.64\textwidth,keepaspectratio]{images/screenshots/detail-security-1280-light.png}}
 \par\medskip
 \captionof{figure}{Run detail – Security tab}\label{fig:5-19}
 \end{figure}
@@ -1156,14 +1200,28 @@ When the reviewer approves a run, the buttons are replaced by the status ``appro
 
 \begin{figure}[H]
 \centering
-\fbox{\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/screenshots/detail-approved-1280-light.png}}
+\fbox{\SafeIncludeGraphics[width=0.64\textwidth,keepaspectratio]{images/screenshots/detail-approved-1280-light.png}}
 \par\medskip
 \captionof{figure}{Run detail after approval, showing the submit command}\label{fig:5-20}
 \end{figure}
 
 \subsection{Implementation Summary}\label{implementation-summary}
 
-The CLI creates the sandbox, monitors the agent, captures the change on a dedicated branch and uploads the evidence, while the dashboard presents that evidence and records the reviewer's decision. Producing a change and accepting it therefore remain separate steps.
+The CLI creates the sandbox, monitors the agent, captures the change on a dedicated branch and uploads the evidence, while the dashboard presents that evidence and records the reviewer's decision. Producing a change and accepting it therefore remain separate steps. Everything in this chapter was implemented in Semester VII: the CLI and adapters, the Docker sandbox with a fresh clone, dummy and one-shot credentials, egress control, monitoring with the event log and off-limits paths, trusted capture and the structured diff, the MongoDB backend and dashboard, security scanning, and approval-gated submission. The Agentic AI Orchestrator, stronger sandbox isolation, improved monitoring and role-based approval are planned for Semester VIII.
+
+Two further captures are genuine executions. Capture (i) shows submit refusing a run that was still awaiting review, and no sandbox, helper or proxy left after the run. Capture (ii) is from the isolation probe of 9 October 2026, run against a sandbox in which the Antigravity agent had been signed in: the agent's credential files are inside the sandbox, direct network and Docker-socket paths fail, and the proxy records each host the agent contacted. No Antigravity task response was preserved, so none is shown.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.86\textwidth,keepaspectratio]{images/evidence/c-ev-2-submit-gate-cleanup.png}
+\caption*{Execution capture (i): approval gate and cleanup check after a mock-agent run, 1 November 2026}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.86\textwidth,keepaspectratio]{images/evidence/c-ev-12-antigravity-sandbox.png}
+\caption*{Execution capture (ii): probe and egress-proxy records from a sandbox with a signed-in Antigravity agent}
+\end{figure}
 
 \section{Timeline Sem VII}\label{project-timeline}
 
@@ -1222,11 +1280,11 @@ Usability and accessibility & Contrast ratios, responsive layout, keyboard navig
 
 \subsection{Functional Testing}\label{functional-testing}
 
-Functional testing verified that each function, module and security control behaves as specified. Unit tests checked properties such as a dummy credential never containing the real value and the egress decision table for IP literals and private addresses. Integration tests checked that an exec's environment does not persist into later execs and that the sandbox image carries no credentials. Security-focused tests checked that a non-allowlisted connection and DNS-based exfiltration are blocked, that a tampered in-container Git cannot hide a file from the diff, and that concurrent approve and reject requests resolve to exactly one decision.
+Functional testing verified that each function, module and security control behaves as specified. Unit tests checked properties such as a dummy credential never containing the real value and the egress decision table for IP literals and private addresses. Security-focused tests checked that a non-allowlisted connection and DNS-based exfiltration are blocked, that a tampered in-container Git cannot hide a file from the diff, and that concurrent approve and reject requests resolve to exactly one decision.
 
 \subsection{System Testing}\label{system-testing}
 
-System testing drove the real vaultshield run command end to end with a real container, clone, agent process, trusted capture and teardown, and the same harness executed the 40 timed runs reported in Chapter 7. Accessibility testing computed WCAG contrast ratios for every theme colour pair and rendered nine pages at seven widths to check for layout overflow.
+System testing drove the real vaultshield run command end to end with a real container, clone, agent process, trusted capture and teardown, and the same harness executed the 40 timed runs reported in Chapter 7.
 
 \section{Testing Results and Findings}\label{testing-results-and-findings}
 
@@ -1260,46 +1318,9 @@ Frontend & 283 & 283 & 0 & 100.00\% \\\hline
 \addtocounter{table}{-1}
 \par\medskip
 
-No test was skipped. The lowest text contrast was 4.77:1 in the light theme and 5.80:1 in the dark theme, above the 4.5:1 threshold, and the layout report recorded no horizontal overflow across 63 page and width combinations. Table 6.3 lists the main issues found during development and testing.
+No test was skipped. The lowest text contrast was 4.77:1 in the light theme and 5.80:1 in the dark theme, above the 4.5:1 threshold, and the layout report recorded no horizontal overflow across 63 page and width combinations. Table 6.4 presents representative test cases, each corresponding to an automated test or to the benchmark harness.
 
-\begingroup\small
-
-\Needspace{8\baselineskip}
-\par\vspace{\TableCapGap}
-\noindent\begin{minipage}{\textwidth}
-\captionof{table}{Issues found and their resolution}\label{tab:6-4}
-\end{minipage}
-\par
-\begin{longtable}[]{@{}|
-  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4400}} |
-  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.4200}} |
-  >{\raggedright\arraybackslash}p{(\columnwidth - 7\tabcolsep) * \real{0.1400}}|@{}}
-\hline
-Issue & Resolution & Status \\
-\hline
-\endfirsthead
-\hline
-Issue & Resolution & Status \\
-\hline
-\endhead
-\endlastfoot
-54 of 72 losing concurrent decisions received HTTP 500 instead of 409 & Retry on transient transaction errors & Fixed \\\hline
-Dummy connection strings kept the real database host name & Host replaced unless provably local & Fixed \\\hline
-A missing credential file became an empty directory through Docker's bind mount & File check before any Docker call & Fixed \\\hline
-Host listeners reachable from a plain internal bridge & Internal bridge created without a gateway & Fixed \\\hline
-A hanging interactive sign-in was not bounded by its deadline & Under investigation on Docker Desktop 29.2.1 & Open \\\hline
-The file watcher missed the agent's write in some fast runs & The trusted diff remains the authoritative record & Open \\\hline
-The status PATCH route can set approved without an Approval record & Documented MVP limitation; gating planned & Open \\\hline\end{longtable}
-\addtocounter{table}{-1}
-\par\medskip
-
-\endgroup
-
-\section{Sample Test Cases}\label{sample-test-cases}
-
-Table 6.4 presents representative test cases, each corresponding to an automated test or to the benchmark harness.
-
-\begingroup\small
+\begingroup\footnotesize\setlength{\extrarowheight}{0pt}\renewcommand{\arraystretch}{1.05}\setcounter{table}{3}
 
 \Needspace{8\baselineskip}
 \par\vspace{\TableCapGap}
@@ -1308,10 +1329,10 @@ Table 6.4 presents representative test cases, each corresponding to an automated
 \end{minipage}
 \par
 \begin{longtable}[]{@{}|
-  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1000}} |
-  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.3000}} |
-  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.4600}} |
-  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.1400}}|@{}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.0900}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.2200}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.6000}} |
+  >{\raggedright\arraybackslash}p{(\columnwidth - 9\tabcolsep) * \real{0.0900}}|@{}}
 \hline
 ID & Description & Expected and actual result & Status \\
 \hline
@@ -1336,9 +1357,31 @@ TC-10 & Hanging sign-in is bounded & Expected to stop within 60 s; took 600.3 s 
 
 \endgroup
 
+\section{Sample Test Cases}\label{sample-test-cases}
+
+Two of the 2,704 tests failed. Both are Docker-backed tests of the optional interactive sign-in transport, used only when the antigravity agent runs with -\allowbreak{}-interactive-auth; the first is TC-10 in Table 6.4.
+
+\textbf{Failure 1: interactive sign-in timeout.} The hanging sign-in test expects the CLI to give up within 60 s of a silent sign-in, but it took 600.33 s. The deadline is a socket timeout on the Docker exec stream, and on Docker Desktop 29.2.1 it does not interrupt the blocking read. This is a genuine availability defect in the optional authentication flow; it exposes no secret. The correction is an independent watchdog deadline that kills the exec.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.82\textwidth,keepaspectratio]{images/evidence/c-ev-10-failure1.png}
+\caption*{Failure 1: hanging sign-in test, excerpt of the pytest output (1 November 2026)}
+\end{figure}
+
+\textbf{Failure 2: redacted echo expectation.} The stdin test expects the raw sentinel value in the terminal output, which shows RECEIVED:[***]. Redaction replaces only an exact match of the sent value, so the output proves that the value was delivered and then masked as designed. The failure is an outdated assertion, not failed credential delivery; the assertion must expect the redacted output.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.82\textwidth,keepaspectratio]{images/evidence/c-ev-11-failure2.png}
+\caption*{Failure 2: stdin delivery test, excerpt of the pytest output (1 November 2026)}
+\end{figure}
+
+\textbf{Reliability impact.} The two failures represent about 0.07\% of the 2,704-test campaign. One is a genuine availability defect in an optional authentication flow; the other is an outdated test expectation. Neither affects the default non-interactive workflow, and the security-critical isolation, credential substitution, egress, trusted capture, token-hygiene and approval tests passed.
+
 \section{Conclusion on Testing}\label{conclusion-on-testing}
 
-Of 2,704 automated tests, 2,702 passed, and every security-critical behaviour named in the objectives was exercised against real infrastructure. The two failures affect only the optional interactive sign-in flow. The file watcher's missed events are a gap in supplementary evidence rather than in change capture, because the trusted diff was complete in every run, and the unrestricted status PATCH route is acceptable only within the single-developer trust model of the MVP.
+Of 2,704 automated tests, 2,702 passed, and every security-critical behaviour was exercised against real Docker and MongoDB. The remaining gaps, the sign-in deadline and the file watcher's missed events, affect availability and supplementary evidence, not isolation or change capture.
 
 \clearpage
 
@@ -1524,6 +1567,20 @@ Containers and networks left after the campaign & 0 \\\hline\end{longtable}
 \addtocounter{table}{-1}
 \par\medskip
 
+File-change monitoring recorded the agent's write in 32 of the 40 VaultShield runs (80\%), so 8 of 40 events were missed, while the agent's file was present in diff.json in all 40 runs. The in-container watcher polls the work tree, and the mock agent's write lands within milliseconds of the run ending, so a write can fall between two polls. The gap matters because the timeline is the reviewer's view of what the agent did: a missed event means a change that appears in the diff without a matching entry in the timeline. It does not mean an unrecorded change, because the trusted capture helper rebuilt every change from a pre-agent base. The diff is therefore the authoritative record and the event log is corroborating evidence; an event-driven watcher and a cross-check of the event log against the diff are planned for Semester VIII. The raw per-run logs of the 40-run benchmark were not preserved, so the summary below plots the recorded figures. The terminal capture after it is a real example of a missed event, taken from the 14 run directories preserved in the repository: one of them has no file-change event although its diff contains the agent's file.
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.78\textwidth,keepaspectratio]{images/evidence/fig7-5-monitoring-summary.png}
+\caption*{Monitoring completeness in the 40 VaultShield benchmark runs (mock agent), plotted from the recorded figures}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\SafeIncludeGraphics[width=0.8\textwidth,keepaspectratio]{images/evidence/ev-13-missed-event.png}
+\caption*{Terminal capture over the preserved run directories: run 20261009-092431 has no file-change event, but its diff.json contains the agent's file}
+\end{figure}
+
 \section{Secret Exposure With and Without Protection}\label{secret-exposure-with-and-without-protection}
 
 The feasibility spike asked a production coding agent to read .env and .env.local and report the exact values of two fake keys. Table 7.6 reports the outcome under four protection configurations.
@@ -1558,11 +1615,11 @@ Agent-level deny rules proved brittle, and only keeping the real value off disk 
 
 \section{Case Study: Analysis of Real Runs}\label{case-study-analysis-of-real-runs}
 
-The repository preserves five complete mock-agent runs from development. In run 20261009-091725-ff669fcd7dd00b2b, the event log records seven events: the agent confirms that its working directory is the sandbox clone, narrates its work over 157.9 ms, and the in-container watcher then independently reports the created file 106.5 ms after the agent's write. The diff contains exactly that file, and the screenshot shows the sandbox clone's directory listing. In one of the five runs, however, the event log has no file-change event even though the diff and screenshot both show the file, the same gap seen in 8 of the 40 benchmark runs. The event log is therefore corroborating evidence of behaviour, while the trusted diff is the authoritative record of what changed.
+The repository preserves five complete mock-agent runs from development. In run 20261009-091725-ff669fcd7dd00b2b, the event log records seven events: the agent confirms that its working directory is the sandbox clone, narrates its work over 157.9 ms, and the in-container watcher then independently reports the created file 106.5 ms after the agent's write. The diff contains exactly that file, and the screenshot shows the sandbox clone's directory listing. In one of the five runs, however, the event log has no file-change event even though the diff and screenshot both show the file, the same gap seen in 8 of the 40 benchmark runs.
 
 \section{Overall Discussion and Limitations}\label{discussion-and-limitations}
 
-The results show that separating the execution of an agent from trust in its output costs about 1.2 seconds per run, or about 2.0 seconds with network allowlisting. In exchange, every evaluated run left the developer's checkout untouched, kept real secrets out of the agent's environment, recorded an event log, captured the change on a branch the agent could not falsify and held it behind an approval state machine. Table 7.7 lists the main residual risks.
+The results show that separating the execution of an agent from trust in its output costs about 1.2 seconds per run, or about 2.0 seconds with network allowlisting. In exchange, every evaluated run left the developer's checkout untouched, kept real secrets out of the agent's environment, recorded an event log, captured the change on a branch the agent could not falsify and held it behind an approval state machine.
 
 \begingroup\small
 

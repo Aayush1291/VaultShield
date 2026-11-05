@@ -1,0 +1,26 @@
+flowchart TB
+    subgraph U["Untrusted: agent and its inputs"]
+        direction LR
+        RP["Repository content<br/>README, issues, deps"] -. "T1 prompt<br/>injection" .-> AG["AI coding agent<br/>wrong, injected<br/>or hostile"]
+    end
+    subgraph S["Sandbox boundary: one container per run"]
+        direction LR
+        DE[".env.sandbox<br/>dummy values,<br/>read-only"]
+        CL["Fresh clone<br/>agent's work tree"]
+        PX["Egress proxy<br/>allowlist + log"]
+    end
+    subgraph T["Trusted: developer host and review plane"]
+        direction LR
+        TC["Capture helper<br/>no network,<br/>no capabilities"] --> BE["Backend<br/>state machine"]
+        RV["Human<br/>reviewer"] --> BE
+        SE["Real .env,<br/>SSH keys,<br/>repo token"]
+    end
+    AG -- "T2 read secrets" --> DE
+    AG -- "T4 tamper Git" --> CL
+    AG -- "T3 exfiltrate" --> PX
+    PX -- "allowlisted only" --> IN["Internet"]
+    CL -- "filtered archive" --> TC
+    AG -. "T5 escape (residual)" .-> SE
+    style U fill:#fbeaea,stroke:#b55,stroke-dasharray:6 4
+    style S fill:#fff7e0,stroke:#c90
+    style T fill:#e9f4ea,stroke:#4a4

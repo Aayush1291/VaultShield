@@ -1,0 +1,6 @@
+___ test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever ____
+>           assert outcome is not None
+E           assert None is not None
+tests/test_sandbox_execution.py:1588: AssertionError
+600.33s call     tests/test_sandbox_execution.py::test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever
+FAILED tests/test_sandbox_execution.py::test_a_hanging_signin_hits_the_read_timeout_instead_of_blocking_forever

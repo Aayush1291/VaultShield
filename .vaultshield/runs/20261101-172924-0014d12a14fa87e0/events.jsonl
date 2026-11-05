@@ -1,0 +1,7 @@
+{"event_type": "output", "timestamp": "2026-11-01T17:29:31.735470+00:00", "payload": "[mock-sandbox] cwd=/workspace/repo"}
+{"event_type": "output", "timestamp": "2026-11-01T17:29:31.735525+00:00", "payload": "[mock-sandbox step=0] simulated output for prompt='add a hello file'"}
+{"event_type": "output", "timestamp": "2026-11-01T17:29:31.788127+00:00", "payload": "[mock-sandbox step=1] simulated output for prompt='add a hello file'"}
+{"event_type": "output", "timestamp": "2026-11-01T17:29:31.839358+00:00", "payload": "[mock-sandbox step=2] simulated output for prompt='add a hello file'"}
+{"event_type": "output", "timestamp": "2026-11-01T17:29:31.893486+00:00", "payload": "[mock-sandbox] wrote vaultshield_mock_agent.txt"}
+{"event_type": "output", "timestamp": "2026-11-01T17:29:31.893550+00:00", "payload": "[mock-sandbox] simulated final message for prompt='add a hello file'"}
+{"event_type": "file_change", "timestamp": "2026-11-01T17:29:32.038558Z", "payload": "created: /workspace/repo/vaultshield_mock_agent.txt"}

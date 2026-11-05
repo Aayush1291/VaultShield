@@ -1,0 +1,20 @@
+# ~/.vaultshield/probes/20261009T083128Z-egress-log-only.json (isolation_probe.py, 9 Oct 2026), selected fields
+agent: antigravity  egress: log-only  interactive_auth: True  https_proxy: http://vaultshield-egress:3128
+  /root/.gemini/antigravity-cli/antigravity-oauth-token 497 bytes 0o600
+  /root/.gemini/antigravity-cli/conversations/94aac82a-55f4-4de6-8658-3c7f2d5006ec.db 131072 bytes 0o644
+  /root/.gemini/antigravity-cli/log/cli-20261009_083130.log 38540 bytes 0o644
+  probe internet TCP 1.1.1.1:443 -> unreachable
+  probe DNS exfil (direct UDP) 8.8.8.8:53/udp -> unreachable
+  probe file /var/run/docker.sock -> unreachable
+
+# ~/.vaultshield/probes/20261009T094445Z-egress-allowlist-proxy.jsonl: first decision per host
+09:44:47 deny  antigravity-unleash.goog                                         not_in_allowlist
+09:44:47 deny  playwright.azureedge.net                                         not_in_allowlist
+09:44:47 deny  playwright-akamai.azureedge.net                                  not_in_allowlist
+09:44:47 deny  playwright-verizon.azureedge.net                                 not_in_allowlist
+09:44:48 deny  antigravity-cli-auto-updater-974169037036.us-central1.run.app    not_in_allowlist
+09:44:52 deny  play.googleapis.com                                              not_in_allowlist
+09:45:03 allow oauth2.googleapis.com                                            
+09:45:04 deny  www.googleapis.com                                               not_in_allowlist
+09:45:04 allow daily-cloudcode-pa.googleapis.com                                
+... 29 decisions in total: 6 allowed, 23 denied

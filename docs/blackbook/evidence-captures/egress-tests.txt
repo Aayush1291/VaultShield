@@ -1,0 +1,25 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0 -- /Users/aayush/Codes/VaultShield/cli/.venv/bin/python3.14
+hypothesis profile 'default' -> deadline=None
+rootdir: /Users/aayush/Codes/VaultShield/cli
+configfile: pyproject.toml
+plugins: hypothesis-6.168.5, anyio-4.15.1
+collecting ... collected 15 items
+
+tests/test_egress_docker.py::test_a_blocked_connection_is_blocked_and_recorded PASSED [  6%]
+tests/test_egress_docker.py::test_an_allowlisted_host_is_reachable PASSED [ 13%]
+tests/test_egress_docker.py::test_dns_exfil_is_blocked PASSED            [ 20%]
+tests/test_egress_docker.py::test_the_app_port_is_reachable_through_the_proxy PASSED [ 26%]
+tests/test_egress_docker.py::test_run_with_egress_allowlist_end_to_end PASSED [ 33%]
+tests/test_egress_docker.py::test_token_hygiene_vectors_in_a_real_container[copy] PASSED [ 40%]
+tests/test_egress_docker.py::test_token_hygiene_vectors_in_a_real_container[core_worktree] PASSED [ 46%]
+tests/test_egress_docker.py::test_token_hygiene_vectors_in_a_real_container[symlink] PASSED [ 53%]
+tests/test_egress_docker.py::test_token_hygiene_vectors_in_a_real_container[gitignored] PASSED [ 60%]
+tests/test_egress_docker.py::test_token_hygiene_vectors_in_a_real_container[tracked_symlink] PASSED [ 66%]
+tests/test_egress_docker.py::test_credential_snapshot_never_follows_symlinks_out_of_the_root PASSED [ 73%]
+tests/test_egress_docker.py::test_a_tampered_in_container_git_cannot_hide_a_file_from_the_branch_or_diff[True] PASSED [ 80%]
+tests/test_egress_docker.py::test_a_tampered_in_container_git_cannot_hide_a_file_from_the_branch_or_diff[False] PASSED [ 86%]
+tests/test_egress_docker.py::test_trusted_capture_preserves_non_utf8_and_case_variant_names[A] PASSED [ 93%]
+tests/test_egress_docker.py::test_trusted_capture_preserves_non_utf8_and_case_variant_names[B] PASSED [100%]
+
+============================= 15 passed in 34.40s ==============================

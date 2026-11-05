@@ -1,0 +1,3 @@
+$ vaultshield submit 20261101-180424-c5458c45adecdf4a
+Error: Run 20261101-180424-c5458c45adecdf4a is 'awaiting_review', not 'approved', so it cannot be submitted. Nothing was pushed and no pull request was opened.
+exit=1

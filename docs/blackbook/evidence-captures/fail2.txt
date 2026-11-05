@@ -1,0 +1,9 @@
+______ test_exec_interactive_really_delivers_stdin_to_a_container_process ______
+                handle.send_line(_STDIN_SENTINEL)
+>               assert f"RECEIVED:[{_STDIN_SENTINEL}]" in joined, joined
+E               AssertionError: ***
+E                 RECEIVED:[***]
+E               assert 'RECEIVED:[interactive-stdin-sentinel-b41c]' in '***\nRECEIVED:[***]'
+tests/test_sandbox_execution.py:1230: AssertionError
+0.21s call     tests/test_sandbox_execution.py::test_exec_interactive_really_delivers_stdin_to_a_container_process
+FAILED tests/test_sandbox_execution.py::test_exec_interactive_really_delivers_stdin_to_a_container_process
